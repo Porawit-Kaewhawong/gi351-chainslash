@@ -1,8 +1,8 @@
-using System;
 using System.Collections;
-using Unity.VisualScripting;
+using Unity.VectorGraphics;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 public class PlayerController : MonoBehaviour
 {
@@ -29,9 +29,12 @@ public class PlayerController : MonoBehaviour
     [Header("Player Visual Settings")]
     private SpriteRenderer spriteRenderer;
 
+    private AudioSource audioSource;
+
     void Start()
     {
         rb = GetComponent<Rigidbody2D>();
+        audioSource = GetComponent<AudioSource>();
         trailRenderer = GetComponent<TrailRenderer>();
         spriteRenderer = GetComponent<SpriteRenderer>();
         moveAction = InputSystem.actions.FindAction("Move");
@@ -41,6 +44,11 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
+        if (Keyboard.current.rKey.isPressed)
+        {
+            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        }
+
         if (isDashing)
         {
             return;
@@ -124,5 +132,11 @@ public class PlayerController : MonoBehaviour
 
         yield return new WaitForSeconds(dashingCooldown);
         canDash = true;
+    }
+
+    public void PlaySFX(AudioClip audioClip)
+    {
+        audioSource.clip = audioClip;
+        audioSource.Play();
     }
 }

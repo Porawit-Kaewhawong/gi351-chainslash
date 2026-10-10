@@ -1,7 +1,5 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 
 public class PlayerCombat : MonoBehaviour
@@ -10,33 +8,42 @@ public class PlayerCombat : MonoBehaviour
 
     [Header("Chain Slash Mode Settings")]
     [SerializeField] private float timeSpeed = 0.25f;
-    [HideInInspector] public bool isInMode { get; private set; }
+    [SerializeField] private AudioClip targetSelectSFX;
+    [SerializeField] private AudioClip postSlashSFX;
     public List<GameObject> targetEnemies = new List<GameObject>();
+    [HideInInspector] public bool isInMode { get; private set; }
     private float fixedDeltaTime;
     private InputAction attackAction;
+    private LineRenderer lineRenderer;
 
     void Awake()
     {
         Instance = this;
+        lineRenderer = GetComponent<LineRenderer>();
+        attackAction = InputSystem.actions.FindAction("Attack");
     }
 
     void Start()
     {
-        this.fixedDeltaTime = Time.deltaTime;
-        attackAction = InputSystem.actions.FindAction("Attack");
+        fixedDeltaTime = Time.deltaTime;
     }
 
-    
+
     void Update()
     {
         if (attackAction.IsPressed())
         {
-            EnterChainSlashMode();
+            if (!isInMode)
+            {
+                EnterChainSlashMode();
+            }
         }
         else
         {
-            ExitChainSlashMode();
-            Time.timeScale = 1.0f;
+            if (isInMode)
+            {
+                ExitChainSlashMode();
+            }
         }
     }
 
@@ -51,6 +58,7 @@ public class PlayerCombat : MonoBehaviour
     void ExitChainSlashMode()
     {
         isInMode = false;
+
         foreach (GameObject enemy in targetEnemies)
         {
             if (enemy != null)
@@ -58,6 +66,32 @@ public class PlayerCombat : MonoBehaviour
                 Destroy(enemy);
             }
         }
+
+        if (targetEnemies.Count > 0)
+        {
+            PlayerController playerController = GetComponent<PlayerController>();
+            playerController.PlaySFX(postSlashSFX);
+        }
+
         targetEnemies.Clear();
+        lineRenderer.positionCount = 0;
+        Time.timeScale = 1.0f;
+
+        lineRenderer.enabled = false;
+    }
+
+    public void LineSetup()
+    {
+        lineRenderer.enabled = true;
+
+        lineRenderer.positionCount = targetEnemies.Count;
+
+        for (int i = 0; i < targetEnemies.Count; i++)
+        {
+            lineRenderer.SetPosition(i, targetEnemies[i].transform.position);
+        }
+
+        PlayerController playerController = GetComponent<PlayerController>();
+        playerController.PlaySFX(targetSelectSFX);
     }
 }
