@@ -20,11 +20,17 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     {
         if (PlayerCombat.Instance.isInMode && !isTarget)
         {
-            targetIndicator.SetActive(true);
+            if (targetIndicator != null)
+            {
+                targetIndicator.SetActive(true);
+            }
         }
         else
         {
-            targetIndicator.SetActive(false);
+            if (targetIndicator != null)
+            {
+                targetIndicator.SetActive(false);
+            }
         }
 
         transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
@@ -36,10 +42,17 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
         {
             PlayerCombat.Instance.targetEnemies.Add(gameObject);
             spriteRenderer.color = Color.purple;
-            PlayerCombat.Instance.LineSetup(transform);
+            PlayerCombat.Instance.TargetSetup(transform);
             isTarget = true;
 
-            targetIndicator.SetActive(false);
+            if (targetIndicator != null)
+            {
+                targetIndicator.SetActive(false);
+            }
         }
+    }
+    public void OnDeath()
+    {
+        Destroy(gameObject);
     }
 }

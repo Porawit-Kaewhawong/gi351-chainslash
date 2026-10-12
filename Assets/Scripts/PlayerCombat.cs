@@ -52,17 +52,6 @@ public class PlayerCombat : MonoBehaviour
                 ExitChainSlashMode();
             }
         }
-
-        if (isInMode)
-        {
-            for (int i = 0; i < targetEnemies.Count; i++)
-            {
-                if (targetEnemies[i] != null)
-                {
-                    lineRenderer.SetPosition(i, targetEnemies[i].transform.position);
-                }
-            }
-        }
     }
 
     void EnterChainSlashMode()
@@ -86,7 +75,7 @@ public class PlayerCombat : MonoBehaviour
         {
             StopCoroutine(activeKillCoroutine);
         }
-        activeKillCoroutine = StartCoroutine(AnimateLineKill());
+        activeKillCoroutine = StartCoroutine(AnimateKillLine());
 
         if (targetEnemies.Count > 0)
         {
@@ -97,7 +86,7 @@ public class PlayerCombat : MonoBehaviour
         Time.timeScale = 1.0f;
     }
 
-    public void LineSetup(Transform enemyPos)
+    public void TargetSetup(Transform enemyPos)
     {
         if (activeAnimateCoroutine != null)
         {
@@ -110,10 +99,10 @@ public class PlayerCombat : MonoBehaviour
             }
         }
 
-        activeAnimateCoroutine = StartCoroutine(AnimateLine(enemyPos));
+        activeAnimateCoroutine = StartCoroutine(AnimateSlashLine(enemyPos));
     }
 
-    public IEnumerator AnimateLineKill()
+    public IEnumerator AnimateKillLine()
     {
         lineRenderer.positionCount = 0;
 
@@ -127,17 +116,19 @@ public class PlayerCombat : MonoBehaviour
 
             if (i > 0)
             {
-                Vector2 startPos = lineRenderer.GetPosition(i - 1);
-                Vector2 endPos = lineRenderer.GetPosition(i);
+                float timer = 0f;
+                float duration = 0.1f;
 
-                float startTime = Time.time;
-                Vector2 animatePos = startPos;
-
-                while (animatePos != endPos)
+                while (timer < duration)
                 {
-                    float time = (Time.time - startTime) / 0.1f;
-                    animatePos = Vector2.Lerp(startPos, endPos, time);
-                    lineRenderer.SetPosition(i, animatePos);
+                    timer += Time.deltaTime;
+                    float time = timer / duration;
+
+                    Vector2 currentStart = targetEnemies[i - 1].transform.position;
+                    Vector2 currentEnd = targetEnemies[i].transform.position;
+                    
+                    lineRenderer.SetPosition(i, Vector2.Lerp(currentStart, currentEnd, time));
+
                     yield return null;
                 }
             }
@@ -145,7 +136,7 @@ public class PlayerCombat : MonoBehaviour
 
         foreach (GameObject enemy in targetEnemies)
         {
-            if (enemy != null)
+            if (enemy.gameObject.CompareTag("Enemy"))
             {
                 yield return new WaitForSeconds(0.025f);
                 Destroy(enemy);
@@ -160,7 +151,7 @@ public class PlayerCombat : MonoBehaviour
         activeKillCoroutine = null;
     }
 
-    public IEnumerator AnimateLine(Transform enemyPos)
+    public IEnumerator AnimateSlashLine(Transform enemyPos)
     {
         PlayerController playerController = GetComponent<PlayerController>();
         playerController.PlaySFX(targetSelectSFX);
@@ -170,22 +161,20 @@ public class PlayerCombat : MonoBehaviour
 
         if (lineRenderer.positionCount <= 1) yield break;
 
-        Vector2 startPos = lineRenderer.GetPosition(targetEnemies.Count - 2);
-        Vector2 endPos = lineRenderer.GetPosition(targetEnemies.Count - 1);
-
         lineRenderer.enabled = true;
 
-        float startTime = Time.time;
-        Vector2 animatePos = startPos;
-        while (animatePos != endPos)
+        float timer = 0f;
+        float duration = 0.05f;
+        while (timer < duration)
         {
-            float time = (Time.time - startTime) / 0.1f;
+            timer += Time.deltaTime;
+            float time = timer / duration;
 
-            startPos = targetEnemies[targetEnemies.Count - 2].transform.position;
-            endPos = targetEnemies[targetEnemies.Count - 1].transform.position;
+            Vector2 currentStart = targetEnemies[targetEnemies.Count - 2].transform.position;
+            Vector2 currentEnd = targetEnemies[targetEnemies.Count - 1].transform.position;
 
-            animatePos = Vector2.Lerp(startPos, endPos, time);
-            lineRenderer.SetPosition(targetEnemies.Count - 1, animatePos);
+            lineRenderer.SetPosition(targetEnemies.Count - 1, Vector2.Lerp(currentStart, currentEnd, time));
+
             yield return null;
         }
 
