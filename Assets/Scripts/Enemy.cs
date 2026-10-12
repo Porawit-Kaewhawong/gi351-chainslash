@@ -8,10 +8,12 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
 
     private bool isTarget = false;
     private SpriteRenderer spriteRenderer;
+    private PlayerController playerController;
 
     private void Awake()
     {
         spriteRenderer = GetComponent<SpriteRenderer>();
+        playerController = FindFirstObjectByType<PlayerController>();
     }
 
     void Update()
@@ -24,6 +26,8 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
         {
             targetIndicator.SetActive(false);
         }
+
+        transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
     }
 
     public void OnPointerEnter(PointerEventData eventData)
