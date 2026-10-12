@@ -77,12 +77,6 @@ public class PlayerCombat : MonoBehaviour
         }
         activeKillCoroutine = StartCoroutine(AnimateKillLine());
 
-        if (targetEnemies.Count > 0)
-        {
-            PlayerController playerController = GetComponent<PlayerController>();
-            playerController.PlaySFX(postSlashSFX);
-        }
-
         Time.timeScale = 1.0f;
     }
 
@@ -150,6 +144,11 @@ public class PlayerCombat : MonoBehaviour
                     chainEnemy.OnDeath();
                 }
             }
+        }
+        
+        if (targetEnemies.Count > 0)
+        {
+            playerController.PlaySFX(postSlashSFX);
         }
 
         targetEnemies.Clear();

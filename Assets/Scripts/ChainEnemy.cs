@@ -6,6 +6,9 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 {
     [Header("Chain Enemy Settings")]
     [SerializeField] private GameObject targetIndicator;
+    [SerializeField] private GameObject explosionRadiusPrefab;
+    [SerializeField] private float explosionRadius = 5f;
+    private GameObject theObject;
 
     private bool isTarget = false;
     private SpriteRenderer spriteRenderer;
@@ -13,12 +16,17 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
     private void Awake()
     {
+        explosionRadius = explosionRadius / 2;
         spriteRenderer = GetComponent<SpriteRenderer>();
         playerController = FindFirstObjectByType<PlayerController>();
+        theObject = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
+        theObject.SetActive(false);
     }
 
     void Update()
     {
+        theObject.transform.position = transform.position;
+
         if (PlayerCombat.Instance.isInMode && !isTarget)
         {
             if (targetIndicator != null)
@@ -32,6 +40,11 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
             {
                 targetIndicator.SetActive(false);
             }
+            theObject.SetActive(false);
+        }
+        else if (!PlayerCombat.Instance.isInMode && isTarget)
+        {
+            theObject.SetActive(false);
         }
 
         transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
@@ -50,19 +63,31 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
             {
                 targetIndicator.SetActive(false);
             }
+            theObject.SetActive(true);
         }
     }
 
     public void OnDeath()
     {
-        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, 5f);
+        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, explosionRadius);
 
         foreach (Collider2D collider in withinRange)
         {
-            if (collider.CompareTag("Enemy"))
+            if (collider.TryGetComponent<Enemy>(out Enemy enemy))
             {
-                Destroy(collider.gameObject);
+                if (enemy != null)
+                {
+                    enemy.OnDeath();
+                }
+            }
+            else if (collider.TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
+            {
+                if (chainEnemy != null)
+                {
+                    chainEnemy.OnDeath();
+                }
             }
         }
+        Destroy(theObject);
     }
 }
