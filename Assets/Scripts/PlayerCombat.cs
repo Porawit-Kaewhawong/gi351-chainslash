@@ -1,6 +1,10 @@
+using System.Collections;
 using System.Collections.Generic;
+using System.Net;
+using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 
 public class PlayerCombat : MonoBehaviour
 {
@@ -13,6 +17,7 @@ public class PlayerCombat : MonoBehaviour
     public List<GameObject> targetEnemies = new List<GameObject>();
     [HideInInspector] public bool isInMode { get; private set; }
     private float fixedDeltaTime;
+    private Coroutine activeCoroutine;
     private InputAction attackAction;
     private LineRenderer lineRenderer;
 
@@ -63,7 +68,11 @@ public class PlayerCombat : MonoBehaviour
         {
             if (enemy != null)
             {
-                Destroy(enemy);
+                if (activeCoroutine != null)
+                {
+                    StopCoroutine(activeCoroutine);
+                    Destroy(enemy);
+                }
             }
         }
 
@@ -80,18 +89,47 @@ public class PlayerCombat : MonoBehaviour
         lineRenderer.enabled = false;
     }
 
-    public void LineSetup()
+    public void LineSetup(Transform enemyPos)
     {
-        lineRenderer.enabled = true;
-
-        lineRenderer.positionCount = targetEnemies.Count;
-
-        for (int i = 0; i < targetEnemies.Count; i++)
+        if (activeCoroutine != null)
         {
-            lineRenderer.SetPosition(i, targetEnemies[i].transform.position);
+            StopCoroutine(activeCoroutine);
+
+            if (targetEnemies.Count > 1)
+            {
+                Vector2 endPos = targetEnemies[targetEnemies.Count - 2].transform.position;
+                lineRenderer.SetPosition(targetEnemies.Count - 2, endPos);
+            }
         }
 
+        activeCoroutine = StartCoroutine(AnimateLine(enemyPos));
+    }
+
+    public IEnumerator AnimateLine(Transform enemyPos)
+    {
         PlayerController playerController = GetComponent<PlayerController>();
         playerController.PlaySFX(targetSelectSFX);
+
+        lineRenderer.positionCount = targetEnemies.Count;
+        lineRenderer.SetPosition(targetEnemies.Count - 1, enemyPos.position);
+
+        if (lineRenderer.positionCount <= 1) yield break;
+
+        Vector2 startPos = lineRenderer.GetPosition(targetEnemies.Count - 2);
+        Vector2 endPos = lineRenderer.GetPosition(targetEnemies.Count - 1);
+
+        lineRenderer.enabled = true;
+
+        float startTime = Time.time;
+        Vector2 animatePos = startPos;
+        while (animatePos != endPos)
+        {
+            float time = (Time.time - startTime) / 0.25f;
+            animatePos = Vector2.Lerp(startPos, endPos, time);
+            lineRenderer.SetPosition(targetEnemies.Count - 1, animatePos);
+            yield return null;
+        }
+
+        activeCoroutine = null;
     }
 }

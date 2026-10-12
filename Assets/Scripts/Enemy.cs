@@ -32,7 +32,7 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
         {
             PlayerCombat.Instance.targetEnemies.Add(gameObject);
             spriteRenderer.color = Color.purple;
-            PlayerCombat.Instance.LineSetup();
+            PlayerCombat.Instance.LineSetup(transform);
             isTarget = true;
 
             targetIndicator.SetActive(false);
