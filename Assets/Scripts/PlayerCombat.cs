@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Net;
 using Unity.VisualScripting;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
@@ -17,7 +18,8 @@ public class PlayerCombat : MonoBehaviour
     public List<GameObject> targetEnemies = new List<GameObject>();
     [HideInInspector] public bool isInMode { get; private set; }
     private float fixedDeltaTime;
-    private Coroutine activeCoroutine;
+    private Coroutine activeAnimateCoroutine;
+    private Coroutine activeKillCoroutine;
     private InputAction attackAction;
     private LineRenderer lineRenderer;
 
@@ -64,36 +66,34 @@ public class PlayerCombat : MonoBehaviour
     {
         isInMode = false;
 
-        foreach (GameObject enemy in targetEnemies)
+        if (activeAnimateCoroutine != null)
         {
-            if (enemy != null)
-            {
-                if (activeCoroutine != null)
-                {
-                    StopCoroutine(activeCoroutine);
-                    Destroy(enemy);
-                }
-            }
+            StopCoroutine(activeAnimateCoroutine);
         }
 
+        if (activeKillCoroutine != null)
+        {
+            StopCoroutine(activeKillCoroutine);
+        }
+        if (targetEnemies.Count > 1)
+        {
+            activeKillCoroutine = StartCoroutine(AnimateLineKill());
+        }
+        
         if (targetEnemies.Count > 0)
         {
             PlayerController playerController = GetComponent<PlayerController>();
             playerController.PlaySFX(postSlashSFX);
         }
 
-        targetEnemies.Clear();
-        lineRenderer.positionCount = 0;
         Time.timeScale = 1.0f;
-
-        lineRenderer.enabled = false;
     }
 
     public void LineSetup(Transform enemyPos)
     {
-        if (activeCoroutine != null)
+        if (activeAnimateCoroutine != null)
         {
-            StopCoroutine(activeCoroutine);
+            StopCoroutine(activeAnimateCoroutine);
 
             if (targetEnemies.Count > 1)
             {
@@ -102,7 +102,63 @@ public class PlayerCombat : MonoBehaviour
             }
         }
 
-        activeCoroutine = StartCoroutine(AnimateLine(enemyPos));
+        activeAnimateCoroutine = StartCoroutine(AnimateLine(enemyPos));
+    }
+
+    public IEnumerator AnimateLineKill()
+    {
+        lineRenderer.positionCount = 0;
+
+        PlayerController playerController = GetComponent<PlayerController>();
+        playerController.PlaySFX(null);
+
+        for (int i = 0; i < targetEnemies.Count; i++)
+        {
+            lineRenderer.positionCount = i + 1;
+            lineRenderer.SetPosition(i, targetEnemies[i].transform.position);
+
+            if (targetEnemies.Count < 1) break;
+
+            Vector2 startPos = lineRenderer.GetPosition(i - 1);
+            Vector2 endPos = lineRenderer.GetPosition(i);
+
+            float startTime = Time.time;
+            Vector2 animatePos = startPos;
+
+            while (animatePos != endPos)
+            {
+                float time = (Time.time - startTime) / 0.05f;
+                animatePos = Vector2.Lerp(startPos, endPos, time);
+                lineRenderer.SetPosition(i, animatePos);
+                yield return null;
+            }
+        }
+
+        float timer = Time.time;
+        float duration = 1;
+        while (timer < duration)
+        {
+            float time = timer / duration;
+
+            lineRenderer.widthMultiplier = Mathf.Lerp(lineRenderer.startWidth, 1f, time);
+
+            yield return null;
+        }
+
+        foreach (GameObject enemy in targetEnemies)
+        {
+            if (enemy != null)
+            {
+                Destroy(enemy);
+            }
+        }
+
+        targetEnemies.Clear();
+
+        lineRenderer.positionCount = 0;
+        lineRenderer.enabled = false;
+
+        activeKillCoroutine = null;
     }
 
     public IEnumerator AnimateLine(Transform enemyPos)
@@ -130,6 +186,6 @@ public class PlayerCombat : MonoBehaviour
             yield return null;
         }
 
-        activeCoroutine = null;
+        activeAnimateCoroutine = null;
     }
 }
