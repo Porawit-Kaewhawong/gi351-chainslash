@@ -134,12 +134,21 @@ public class PlayerCombat : MonoBehaviour
             }
         }
 
-        foreach (GameObject enemy in targetEnemies)
+        for (int i = 0; i < targetEnemies.Count; i++)
         {
-            if (enemy.gameObject.CompareTag("Enemy"))
+            if (targetEnemies[i].TryGetComponent<Enemy>(out Enemy enemy))
             {
-                yield return new WaitForSeconds(0.025f);
-                Destroy(enemy);
+                if (enemy != null)
+                {
+                    enemy.OnDeath();
+                }
+            }
+            else if (targetEnemies[i].TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
+            {
+                if (chainEnemy != null)
+                {
+                    chainEnemy.OnDeath();
+                }
             }
         }
 

@@ -1,3 +1,4 @@
+using Unity.Android.Types;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -5,7 +6,6 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 {
     [Header("Chain Enemy Settings")]
     [SerializeField] private GameObject targetIndicator;
-    public GameObject explosionPrefab;
 
     private bool isTarget = false;
     private SpriteRenderer spriteRenderer;
@@ -25,20 +25,12 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
             {
                 targetIndicator.SetActive(true);
             }
-            if (explosionPrefab != null)
-            {
-                explosionPrefab.SetActive(true);
-            }
         }
         else if (!PlayerCombat.Instance.isInMode && !isTarget)
         {
             if (targetIndicator != null)
             {
                 targetIndicator.SetActive(false);
-            }
-            if (explosionPrefab != null)
-            {
-                explosionPrefab.SetActive(false);
             }
         }
 
@@ -58,22 +50,18 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
             {
                 targetIndicator.SetActive(false);
             }
-            if (explosionPrefab != null)
-            {
-                explosionPrefab.SetActive(true);
-            }
         }
     }
 
-    public void OnDeath(GameObject target)
+    public void OnDeath()
     {
-        Collider2D explosionCollider = GetComponent<Collider2D>();
-        Collider2D[] withinColliders = Physics2D.OverlapCircleAll(explosionPrefab.transform.position, explosionCollider.density);
-        foreach (Collider2D withinEnemy in withinColliders)
+        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, 5f);
+
+        foreach (Collider2D collider in withinRange)
         {
-            if (withinEnemy.gameObject.GetComponent<Enemy>() && withinEnemy.gameObject.CompareTag("Enemy"))
+            if (collider.CompareTag("Enemy"))
             {
-                Destroy(withinEnemy);
+                Destroy(collider.gameObject);
             }
         }
     }
