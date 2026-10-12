@@ -9,7 +9,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
     [SerializeField] private GameObject explosionRadiusPrefab;
     [SerializeField] private float explosionRadius = 5f;
     private GameObject theObject;
-
+    private bool isDead;
     private bool isTarget = false;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
@@ -25,6 +25,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
     void Update()
     {
+        if (isDead) return;
         theObject.transform.position = transform.position;
 
         if (PlayerCombat.Instance.isInMode && !isTarget)
@@ -69,10 +70,14 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
     public void OnDeath()
     {
+        if (isDead) return;
+
         Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, explosionRadius);
 
         foreach (Collider2D collider in withinRange)
         {
+            if (collider.gameObject == gameObject) continue;
+
             if (collider.TryGetComponent<Enemy>(out Enemy enemy))
             {
                 if (enemy != null)
@@ -87,7 +92,9 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
                     chainEnemy.OnDeath();
                 }
             }
+            isDead = true;
         }
         Destroy(theObject);
+        Destroy(gameObject);
     }
 }

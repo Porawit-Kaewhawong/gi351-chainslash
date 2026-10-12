@@ -82,6 +82,11 @@ public class PlayerCombat : MonoBehaviour
 
     public void TargetSetup(Transform enemyPos)
     {
+        if (activeKillCoroutine != null)
+        {
+            StopCoroutine(activeKillCoroutine);
+        }
+
         if (activeAnimateCoroutine != null)
         {
             StopCoroutine(activeAnimateCoroutine);
