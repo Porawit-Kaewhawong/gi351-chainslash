@@ -1,7 +1,5 @@
-using NUnit.Framework;
 using System.Collections;
 using System.Collections.Generic;
-using Unity.VisualScripting;
 using UnityEngine;
 
 public class GameManager : MonoBehaviour
@@ -23,7 +21,7 @@ public class GameManager : MonoBehaviour
             foreach (GameObject enemy in enemies)
             {
                 Vector2 randomPos = Random.insideUnitCircle * 10f;
-                Vector2 spawnPos = player.gameObject.transform.position + (Vector3)randomPos;
+                Vector2 spawnPos = (Vector2)player.gameObject.transform.position + (Vector2)randomPos;
 
                 Instantiate(enemy, spawnPos, Quaternion.identity);
                 yield return new WaitForSeconds(0.1f);
