@@ -54,7 +54,6 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
     {
         if (PlayerCombat.Instance.isInMode && !isTarget)
         {
-            PlayerCombat.Instance.targetEnemies.Add(gameObject);
             spriteRenderer.color = Color.purple;
             PlayerCombat.Instance.TargetSetup(transform);
             isTarget = true;

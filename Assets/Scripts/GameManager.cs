@@ -5,7 +5,7 @@ using UnityEngine;
 public class GameManager : MonoBehaviour
 {
     public List<GameObject> enemies = new List<GameObject>();
-    private float betweenWaveTime = 3f;
+    private float betweenWaveTime = 2f;
     private PlayerController player;
 
     void Start()
