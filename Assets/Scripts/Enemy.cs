@@ -7,13 +7,16 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     [SerializeField] private GameObject targetIndicator;
 
     private bool isTarget = false;
+    private bool isDead = false;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
+    private PlayerCombat playerCombat;
 
     private void Awake()
     {
         spriteRenderer = GetComponent<SpriteRenderer>();
         playerController = FindFirstObjectByType<PlayerController>();
+        playerCombat = FindFirstObjectByType<PlayerCombat>();
     }
 
     void Update()
@@ -53,6 +56,9 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     }
     public void OnDeath()
     {
+        if (isDead) return;
+        isDead = true;
+        
         Destroy(gameObject);
     }
 }

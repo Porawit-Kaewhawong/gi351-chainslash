@@ -7,9 +7,9 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
     [SerializeField] private GameObject targetIndicator;
     [SerializeField] private GameObject explosionRadiusPrefab;
     [SerializeField] private float explosionRadius = 5f;
-    private GameObject theObject;
-    private bool isDead;
+    private bool isDead = false;
     private bool isTarget = false;
+    private GameObject theObject;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
 
@@ -70,6 +70,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
     public void OnDeath()
     {
         if (isDead) return;
+        isDead = true;
 
         Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, explosionRadius);
 
@@ -91,7 +92,6 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
                     chainEnemy.OnDeath();
                 }
             }
-            isDead = true;
         }
         Destroy(theObject);
         Destroy(gameObject);

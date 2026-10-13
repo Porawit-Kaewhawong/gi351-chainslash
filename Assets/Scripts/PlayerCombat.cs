@@ -6,6 +6,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
+using UnityEngine.UIElements;
 
 public class PlayerCombat : MonoBehaviour
 {
@@ -15,19 +16,22 @@ public class PlayerCombat : MonoBehaviour
     [SerializeField] private float timeSpeed = 0.25f;
     [SerializeField] private AudioClip targetSelectSFX;
     [SerializeField] private AudioClip postSlashSFX;
+    [SerializeField] private GameObject lineRendererObject;
     public List<GameObject> targetEnemies = new List<GameObject>();
-    [HideInInspector] public bool isInMode { get; private set; }
+    public bool isInMode { get; private set; }
     private float fixedDeltaTime;
     private Coroutine activeAnimateCoroutine;
     private Coroutine activeKillCoroutine;
     private InputAction attackAction;
-    private LineRenderer lineRenderer;
+    private PlayerController playerController;
+    private GameObject insLineRendererObj;
+    private LineRenderer insLineRendererCom;
 
     void Awake()
     {
         Instance = this;
-        lineRenderer = GetComponent<LineRenderer>();
         attackAction = InputSystem.actions.FindAction("Attack");
+        playerController = GetComponent<PlayerController>();
     }
 
     void Start()
@@ -52,6 +56,33 @@ public class PlayerCombat : MonoBehaviour
                 ExitChainSlashMode();
             }
         }
+
+        if (isInMode && insLineRendererObj != null)
+        {
+            insLineRendererCom.positionCount = targetEnemies.Count;
+
+            for (int i = 0; i < targetEnemies.Count; i++)
+            {
+                if (targetEnemies[i] != null)
+                {
+                    if (!targetEnemies[i].IsDestroyed())
+                    {
+                        insLineRendererCom.SetPosition(i, targetEnemies[i].transform.position);
+                    }
+                }
+            }
+        }
+
+        if (targetEnemies.Count > 0)
+        {
+            for (int i = 0; i < targetEnemies.Count; i++)
+            {
+                if (targetEnemies[i].gameObject == null)
+                {
+                    targetEnemies.Remove(targetEnemies[i]);
+                }
+            }
+        }
     }
 
     void EnterChainSlashMode()
@@ -60,6 +91,9 @@ public class PlayerCombat : MonoBehaviour
 
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = fixedDeltaTime * Time.timeScale;
+
+        insLineRendererObj = Instantiate(lineRendererObject);
+        insLineRendererCom = insLineRendererObj.GetComponent<LineRenderer>();
     }
 
     void ExitChainSlashMode()
@@ -75,122 +109,144 @@ public class PlayerCombat : MonoBehaviour
         {
             StopCoroutine(activeKillCoroutine);
         }
-        activeKillCoroutine = StartCoroutine(AnimateKillLine());
+
+        activeKillCoroutine = StartCoroutine(AnimateKillLine(insLineRendererCom));
 
         Time.timeScale = 1.0f;
     }
 
     public void TargetSetup(Transform enemyPos)
     {
+        if (insLineRendererCom != null)
+        {
+            StartCoroutine(AnimateSlashLine(enemyPos, insLineRendererCom));
+        }
+
         if (activeKillCoroutine != null)
         {
             StopCoroutine(activeKillCoroutine);
         }
-
+        
         if (activeAnimateCoroutine != null)
         {
             StopCoroutine(activeAnimateCoroutine);
 
-            if (targetEnemies.Count > 1)
+            if (targetEnemies.Count >= 2 && targetEnemies[targetEnemies.Count - 2] != null)
             {
                 Vector2 endPos = targetEnemies[targetEnemies.Count - 2].transform.position;
-                lineRenderer.SetPosition(targetEnemies.Count - 2, endPos);
+                insLineRendererCom.SetPosition(targetEnemies.Count - 2, endPos);
             }
         }
 
-        activeAnimateCoroutine = StartCoroutine(AnimateSlashLine(enemyPos));
+        activeAnimateCoroutine = StartCoroutine(AnimateSlashLine(enemyPos, insLineRendererCom));
     }
 
-    public IEnumerator AnimateKillLine()
+    public IEnumerator AnimateSlashLine(Transform enemyPos, LineRenderer lineRenderer)
     {
-        lineRenderer.positionCount = 0;
+        playerController.PlaySFX(targetSelectSFX);
 
-        PlayerController playerController = GetComponent<PlayerController>();
-        playerController.PlaySFX(null);
+        int index = targetEnemies.Count;
+
+        lineRenderer.positionCount++;
+        lineRenderer.SetPosition(index - 1, enemyPos.position);
+
+        if (lineRenderer.positionCount < 2) yield break;
+
+        lineRenderer.enabled = true;
+
+        if (index >= 2 && targetEnemies[index - 2] != null)
+        {
+            Vector2 currentStart = targetEnemies[index - 2].transform.position;
+            Vector2 currentEnd = targetEnemies[index - 1].transform.position;
+
+            float timer = 0f;
+            float duration = 0.05f;
+            while (timer < duration)
+            {
+                timer += Time.deltaTime;
+                float time = timer / duration;
+
+                lineRenderer.SetPosition(index - 1, Vector2.Lerp(currentStart, currentEnd, time));
+
+                yield return null;
+            }
+
+            activeAnimateCoroutine = null;
+        }
+    }
+
+    public IEnumerator AnimateKillLine(LineRenderer lineRenderer)
+    {
+        lineRenderer.enabled = false;
+
+        yield return new WaitForSeconds(0.25f);
+
+        lineRenderer.enabled = true;
 
         for (int i = 0; i < targetEnemies.Count; i++)
         {
-            lineRenderer.positionCount++;
-            lineRenderer.SetPosition(i, targetEnemies[i].transform.position);
-
-            if (i > 0)
+            if (targetEnemies[i] != null)
             {
-                float timer = 0f;
-                float duration = 0.1f;
-
-                while (timer < duration)
+                if (targetEnemies[i].TryGetComponent<Enemy>(out Enemy enemy))
                 {
-                    timer += Time.deltaTime;
-                    float time = timer / duration;
-
-                    Vector2 currentStart = targetEnemies[i - 1].transform.position;
-                    Vector2 currentEnd = targetEnemies[i].transform.position;
-                    
-                    lineRenderer.SetPosition(i, Vector2.Lerp(currentStart, currentEnd, time));
-
-                    yield return null;
+                    if (enemy != null)
+                    {
+                        enemy.OnDeath();
+                    }
+                }
+                else if (targetEnemies[i].TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
+                {
+                    if (chainEnemy != null)
+                    {
+                        chainEnemy.OnDeath();
+                    }
                 }
             }
         }
 
-        for (int i = 0; i < targetEnemies.Count; i++)
+        yield return new WaitForSeconds(0.05f);
+
+        float orgWidth = lineRenderer.widthMultiplier;
+        float duration = 0.25f;
+        float timer = 0;
+
+        while (timer < duration / 2)
         {
-            if (targetEnemies[i].TryGetComponent<Enemy>(out Enemy enemy))
-            {
-                if (enemy != null)
-                {
-                    enemy.OnDeath();
-                }
-            }
-            else if (targetEnemies[i].TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
-            {
-                if (chainEnemy != null)
-                {
-                    chainEnemy.OnDeath();
-                }
-            }
+            timer += Time.deltaTime;
+            float time = timer / (duration / 2);
+
+            lineRenderer.widthMultiplier = Mathf.Lerp(orgWidth, orgWidth * 2, time);
+            yield return null;
         }
-        
+
+        timer = 0;
+
+        while (timer < duration / 2)
+        {
+            timer += Time.deltaTime;
+            float time = timer / (duration / 2);
+
+            lineRenderer.widthMultiplier = Mathf.Lerp(orgWidth * 2, orgWidth, time);
+            yield return null;
+        }
+
         if (targetEnemies.Count > 0)
         {
             playerController.PlaySFX(postSlashSFX);
         }
+
+        yield return new WaitForSeconds(0.25f);
+
+        lineRenderer.enabled = false;
 
         targetEnemies.Clear();
 
         lineRenderer.positionCount = 0;
         lineRenderer.enabled = false;
 
+        Destroy(insLineRendererCom);
+        Destroy(insLineRendererObj);
+
         activeKillCoroutine = null;
-    }
-
-    public IEnumerator AnimateSlashLine(Transform enemyPos)
-    {
-        PlayerController playerController = GetComponent<PlayerController>();
-        playerController.PlaySFX(targetSelectSFX);
-
-        lineRenderer.positionCount = targetEnemies.Count;
-        lineRenderer.SetPosition(targetEnemies.Count - 1, enemyPos.position);
-
-        if (lineRenderer.positionCount <= 1) yield break;
-
-        lineRenderer.enabled = true;
-
-        float timer = 0f;
-        float duration = 0.05f;
-        while (timer < duration)
-        {
-            timer += Time.deltaTime;
-            float time = timer / duration;
-
-            Vector2 currentStart = targetEnemies[targetEnemies.Count - 2].transform.position;
-            Vector2 currentEnd = targetEnemies[targetEnemies.Count - 1].transform.position;
-
-            lineRenderer.SetPosition(targetEnemies.Count - 1, Vector2.Lerp(currentStart, currentEnd, time));
-
-            yield return null;
-        }
-
-        activeAnimateCoroutine = null;
     }
 }
