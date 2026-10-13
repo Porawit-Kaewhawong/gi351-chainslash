@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Net;
+using Unity.Cinemachine;
 using Unity.VisualScripting;
 using UnityEditor;
 using UnityEngine;
@@ -15,6 +16,7 @@ public class PlayerCombat : MonoBehaviour
     [SerializeField] private AudioClip targetSelectSFX;
     [SerializeField] private AudioClip postSlashSFX;
     [SerializeField] private GameObject lineRendererObject;
+    [SerializeField] private CinemachineTargetGroup targetGroup;
     public bool isInMode { get; private set; }
     private float fixedDeltaTime;
     private Coroutine activeAnimateCoroutine;
@@ -115,6 +117,8 @@ public class PlayerCombat : MonoBehaviour
     {
         isInMode = false;
 
+        targetGroup.Targets[1].Object = null;
+
         if (activeAnimateCoroutine != null)
         {
             StopCoroutine(activeAnimateCoroutine);
@@ -136,6 +140,8 @@ public class PlayerCombat : MonoBehaviour
     {
         if (insLineRendererObj != null)
         {
+            targetGroup.Targets[1].Object = enemyPos;
+
             LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
 
             lineRendererManager.targets.Add(enemyPos.gameObject);
@@ -243,6 +249,11 @@ public class PlayerCombat : MonoBehaviour
             yield return null;
         }
 
+        if (lineRendererManager.targets.Count > 0)
+        {
+            playerController.PlaySFX(postSlashSFX);
+        }
+
         timer = 0;
 
         while (timer < duration / 2)
@@ -252,11 +263,6 @@ public class PlayerCombat : MonoBehaviour
 
             lineRenderer.widthMultiplier = Mathf.Lerp(orgWidth * 2, orgWidth, time);
             yield return null;
-        }
-
-        if (lineRendererManager.targets.Count > 0)
-        {
-            playerController.PlaySFX(postSlashSFX);
         }
 
         yield return new WaitForSeconds(0.25f);

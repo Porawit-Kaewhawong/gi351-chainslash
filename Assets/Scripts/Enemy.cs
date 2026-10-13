@@ -36,7 +36,7 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
             }
         }
 
-        transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
+        Movement();
     }
 
     public void OnPointerEnter(PointerEventData eventData)
@@ -59,5 +59,11 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
         isDead = true;
         
         Destroy(gameObject);
+    }
+
+    void Movement()
+    {
+        // Here
+        transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
     }
 }

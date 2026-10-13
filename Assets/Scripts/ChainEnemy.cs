@@ -47,7 +47,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
             theObject.SetActive(false);
         }
 
-        transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
+        Movement();
     }
 
     public void OnPointerEnter(PointerEventData eventData)
@@ -94,5 +94,11 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
         }
         Destroy(theObject);
         Destroy(gameObject);
+    }
+
+    void Movement()
+    {
+        // Here
+        transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
     }
 }
