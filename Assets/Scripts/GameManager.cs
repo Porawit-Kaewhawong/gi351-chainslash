@@ -21,7 +21,7 @@ public class GameManager : MonoBehaviour
             foreach (GameObject enemy in enemies)
             {
                 Vector2 randomPos = Random.insideUnitCircle * 10f;
-                Vector2 spawnPos = (Vector2)player.gameObject.transform.position + (Vector2)randomPos;
+                Vector2 spawnPos = (Vector2)player.gameObject.transform.position + randomPos;
 
                 Instantiate(enemy, spawnPos, Quaternion.identity);
                 yield return new WaitForSeconds(0.1f);
