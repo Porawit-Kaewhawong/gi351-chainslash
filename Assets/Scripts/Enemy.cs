@@ -4,19 +4,19 @@ using UnityEngine.EventSystems;
 public class Enemy : MonoBehaviour, IPointerEnterHandler
 {
     [Header("Enemy Settings")]
+    [SerializeField] private float moveSpeed = 10f;
     [SerializeField] private GameObject targetIndicator;
 
     private bool isTarget = false;
     private bool isDead = false;
+    private Rigidbody2D rb;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
-    private PlayerCombat playerCombat;
 
     private void Awake()
     {
         spriteRenderer = GetComponent<SpriteRenderer>();
         playerController = FindFirstObjectByType<PlayerController>();
-        playerCombat = FindFirstObjectByType<PlayerCombat>();
     }
 
     void Update()
@@ -64,6 +64,8 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     void Movement()
     {
         // Here
-        transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
+        // transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
+        rb.AddForce(((playerController.gameObject.transform.position - gameObject.transform.position) * moveSpeed));
+        rb.AddForce(new Vector2(playerController.gameObject.transform.position - gameObject.transform.position) * moveSpeed);
     }
 }

@@ -103,6 +103,7 @@ GameObject:
   - component: {fileID: 2149402356600337383}
   - component: {fileID: 8226947479202310648}
   - component: {fileID: 6880963411520439303}
+  - component: {fileID: -3192368034494419569}
   - component: {fileID: 4417426479155433026}
   m_Layer: 0
   m_Name: Enemy
@@ -246,6 +247,33 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Enemy
   targetIndicator: {fileID: 4618780478795535015}
+--- !u!50 &-3192368034494419569
+Rigidbody2D:
+  serializedVersion: 5
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3260056029298322424}
+  m_BodyType: 0
+  m_Simulated: 1
+  m_UseFullKinematicContacts: 0
+  m_UseAutoMass: 0
+  m_Mass: 1
+  m_LinearDamping: 0
+  m_AngularDamping: 0.05
+  m_GravityScale: 1
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_Interpolate: 0
+  m_SleepingMode: 1
+  m_CollisionDetection: 0
+  m_Constraints: 0
 --- !u!120 &4417426479155433026
 LineRenderer:
   serializedVersion: 3

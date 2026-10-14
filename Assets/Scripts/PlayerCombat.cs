@@ -6,20 +6,25 @@ using Unity.VisualScripting;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
 
 public class PlayerCombat : MonoBehaviour
 {
     public static PlayerCombat Instance { get; private set; }
 
     [Header("Chain Slash Mode Settings")]
+    [SerializeField] private float maxMeter = 100f;
     [SerializeField] private float timeSpeed = 0.25f;
     [SerializeField] private AudioClip targetSelectSFX;
     [SerializeField] private AudioClip postSlashSFX;
     [SerializeField] private GameObject lineRendererObject;
     [SerializeField] private CinemachineTargetGroup targetGroup;
+    [SerializeField] private Image modeMeterImage;
     public bool isInMode { get; private set; }
+    [SerializeField] private float currentMeter;
     private float fixedDeltaTime;
     private Coroutine activeAnimateCoroutine;
+    private Coroutine activeMeterCoroutine;
     private InputAction attackAction;
     private PlayerController playerController;
     private GameObject insLineRendererObj;
@@ -37,36 +42,12 @@ public class PlayerCombat : MonoBehaviour
     void Start()
     {
         fixedDeltaTime = Time.deltaTime;
+        currentMeter = maxMeter;
     }
 
 
     void Update()
     {
-        if (attackAction.IsPressed())
-        {
-            if (!isInMode)
-            {
-                if (Cursor.lockState == CursorLockMode.Locked)
-                {
-                    Cursor.lockState = CursorLockMode.None;
-                    Cursor.visible = true;
-                }
-                EnterChainSlashMode();
-            }
-        }
-        else
-        {
-            if (isInMode)
-            {
-                if (Cursor.lockState == CursorLockMode.None)
-                {
-                    Cursor.lockState = CursorLockMode.Locked;
-                    Cursor.visible = false;
-                }
-                ExitChainSlashMode();
-            }
-        }
-
         if (isInMode && insLineRendererObj != null)
         {
             LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
@@ -100,22 +81,62 @@ public class PlayerCombat : MonoBehaviour
                 }
             }
         }
+
+        if (attackAction.IsPressed() && currentMeter <= 0)
+        {
+            ExitChainSlashMode();
+            return;
+        }
+
+        if (attackAction.IsPressed())
+        {
+            if (!isInMode)
+            {
+                EnterChainSlashMode();
+            }
+        }
+        else
+        {
+            if (isInMode)
+            {
+                ExitChainSlashMode();
+            }
+        }
     }
 
     void EnterChainSlashMode()
     {
         isInMode = true;
 
+        if (Cursor.lockState == CursorLockMode.Locked)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = fixedDeltaTime * Time.timeScale;
 
         insLineRendererObj = Instantiate(lineRendererObject);
         insLineRendererCom = insLineRendererObj.GetComponent<LineRenderer>();
+
+        if (activeMeterCoroutine != null)
+        {
+            StopCoroutine(activeMeterCoroutine);
+        }
+
+        activeMeterCoroutine = StartCoroutine(MeterDegeneration());
     }
 
     void ExitChainSlashMode()
     {
         isInMode = false;
+
+        if (Cursor.lockState == CursorLockMode.None)
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+        }
 
         targetGroup.Targets[1].Object = null;
 
@@ -124,11 +145,21 @@ public class PlayerCombat : MonoBehaviour
             StopCoroutine(activeAnimateCoroutine);
         }
 
+        if (activeMeterCoroutine != null)
+        {
+            StopCoroutine(activeMeterCoroutine);
+        }
+
+        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+
         if (insLineRendererObj != null)
         {
             LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
             lineRendererManager.activeCoroutine = StartCoroutine(AnimateKillLine(insLineRendererCom));
         }
+
+        attackAction.Disable();
+        attackAction.Enable();
 
         insLineRendererCom = null;
         insLineRendererObj = null;
@@ -270,5 +301,44 @@ public class PlayerCombat : MonoBehaviour
         lineRenderer.enabled = false;
 
         Destroy(lineRendererManager.gameObject);
+    }
+
+    IEnumerator MeterRegenerate()
+    {
+        if (currentMeter == 0)
+        {
+            yield return new WaitForSeconds(1f);
+        }
+        else
+        {
+            yield return new WaitForSeconds(0.5f);
+        }
+
+        while (currentMeter < maxMeter)
+        {
+            currentMeter++;
+            currentMeter = Mathf.Clamp(currentMeter, 0, maxMeter);
+
+            modeMeterImage.fillAmount = currentMeter / maxMeter;
+
+            yield return new WaitForSeconds(0.03f);
+        }
+
+        activeMeterCoroutine = null;
+    }
+
+    IEnumerator MeterDegeneration()
+    {
+        while (currentMeter > 0)
+        {
+            currentMeter--;
+            currentMeter = Mathf.Clamp(currentMeter, 0, maxMeter);
+
+            modeMeterImage.fillAmount = currentMeter / maxMeter;
+
+            yield return new WaitForSeconds(0.005f);
+        }
+
+        activeMeterCoroutine = null;
     }
 }

@@ -29,7 +29,6 @@ public class PlayerController : MonoBehaviour
 
     [Header("Player Visual Settings")]
     private SpriteRenderer spriteRenderer;
-
     private AudioSource audioSource;
 
     void Start()
