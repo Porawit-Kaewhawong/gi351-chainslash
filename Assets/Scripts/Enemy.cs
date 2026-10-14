@@ -4,7 +4,7 @@ using UnityEngine.EventSystems;
 public class Enemy : MonoBehaviour, IPointerEnterHandler
 {
     [Header("Enemy Settings")]
-    [SerializeField] private float moveSpeed = 10f;
+    [SerializeField] private float moveSpeed = 2.5f;
     [SerializeField] private GameObject targetIndicator;
 
     private bool isTarget = false;
@@ -17,6 +17,7 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     {
         spriteRenderer = GetComponent<SpriteRenderer>();
         playerController = FindFirstObjectByType<PlayerController>();
+        rb = GetComponent<Rigidbody2D>();
     }
 
     void Update()
@@ -64,8 +65,7 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     void Movement()
     {
         // Here
-        // transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
-        rb.AddForce(((playerController.gameObject.transform.position - gameObject.transform.position) * moveSpeed));
-        rb.AddForce(new Vector2(playerController.gameObject.transform.position - gameObject.transform.position) * moveSpeed);
+        Vector2 dir = (playerController.gameObject.transform.position - gameObject.transform.position).normalized;
+        rb.AddForce(dir * moveSpeed);
     }
 }

@@ -4,11 +4,13 @@ using UnityEngine.EventSystems;
 public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 {
     [Header("Chain Enemy Settings")]
+    [SerializeField] private float moveSpeed = 2.5f;
     [SerializeField] private GameObject targetIndicator;
     [SerializeField] private GameObject explosionRadiusPrefab;
     [SerializeField] private float explosionRadius = 5f;
     private bool isDead = false;
     private bool isTarget = false;
+    private Rigidbody2D rb;
     private GameObject theObject;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
@@ -20,6 +22,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
         playerController = FindFirstObjectByType<PlayerController>();
         theObject = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
         theObject.SetActive(false);
+        rb = GetComponent<Rigidbody2D>();
     }
 
     void Update()
@@ -92,13 +95,17 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
                 }
             }
         }
-        Destroy(theObject);
+
+        theObject.SetActive(true);
+
+        Destroy(theObject, 0.5f);
         Destroy(gameObject);
     }
 
     void Movement()
     {
         // Here
-        transform.Translate((playerController.gameObject.transform.position - gameObject.transform.position) * 0.5f * Time.deltaTime);
+        Vector2 dir = (playerController.gameObject.transform.position - gameObject.transform.position).normalized;
+        rb.AddForce(dir * moveSpeed);
     }
 }

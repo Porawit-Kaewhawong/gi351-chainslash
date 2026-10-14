@@ -102,8 +102,8 @@ GameObject:
   - component: {fileID: 1785772515716116175}
   - component: {fileID: 2149402356600337383}
   - component: {fileID: 8226947479202310648}
-  - component: {fileID: 6880963411520439303}
   - component: {fileID: -3192368034494419569}
+  - component: {fileID: 6880963411520439303}
   - component: {fileID: 4417426479155433026}
   m_Layer: 0
   m_Name: Enemy
@@ -234,19 +234,6 @@ BoxCollider2D:
   m_AutoTiling: 0
   m_Size: {x: 1, y: 1}
   m_EdgeRadius: 0
---- !u!114 &6880963411520439303
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 3260056029298322424}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 32be5c4fce712e84cb2247a34223b0ec, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Enemy
-  targetIndicator: {fileID: 4618780478795535015}
 --- !u!50 &-3192368034494419569
 Rigidbody2D:
   serializedVersion: 5
@@ -262,7 +249,7 @@ Rigidbody2D:
   m_Mass: 1
   m_LinearDamping: 0
   m_AngularDamping: 0.05
-  m_GravityScale: 1
+  m_GravityScale: 0
   m_Material: {fileID: 0}
   m_IncludeLayers:
     serializedVersion: 2
@@ -273,7 +260,21 @@ Rigidbody2D:
   m_Interpolate: 0
   m_SleepingMode: 1
   m_CollisionDetection: 0
-  m_Constraints: 0
+  m_Constraints: 4
+--- !u!114 &6880963411520439303
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3260056029298322424}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 32be5c4fce712e84cb2247a34223b0ec, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Enemy
+  moveSpeed: 2.5
+  targetIndicator: {fileID: 4618780478795535015}
 --- !u!120 &4417426479155433026
 LineRenderer:
   serializedVersion: 3

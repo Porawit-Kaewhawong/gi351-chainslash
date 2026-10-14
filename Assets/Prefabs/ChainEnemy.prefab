@@ -238,7 +238,7 @@ Rigidbody2D:
   m_Mass: 1
   m_LinearDamping: 0
   m_AngularDamping: 0.05
-  m_GravityScale: 1
+  m_GravityScale: 0
   m_Material: {fileID: 0}
   m_IncludeLayers:
     serializedVersion: 2
@@ -249,7 +249,7 @@ Rigidbody2D:
   m_Interpolate: 0
   m_SleepingMode: 1
   m_CollisionDetection: 0
-  m_Constraints: 0
+  m_Constraints: 4
 --- !u!114 &8292210779536947570
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -262,6 +262,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7ab1572b3ea6a3a4f8410f627c46c439, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ChainEnemy
+  moveSpeed: 2.5
   targetIndicator: {fileID: 9091602837837721924}
   explosionRadiusPrefab: {fileID: 4834902374614905739, guid: 100a457d29f1a404f9941a375fb2576e, type: 3}
   explosionRadius: 5

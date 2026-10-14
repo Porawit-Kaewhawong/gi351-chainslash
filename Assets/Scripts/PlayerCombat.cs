@@ -21,7 +21,7 @@ public class PlayerCombat : MonoBehaviour
     [SerializeField] private CinemachineTargetGroup targetGroup;
     [SerializeField] private Image modeMeterImage;
     public bool isInMode { get; private set; }
-    [SerializeField] private float currentMeter;
+    private float currentMeter;
     private float fixedDeltaTime;
     private Coroutine activeAnimateCoroutine;
     private Coroutine activeMeterCoroutine;
