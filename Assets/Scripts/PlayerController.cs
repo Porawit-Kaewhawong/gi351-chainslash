@@ -74,6 +74,8 @@ public class PlayerController : MonoBehaviour
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
                 doubleJump = false;
             }
+
+            PlayerCombat.Instance.DetachGrappling();
         }
 
         if (jumpAction.WasReleasedThisFrame() && rb.linearVelocityY > 0f)

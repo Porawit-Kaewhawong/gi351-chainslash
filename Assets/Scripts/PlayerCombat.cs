@@ -37,10 +37,11 @@ public class PlayerCombat : MonoBehaviour
     private float orgAmplitudeGain;
 
     [Header("Grappling Hook Settings")]
-    [SerializeField] private float maxGrappleRange = 6f;
+    [SerializeField] private float maxGrappleRange = 8f;
     [SerializeField] private float grappleTime = 0.5f;
+    [SerializeField] private float pullForce = 10f;
     [SerializeField] private LayerMask grappleLayer;
-    private bool isGrappling = false;
+    public bool IsGrappling { get; private set; }
     private bool isFocusing = false;
     private SpringJoint2D springJoint;
     private LineRenderer grappleLine;
@@ -73,22 +74,7 @@ public class PlayerCombat : MonoBehaviour
 
     void Update()
     {
-        if (grappleAction.IsPressed())
-        {
-            if (!isGrappling && !isFocusing)
-            {
-                GrapplingFocus();
-            }
-        }
-        else
-        {
-            if (isFocusing)
-            {
-                GrappingHook();
-            }
-        }
-
-        if (grappleLine.enabled == true)
+        if (IsGrappling && grappleLine.positionCount > 0)
         {
             grappleLine.SetPosition(0, transform.position);
         }
@@ -135,6 +121,8 @@ public class PlayerCombat : MonoBehaviour
 
         if (attackAction.IsPressed())
         {
+            if (isFocusing) return;
+
             if (!IsInMode)
             {
                 EnterChainSlashMode();
@@ -145,6 +133,29 @@ public class PlayerCombat : MonoBehaviour
             if (IsInMode)
             {
                 ExitChainSlashMode();
+            }
+        }
+
+        if (grappleAction.IsPressed() && currentMeter <= 0)
+        {
+            GrappingHook();
+            return;
+        }
+
+        if (grappleAction.IsPressed())
+        {
+            if (IsInMode) return;
+
+            if (!IsGrappling && !isFocusing)
+            {
+                GrapplingFocus();
+            }
+        }
+        else
+        {
+            if (!IsGrappling && isFocusing)
+            {
+                GrappingHook();
             }
         }
     }
@@ -159,6 +170,11 @@ public class PlayerCombat : MonoBehaviour
             Cursor.visible = true;
         }
 
+        if (Mouse.current != null)
+        {
+            Mouse.current.WarpCursorPosition(Camera.main.WorldToScreenPoint(gameObject.transform.position));
+        }
+
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = fixedDeltaTime * Time.timeScale;
 
@@ -170,7 +186,7 @@ public class PlayerCombat : MonoBehaviour
             StopCoroutine(activeMeterCoroutine);
         }
 
-        activeMeterCoroutine = StartCoroutine(MeterDegeneration());
+        activeMeterCoroutine = StartCoroutine(MeterDegeneration(1 ,0.005f));
     }
 
     void ExitChainSlashMode()
@@ -221,6 +237,8 @@ public class PlayerCombat : MonoBehaviour
             LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
 
             lineRendererManager.targets.Add(enemyPos.gameObject);
+
+            currentMeter -= maxMeter / 20;
 
             if (lineRendererManager.activeCoroutine != null)
             {
@@ -372,16 +390,16 @@ public class PlayerCombat : MonoBehaviour
         activeMeterCoroutine = null;
     }
 
-    IEnumerator MeterDegeneration()
+    IEnumerator MeterDegeneration(float amount, float interval)
     {
         while (currentMeter > 0)
         {
-            currentMeter--;
+            currentMeter -= amount;
             currentMeter = Mathf.Clamp(currentMeter, 0, maxMeter);
 
             modeMeterImage.fillAmount = currentMeter / maxMeter;
 
-            yield return new WaitForSeconds(0.005f);
+            yield return new WaitForSeconds(interval);
         }
 
         activeMeterCoroutine = null;
@@ -414,9 +432,19 @@ public class PlayerCombat : MonoBehaviour
 
     private IEnumerator AttachGrapple()
     {
-        isGrappling = true;
+        IsGrappling = true;
         isFocusing = false;
-        grappleLine.enabled = true;
+
+        if (activeMeterCoroutine != null)
+        {
+            StopCoroutine(activeMeterCoroutine);
+        }
+
+        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+
+        grappleLine.positionCount = 0;
+
+        yield return null;
 
         Cursor.visible = false;
 
@@ -426,6 +454,11 @@ public class PlayerCombat : MonoBehaviour
         Vector2 mouseWorldPos = Camera.main.ScreenToWorldPoint(mousePos);
         Vector2 dir = (mouseWorldPos - (Vector2)transform.position).normalized;
         RaycastHit2D rayHit = Physics2D.Raycast(transform.position, dir, maxGrappleRange, grappleLayer);
+
+        grappleLine.positionCount = 2;
+        grappleLine.SetPosition(0, transform.position);
+        grappleLine.SetPosition(1, transform.position);
+        grappleLine.enabled = true;
 
         Vector2 targetPos;
         if (rayHit.collider != null)
@@ -461,7 +494,8 @@ public class PlayerCombat : MonoBehaviour
 
             while (springJoint.distance > minDistance)
             {
-                springJoint.distance -= 0.00001f * Time.deltaTime;
+                springJoint.distance -= pullForce * Time.deltaTime;
+                yield return null;
             }
         }
         else
@@ -469,12 +503,17 @@ public class PlayerCombat : MonoBehaviour
             springJoint.enabled = false;
             grappleLine.enabled = false;
         }
-
-        isGrappling = false;
     }
 
     private void GrapplingFocus()
     {
+        if (activeMeterCoroutine != null)
+        {
+            StopCoroutine(activeMeterCoroutine);
+        }
+
+        activeMeterCoroutine = StartCoroutine(MeterDegeneration(1, 0.005f));
+
         isFocusing = true;
 
         if (Cursor.lockState == CursorLockMode.Locked)
@@ -483,7 +522,19 @@ public class PlayerCombat : MonoBehaviour
             Cursor.visible = true;
         }
 
+        if (Mouse.current != null)
+        {
+            Mouse.current.WarpCursorPosition(Camera.main.WorldToScreenPoint(gameObject.transform.position));
+        }
+
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = fixedDeltaTime * Time.timeScale;
+    }
+
+    public void DetachGrappling()
+    {
+        IsGrappling = false;
+        grappleLine.enabled = false;
+        springJoint.enabled = false;
     }
 }
