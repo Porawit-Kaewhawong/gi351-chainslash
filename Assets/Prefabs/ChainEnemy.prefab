@@ -238,7 +238,7 @@ Rigidbody2D:
   m_Mass: 1
   m_LinearDamping: 0
   m_AngularDamping: 0.05
-  m_GravityScale: 0
+  m_GravityScale: 1
   m_Material: {fileID: 0}
   m_IncludeLayers:
     serializedVersion: 2
@@ -263,6 +263,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ChainEnemy
   moveSpeed: 2.5
+  groundLayer:
+    serializedVersion: 2
+    m_Bits: 64
+  jumpForce: 7
+  maxJumps: 2
+  jumpCooldown: 1
+  doubleJumpDelay: 0.25
+  heightThreshold: 1.2
+  wallCheckDistance: 0.6
+  groundCheckDistance: 0.6
   targetIndicator: {fileID: 9091602837837721924}
   explosionSound: {fileID: 8300000, guid: 1860aec48dbc9c540a055b47d20f3488, type: 3}
   explosionRadiusPrefab: {fileID: 4834902374614905739, guid: 100a457d29f1a404f9941a375fb2576e, type: 3}
