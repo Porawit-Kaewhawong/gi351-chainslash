@@ -5,6 +5,7 @@ using Unity.Cinemachine;
 using Unity.VisualScripting;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
@@ -20,6 +21,8 @@ public class PlayerCombat : MonoBehaviour
     [SerializeField] private GameObject lineRendererObject;
     [SerializeField] private CinemachineTargetGroup targetGroup;
     [SerializeField] private Image modeMeterImage;
+    [SerializeField] private NoiseSettings noiseSettings;
+    private NoiseSettings orgNoiseSettings;
     public bool IsInMode { get; private set; }
     private float currentMeter;
     private float fixedDeltaTime;
@@ -31,7 +34,19 @@ public class PlayerCombat : MonoBehaviour
     private LineRenderer insLineRendererCom;
     private CinemachineCamera cinemachineCamera;
     private CinemachineBasicMultiChannelPerlin perlin;
-    private float orgAmplitude;
+    private float orgAmplitudeGain;
+
+    [Header("Grappling Hook Settings")]
+    [SerializeField] private float maxGrappleRange = 6f;
+    [SerializeField] private float grappleTime = 0.5f;
+    [SerializeField] private LayerMask grappleLayer;
+    private bool isGrappling = false;
+    private bool isFocusing = false;
+    private SpringJoint2D springJoint;
+    private LineRenderer grappleLine;
+    private Coroutine activeGrapplingCoroutine;
+    private InputAction grappleAction;
+    private float minDistance = 0.5f;
 
     void Awake()
     {
@@ -42,7 +57,11 @@ public class PlayerCombat : MonoBehaviour
         Cursor.visible = false;
         cinemachineCamera = FindAnyObjectByType<CinemachineCamera>();
         perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
-        orgAmplitude = perlin.AmplitudeGain;
+        orgNoiseSettings = perlin.NoiseProfile;
+        orgAmplitudeGain = perlin.AmplitudeGain;
+        grappleAction = InputSystem.actions.FindAction("Grapple");
+        grappleLine = GetComponent<LineRenderer>();
+        springJoint = GetComponent<SpringJoint2D>();
     }
 
     void Start()
@@ -54,6 +73,26 @@ public class PlayerCombat : MonoBehaviour
 
     void Update()
     {
+        if (grappleAction.IsPressed())
+        {
+            if (!isGrappling && !isFocusing)
+            {
+                GrapplingFocus();
+            }
+        }
+        else
+        {
+            if (isFocusing)
+            {
+                GrappingHook();
+            }
+        }
+
+        if (grappleLine.enabled == true)
+        {
+            grappleLine.SetPosition(0, transform.position);
+        }
+
         if (IsInMode && insLineRendererObj != null)
         {
             LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
@@ -348,17 +387,103 @@ public class PlayerCombat : MonoBehaviour
         activeMeterCoroutine = null;
     }
 
-    public IEnumerator ShakingTrigger(float intensity, float duration)
+    public IEnumerator ShakingTrigger(float duration)
     {
-        var perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
-        
         if (perlin != null)
         {
-            perlin.AmplitudeGain = intensity;
+            perlin.NoiseProfile = noiseSettings;
+            perlin.AmplitudeGain = 10;
 
             yield return new WaitForSeconds(duration);
 
-            perlin.AmplitudeGain = orgAmplitude;
+            perlin.NoiseProfile = orgNoiseSettings;
+            perlin.AmplitudeGain = orgAmplitudeGain;
         }
+    }
+
+
+    private void GrappingHook()
+    {
+        if (activeGrapplingCoroutine != null)
+        {
+            StopCoroutine(activeGrapplingCoroutine);
+        }
+
+        activeGrapplingCoroutine = StartCoroutine(AttachGrapple());
+    }
+
+    private IEnumerator AttachGrapple()
+    {
+        isGrappling = true;
+        isFocusing = false;
+        grappleLine.enabled = true;
+
+        Cursor.visible = false;
+
+        Time.timeScale = 1.0f;
+
+        Vector2 mousePos = Mouse.current.position.ReadValue();
+        Vector2 mouseWorldPos = Camera.main.ScreenToWorldPoint(mousePos);
+        Vector2 dir = (mouseWorldPos - (Vector2)transform.position).normalized;
+        RaycastHit2D rayHit = Physics2D.Raycast(transform.position, dir, maxGrappleRange, grappleLayer);
+
+        Vector2 targetPos;
+        if (rayHit.collider != null)
+        {
+            targetPos = rayHit.point;
+        }
+        else
+        {
+            targetPos = (Vector2)transform.position + (dir * maxGrappleRange);
+        }
+
+        float timer = 0f;
+        while (timer < grappleTime)
+        {
+            timer += Time.deltaTime;
+            float time = timer / grappleTime;
+            grappleLine.SetPosition(1, Vector2.Lerp(transform.position, targetPos, time));
+
+            yield return null;
+        }
+
+        if (Cursor.lockState == CursorLockMode.None)
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+        }
+
+        if (rayHit.collider != null)
+        {
+            springJoint.enabled = true;
+            springJoint.connectedAnchor = rayHit.point;
+            springJoint.distance = Vector2.Distance(transform.position, targetPos);
+
+            while (springJoint.distance > minDistance)
+            {
+                springJoint.distance -= 0.00001f * Time.deltaTime;
+            }
+        }
+        else
+        {
+            springJoint.enabled = false;
+            grappleLine.enabled = false;
+        }
+
+        isGrappling = false;
+    }
+
+    private void GrapplingFocus()
+    {
+        isFocusing = true;
+
+        if (Cursor.lockState == CursorLockMode.Locked)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        Time.timeScale = timeSpeed;
+        Time.fixedDeltaTime = fixedDeltaTime * Time.timeScale;
     }
 }

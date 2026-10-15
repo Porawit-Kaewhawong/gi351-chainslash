@@ -125,7 +125,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
         isExploding = false;
 
-        PlayerCombat.Instance.ShakingTrigger(1f, 0.25f);
+        PlayerCombat.Instance.StartCoroutine(PlayerCombat.Instance.ShakingTrigger(0.25f));
 
         Destroy(insExplosion, 0.5f);
         Destroy(gameObject);

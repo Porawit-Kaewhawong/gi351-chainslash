@@ -4,6 +4,7 @@ using Unity.VectorGraphics;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+using UnityEngine.UIElements;
 
 public class PlayerController : MonoBehaviour
 {
@@ -29,6 +30,7 @@ public class PlayerController : MonoBehaviour
 
     [Header("Player Visual Settings")]
     private SpriteRenderer spriteRenderer;
+    
     private AudioSource audioSource;
     private int soundPlaying;
     private int maxSoundPlaying = 3;
@@ -148,6 +150,5 @@ public class PlayerController : MonoBehaviour
             audioSource.PlayOneShot(audioClip);
             soundPlaying++;
         }
-        
     }
 }
