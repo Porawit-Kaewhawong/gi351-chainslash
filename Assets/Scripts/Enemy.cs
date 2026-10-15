@@ -21,6 +21,10 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
 
     void Update()
     {
+        Movement();
+
+        if (IsDead) return;
+
         if (PlayerCombat.Instance.IsInMode && !isTarget)
         {
             if (targetIndicator != null)
@@ -35,8 +39,6 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
                 targetIndicator.SetActive(false);
             }
         }
-
-        Movement();
     }
 
     public void OnPointerEnter(PointerEventData eventData)

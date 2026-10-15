@@ -29,6 +29,9 @@ public class PlayerCombat : MonoBehaviour
     private PlayerController playerController;
     private GameObject insLineRendererObj;
     private LineRenderer insLineRendererCom;
+    private CinemachineCamera cinemachineCamera;
+    private CinemachineBasicMultiChannelPerlin perlin;
+    private float orgAmplitude;
 
     void Awake()
     {
@@ -37,6 +40,9 @@ public class PlayerCombat : MonoBehaviour
         playerController = GetComponent<PlayerController>();
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
+        cinemachineCamera = FindAnyObjectByType<CinemachineCamera>();
+        perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
+        orgAmplitude = perlin.AmplitudeGain;
     }
 
     void Start()
@@ -340,5 +346,19 @@ public class PlayerCombat : MonoBehaviour
         }
 
         activeMeterCoroutine = null;
+    }
+
+    public IEnumerator ShakingTrigger(float intensity, float duration)
+    {
+        var perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
+        
+        if (perlin != null)
+        {
+            perlin.AmplitudeGain = intensity;
+
+            yield return new WaitForSeconds(duration);
+
+            perlin.AmplitudeGain = orgAmplitude;
+        }
     }
 }

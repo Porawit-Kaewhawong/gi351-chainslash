@@ -1,7 +1,9 @@
 using System.Collections;
+using System.Collections.Generic;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
 
 public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 {
@@ -34,6 +36,8 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
     {
         insExplosion.transform.position = transform.position;
 
+        Movement();
+
         if (IsDead) return;
 
         if (PlayerCombat.Instance.IsInMode && !isTarget)
@@ -55,8 +59,6 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
         {
             insExplosion.SetActive(false);
         }
-
-        Movement();
     }
 
     public void OnPointerEnter(PointerEventData eventData)
@@ -82,7 +84,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
         while (isExploding)
         {
-
+            yield return null;
         }
 
         isExploding = true;
@@ -122,6 +124,8 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
         playerController.PlaySFX(explosionSound);
 
         isExploding = false;
+
+        PlayerCombat.Instance.ShakingTrigger(1f, 0.25f);
 
         Destroy(insExplosion, 0.5f);
         Destroy(gameObject);
