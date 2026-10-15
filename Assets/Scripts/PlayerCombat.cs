@@ -22,7 +22,8 @@ public class PlayerCombat : MonoBehaviour
     [SerializeField] private CinemachineTargetGroup targetGroup;
     [SerializeField] private Image modeMeterImage;
     [SerializeField] private NoiseSettings noiseSettings;
-    private NoiseSettings orgNoiseSettings;
+    
+    private float orgAmplitudeGain;
     public bool IsInMode { get; private set; }
     private float currentMeter;
     private float fixedDeltaTime;
@@ -34,7 +35,7 @@ public class PlayerCombat : MonoBehaviour
     private LineRenderer insLineRendererCom;
     private CinemachineCamera cinemachineCamera;
     private CinemachineBasicMultiChannelPerlin perlin;
-    private float orgAmplitudeGain;
+    private NoiseSettings orgNoiseSettings;
 
     [Header("Grappling Hook Settings")]
     [SerializeField] private float maxGrappleRange = 8f;
