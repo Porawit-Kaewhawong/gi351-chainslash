@@ -20,7 +20,7 @@ public class PlayerCombat : MonoBehaviour
     [SerializeField] private GameObject lineRendererObject;
     [SerializeField] private CinemachineTargetGroup targetGroup;
     [SerializeField] private Image modeMeterImage;
-    public bool isInMode { get; private set; }
+    public bool IsInMode { get; private set; }
     private float currentMeter;
     private float fixedDeltaTime;
     private Coroutine activeAnimateCoroutine;
@@ -48,7 +48,7 @@ public class PlayerCombat : MonoBehaviour
 
     void Update()
     {
-        if (isInMode && insLineRendererObj != null)
+        if (IsInMode && insLineRendererObj != null)
         {
             LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
 
@@ -90,14 +90,14 @@ public class PlayerCombat : MonoBehaviour
 
         if (attackAction.IsPressed())
         {
-            if (!isInMode)
+            if (!IsInMode)
             {
                 EnterChainSlashMode();
             }
         }
         else
         {
-            if (isInMode)
+            if (IsInMode)
             {
                 ExitChainSlashMode();
             }
@@ -106,7 +106,7 @@ public class PlayerCombat : MonoBehaviour
 
     void EnterChainSlashMode()
     {
-        isInMode = true;
+        IsInMode = true;
 
         if (Cursor.lockState == CursorLockMode.Locked)
         {
@@ -130,7 +130,7 @@ public class PlayerCombat : MonoBehaviour
 
     void ExitChainSlashMode()
     {
-        isInMode = false;
+        IsInMode = false;
 
         if (Cursor.lockState == CursorLockMode.None)
         {
@@ -250,16 +250,16 @@ public class PlayerCombat : MonoBehaviour
             {
                 if (lineRendererManager.targets[i].TryGetComponent<Enemy>(out Enemy enemy))
                 {
-                    if (enemy != null)
+                    if (enemy != null && enemy.IsDead == false)
                     {
                         enemy.OnDeath();
                     }
                 }
                 else if (lineRendererManager.targets[i].TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
                 {
-                    if (chainEnemy != null)
+                    if (chainEnemy != null && chainEnemy.IsDead == false)
                     {
-                        chainEnemy.OnDeath();
+                        chainEnemy.StartCoroutine(chainEnemy.OnDeath());
                     }
                 }
             }

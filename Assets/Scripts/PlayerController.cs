@@ -30,6 +30,8 @@ public class PlayerController : MonoBehaviour
     [Header("Player Visual Settings")]
     private SpriteRenderer spriteRenderer;
     private AudioSource audioSource;
+    private int soundPlaying;
+    private int maxSoundPlaying = 3;
 
     void Start()
     {
@@ -96,6 +98,11 @@ public class PlayerController : MonoBehaviour
         rb.linearVelocity = new Vector2(inputValue.x * moveSpeed, rb.linearVelocityY);
     }
 
+    private void LateUpdate()
+    {
+        soundPlaying = 0;
+    }
+
     private bool IsGrounded()
     {
         return Physics2D.OverlapCircle(groundCheck.position, 0.2f, groundLayer);
@@ -136,7 +143,11 @@ public class PlayerController : MonoBehaviour
 
     public void PlaySFX(AudioClip audioClip)
     {
-        audioSource.clip = audioClip;
-        audioSource.Play();
+        if (soundPlaying < maxSoundPlaying)
+        {
+            audioSource.PlayOneShot(audioClip);
+            soundPlaying++;
+        }
+        
     }
 }

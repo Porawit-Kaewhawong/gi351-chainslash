@@ -6,9 +6,8 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     [Header("Enemy Settings")]
     [SerializeField] private float moveSpeed = 2.5f;
     [SerializeField] private GameObject targetIndicator;
-
     private bool isTarget = false;
-    private bool isDead = false;
+    public bool IsDead { get; private set; }
     private Rigidbody2D rb;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
@@ -22,7 +21,7 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
 
     void Update()
     {
-        if (PlayerCombat.Instance.isInMode && !isTarget)
+        if (PlayerCombat.Instance.IsInMode && !isTarget)
         {
             if (targetIndicator != null)
             {
@@ -42,7 +41,7 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
 
     public void OnPointerEnter(PointerEventData eventData)
     {
-        if (PlayerCombat.Instance.isInMode && !isTarget)
+        if (PlayerCombat.Instance.IsInMode && !isTarget)
         {
             spriteRenderer.color = Color.purple;
             PlayerCombat.Instance.TargetSetup(transform);
@@ -56,8 +55,8 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     }
     public void OnDeath()
     {
-        if (isDead) return;
-        isDead = true;
+        if (IsDead) return;
+        IsDead = true;
         
         Destroy(gameObject);
     }

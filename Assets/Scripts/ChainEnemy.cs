@@ -1,17 +1,22 @@
+using System.Collections;
+using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
 public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 {
+    public static bool isExploding = false;
+
     [Header("Chain Enemy Settings")]
     [SerializeField] private float moveSpeed = 2.5f;
     [SerializeField] private GameObject targetIndicator;
+    [SerializeField] private AudioClip explosionSound;
     [SerializeField] private GameObject explosionRadiusPrefab;
     [SerializeField] private float explosionRadius = 5f;
-    private bool isDead = false;
+    public bool IsDead { get; private set; }
     private bool isTarget = false;
     private Rigidbody2D rb;
-    private GameObject theObject;
+    private GameObject insExplosion;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
 
@@ -20,34 +25,35 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
         explosionRadius = explosionRadius / 2;
         spriteRenderer = GetComponent<SpriteRenderer>();
         playerController = FindFirstObjectByType<PlayerController>();
-        theObject = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
-        theObject.SetActive(false);
+        insExplosion = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
+        insExplosion.SetActive(false);
         rb = GetComponent<Rigidbody2D>();
     }
 
     void Update()
     {
-        if (isDead) return;
-        theObject.transform.position = transform.position;
+        insExplosion.transform.position = transform.position;
 
-        if (PlayerCombat.Instance.isInMode && !isTarget)
+        if (IsDead) return;
+
+        if (PlayerCombat.Instance.IsInMode && !isTarget)
         {
             if (targetIndicator != null)
             {
                 targetIndicator.SetActive(true);
             }
         }
-        else if (!PlayerCombat.Instance.isInMode && !isTarget)
+        else if (!PlayerCombat.Instance.IsInMode && !isTarget)
         {
             if (targetIndicator != null)
             {
                 targetIndicator.SetActive(false);
             }
-            theObject.SetActive(false);
+            insExplosion.SetActive(false);
         }
-        else if (!PlayerCombat.Instance.isInMode && isTarget)
+        else if (!PlayerCombat.Instance.IsInMode && isTarget)
         {
-            theObject.SetActive(false);
+            insExplosion.SetActive(false);
         }
 
         Movement();
@@ -55,7 +61,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
     public void OnPointerEnter(PointerEventData eventData)
     {
-        if (PlayerCombat.Instance.isInMode && !isTarget)
+        if (PlayerCombat.Instance.IsInMode && !isTarget)
         {
             spriteRenderer.color = Color.purple;
             PlayerCombat.Instance.TargetSetup(transform);
@@ -65,40 +71,59 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
             {
                 targetIndicator.SetActive(false);
             }
-            theObject.SetActive(true);
+            insExplosion.SetActive(true);
         }
     }
 
-    public void OnDeath()
+    public IEnumerator OnDeath()
     {
-        if (isDead) return;
-        isDead = true;
+        if (IsDead) yield break;
+        IsDead = true;
+
+        while (isExploding)
+        {
+
+        }
+
+        isExploding = true;
+
+        yield return new WaitForSeconds(0.25f);
 
         Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, explosionRadius);
 
         foreach (Collider2D collider in withinRange)
         {
-            if (collider.gameObject == gameObject) continue;
+            if (collider == null || collider.gameObject == gameObject) continue;
 
             if (collider.TryGetComponent<Enemy>(out Enemy enemy))
             {
-                if (enemy != null)
+                if (enemy != null && enemy.IsDead == false)
                 {
                     enemy.OnDeath();
                 }
             }
-            else if (collider.TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
+        }
+
+        foreach (Collider2D collider in withinRange)
+        {
+            if (collider == null || collider.gameObject == gameObject) continue;
+
+            if (collider.TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
             {
-                if (chainEnemy != null)
+                if (chainEnemy != null && chainEnemy.IsDead == false)
                 {
-                    chainEnemy.OnDeath();
+                    chainEnemy.StartCoroutine(chainEnemy.OnDeath());
                 }
             }
         }
 
-        theObject.SetActive(true);
+        insExplosion.SetActive(true);
 
-        Destroy(theObject, 0.5f);
+        playerController.PlaySFX(explosionSound);
+
+        isExploding = false;
+
+        Destroy(insExplosion, 0.5f);
         Destroy(gameObject);
     }
 

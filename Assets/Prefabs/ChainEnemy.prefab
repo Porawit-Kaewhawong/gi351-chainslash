@@ -264,6 +264,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ChainEnemy
   moveSpeed: 2.5
   targetIndicator: {fileID: 9091602837837721924}
+  explosionSound: {fileID: 8300000, guid: 1860aec48dbc9c540a055b47d20f3488, type: 3}
   explosionRadiusPrefab: {fileID: 4834902374614905739, guid: 100a457d29f1a404f9941a375fb2576e, type: 3}
   explosionRadius: 5
 --- !u!1 &5713048408753029642
