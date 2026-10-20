@@ -28,6 +28,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
     [SerializeField] private GameObject targetIndicator;
     [SerializeField] private AudioClip explosionSound;
+    [SerializeField] private GameObject explosionPrefab;
     [SerializeField] private GameObject explosionRadiusPrefab;
     [SerializeField] private float explosionRadius = 5f;
 
@@ -36,6 +37,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
     private bool isTarget = false;
     private Rigidbody2D rb;
     private GameObject insExplosion;
+    private GameObject insExplosionFX;
     private SpriteRenderer spriteRenderer;
     private PlayerController playerController;
 
@@ -45,13 +47,16 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
         spriteRenderer = GetComponentInChildren<SpriteRenderer>();
         playerController = FindFirstObjectByType<PlayerController>();
         insExplosion = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
+        insExplosionFX = Instantiate(explosionPrefab, transform.position, Quaternion.identity);
         insExplosion.SetActive(false);
+        insExplosionFX.SetActive(false);
         rb = GetComponent<Rigidbody2D>();
     }
 
     void Update()
     {
         insExplosion.transform.position = transform.position;
+        insExplosionFX.transform.position = transform.position;
 
         Movement();
 
@@ -138,7 +143,7 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
             }
         }
 
-        insExplosion.SetActive(true);
+        insExplosionFX.SetActive(true);
 
         playerController.PlaySFX(explosionSound);
 
@@ -146,7 +151,8 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
         PlayerCombat.Instance.StartCoroutine(PlayerCombat.Instance.ShakingTrigger(0.25f));
 
-        Destroy(insExplosion, 0.5f);
+        Destroy(insExplosionFX, 0.5f);
+        Destroy(insExplosion);
         Destroy(gameObject);
     }
 

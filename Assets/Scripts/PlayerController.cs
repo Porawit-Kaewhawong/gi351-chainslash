@@ -8,6 +8,10 @@ using UnityEngine.UIElements;
 
 public class PlayerController : MonoBehaviour
 {
+    [Header("Mouse Cursor Settings")]
+    [SerializeField] private Texture2D cursorTexture;
+    [SerializeField] private CursorMode cursorMode = CursorMode.Auto;
+
     [Header("Player Movement Settings")]
     [SerializeField] private float moveSpeed = 7.5f;
     [SerializeField] private float jumpHeight = 15f;
@@ -44,6 +48,7 @@ public class PlayerController : MonoBehaviour
         moveAction = InputSystem.actions.FindAction("Move");
         jumpAction = InputSystem.actions.FindAction("Jump");
         dashAction = InputSystem.actions.FindAction("Dash");
+        UnityEngine.Cursor.SetCursor(cursorTexture, Vector2.zero, cursorMode);
     }        
 
     void Update()
