@@ -55,8 +55,6 @@ public class PlayerCombat : MonoBehaviour
         Instance = this;
         attackAction = InputSystem.actions.FindAction("Attack");
         playerController = GetComponent<PlayerController>();
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
         cinemachineCamera = FindAnyObjectByType<CinemachineCamera>();
         perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
         orgNoiseSettings = perlin.NoiseProfile;
@@ -165,17 +163,6 @@ public class PlayerCombat : MonoBehaviour
     {
         IsInMode = true;
 
-        if (Cursor.lockState == CursorLockMode.Locked)
-        {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-        }
-
-        if (Mouse.current != null)
-        {
-            Mouse.current.WarpCursorPosition(Camera.main.WorldToScreenPoint(gameObject.transform.position));
-        }
-
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = fixedDeltaTime * Time.timeScale;
 
@@ -193,12 +180,6 @@ public class PlayerCombat : MonoBehaviour
     void ExitChainSlashMode()
     {
         IsInMode = false;
-
-        if (Cursor.lockState == CursorLockMode.None)
-        {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-        }
 
         targetGroup.Targets[1].Object = null;
 
@@ -447,8 +428,6 @@ public class PlayerCombat : MonoBehaviour
 
         yield return null;
 
-        Cursor.visible = false;
-
         Time.timeScale = 1.0f;
 
         Vector2 mousePos = Mouse.current.position.ReadValue();
@@ -481,12 +460,6 @@ public class PlayerCombat : MonoBehaviour
             yield return null;
         }
 
-        if (Cursor.lockState == CursorLockMode.None)
-        {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-        }
-
         if (rayHit.collider != null)
         {
             springJoint.enabled = true;
@@ -516,17 +489,6 @@ public class PlayerCombat : MonoBehaviour
         activeMeterCoroutine = StartCoroutine(MeterDegeneration(1, 0.005f));
 
         isFocusing = true;
-
-        if (Cursor.lockState == CursorLockMode.Locked)
-        {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-        }
-
-        if (Mouse.current != null)
-        {
-            Mouse.current.WarpCursorPosition(Camera.main.WorldToScreenPoint(gameObject.transform.position));
-        }
 
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = fixedDeltaTime * Time.timeScale;

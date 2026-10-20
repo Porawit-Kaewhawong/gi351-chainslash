@@ -1,6 +1,7 @@
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 
 public class Enemy : MonoBehaviour, IPointerEnterHandler
 {
@@ -14,7 +15,6 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     [SerializeField] private int maxJumps = 2;
     [SerializeField] private float jumpCooldown = 1f;
     [SerializeField] private float doubleJumpDelay = 0.25f;
-    [SerializeField] private float heightThreshold = 1.2f;
     [SerializeField] private float wallCheckDistance = 0.6f;
     [SerializeField] private float groundCheckDistance = 0.6f;
 
@@ -31,7 +31,7 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
 
     private void Awake()
     {
-        spriteRenderer = GetComponent<SpriteRenderer>();
+        spriteRenderer = GetComponentInChildren<SpriteRenderer>();
         playerController = FindFirstObjectByType<PlayerController>();
         rb = GetComponent<Rigidbody2D>();
     }
@@ -56,6 +56,8 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
                 targetIndicator.SetActive(false);
             }
         }
+
+        Flip();
     }
 
     public void OnPointerEnter(PointerEventData eventData)
@@ -210,5 +212,17 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
 
         jumpsLeft--;
         lastJumpTime = Time.time;
+    }
+
+    private void Flip()
+    {
+        if (rb.linearVelocityX < 0f)
+        {
+            spriteRenderer.flipX = true;
+        }
+        else if (rb.linearVelocityX > 0f)
+        {
+            spriteRenderer.flipX = false;
+        }
     }
 }
