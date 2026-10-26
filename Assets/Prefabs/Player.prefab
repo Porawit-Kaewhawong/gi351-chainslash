@@ -554,9 +554,8 @@ MonoBehaviour:
   maxHealth: 100
   healthRegenDelay: 5
   healthRegenTickInterval: 0.05
-  healthMeterImage: {fileID: 0}
+  healthBarImage: {fileID: 3635520213015844214}
   healthBackgroundObject: {fileID: 7036572509465447907}
-  healthMeterObject: {fileID: 3817734176033913203}
   healthFadeDuration: 0.25
   moveSpeed: 7.5
   jumpHeight: 15
@@ -579,8 +578,6 @@ MonoBehaviour:
   targetGroup: {fileID: 0}
   modeMeterImage: {fileID: 8910781267224860712}
   modeMeterBarObject: {fileID: 235063646020210112}
-  modeMeterModeObject: {fileID: 0}
-  modeMeterCanvasGroup: {fileID: 0}
   meterFadeDuration: 0.25
   noiseSettings: {fileID: 11400000, guid: 69ce8388f6785dd4c8c39915efece2f4, type: 2}
   hitstopDuration: 0.05

@@ -77,6 +77,8 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float waveAmplitude = 0.6f;
     [SerializeField] private AudioClip grappleHitSFX;
     [SerializeField] private GameObject grappleImpactPrefab;
+    [SerializeField] private GameObject grappleTargetIndicatorPrefab; // Optional custom target indicator prefab
+    [SerializeField] private float grappleIndicatorOrbitRadius = 1.8f;  // Orbit distance outside the player
 
     [Header("Audio Settings")]
     [SerializeField] private int maxSoundPlaying = 3;
@@ -101,6 +103,7 @@ public class PlayerController : MonoBehaviour
     // Grapple state
     private Vector2 grappleAnchorPoint;
     private Vector2 currentHookTip;
+    private GameObject insGrappleTargetIndicator;
 
     // Cinemachine Noise caching
     private float orgAmplitudeGain;
@@ -188,6 +191,7 @@ public class PlayerController : MonoBehaviour
 
         SetupMeterUI();
         SetupHealthUI();
+        SetupGrappleIndicator();
     }
 
     private void Update()
@@ -200,6 +204,7 @@ public class PlayerController : MonoBehaviour
 
         RecordDrawnLinePoints();
         UpdateMouseTrail();
+        UpdateGrappleIndicator();
 
         if (isDashing) return;
 
@@ -273,6 +278,8 @@ public class PlayerController : MonoBehaviour
             CanvasGroup cg = healthBarImage.GetComponent<CanvasGroup>();
             if (cg == null) cg = healthBarImage.gameObject.AddComponent<CanvasGroup>();
             if (!healthCanvasGroups.Contains(cg)) healthCanvasGroups.Add(cg);
+
+            healthBarImage.fillAmount = CurrentHealth / maxHealth;
         }
 
         SetHealthAlpha(0f); // Hidden when health is full
@@ -316,10 +323,12 @@ public class PlayerController : MonoBehaviour
         while (CurrentHealth < maxHealth)
         {
             CurrentHealth = Mathf.Clamp(CurrentHealth + 1f, 0f, maxHealth);
+
             if (healthBarImage != null)
             {
                 healthBarImage.fillAmount = CurrentHealth / maxHealth;
             }
+
             yield return new WaitForSeconds(healthRegenTickInterval);
         }
 
@@ -652,7 +661,6 @@ public class PlayerController : MonoBehaviour
 
         lineRenderer.enabled = true;
 
-        // --- 1. EASED DRAW-IN ANIMATION (EaseOutExpo) & GRADIENT SHIFT ---
         if (drawGradient.colorKeys.Length > 0) lineRenderer.colorGradient = drawGradient;
 
         float drawTimer = 0f;
@@ -704,7 +712,6 @@ public class PlayerController : MonoBehaviour
         lineRenderer.positionCount = pointCount;
         lineRenderer.SetPositions(origPoints);
 
-        // --- 2. HITSTOP & ENEMY IMPACT PARTICLES / DEATH EXECUTION ---
         if (hitstopDuration > 0f)
         {
             Time.timeScale = 0f;
@@ -724,7 +731,6 @@ public class PlayerController : MonoBehaviour
                 Instantiate(slashImpactPrefab, targetObj.transform.position, Quaternion.identity);
             }
 
-            // Check specifically for ChainEnemy first
             ChainEnemy chainEnemy = targetObj.GetComponentInParent<ChainEnemy>();
             if (chainEnemy != null)
             {
@@ -735,7 +741,6 @@ public class PlayerController : MonoBehaviour
                 continue;
             }
 
-            // Check for Standard Enemy / EnemyBase
             EnemyBase enemy = targetObj.GetComponentInParent<EnemyBase>();
             if (enemy != null)
             {
@@ -748,7 +753,6 @@ public class PlayerController : MonoBehaviour
 
         PlaySFX(postSlashSFX);
 
-        // --- 3. FLASH, EXPAND WIDTH & JITTER (Flash Gradient) ---
         if (flashGradient.colorKeys.Length > 0) lineRenderer.colorGradient = flashGradient;
 
         float orgWidth = lineRenderer.widthMultiplier;
@@ -777,7 +781,6 @@ public class PlayerController : MonoBehaviour
         lineRenderer.SetPositions(origPoints);
         lineRenderer.widthMultiplier = orgWidth;
 
-        // --- 4. EASED DISAPPEAR-OUT ANIMATION (EaseInQuad) & DISSOLVE GRADIENT ---
         if (dissolveGradient.colorKeys.Length > 0) lineRenderer.colorGradient = dissolveGradient;
 
         float disappearTimer = 0f;
@@ -842,6 +845,76 @@ public class PlayerController : MonoBehaviour
     #endregion
 
     #region Dynamic Grappling Hook System
+
+    private void SetupGrappleIndicator()
+    {
+        if (grappleTargetIndicatorPrefab != null)
+        {
+            insGrappleTargetIndicator = Instantiate(grappleTargetIndicatorPrefab, transform.position, Quaternion.identity);
+        }
+        else
+        {
+            insGrappleTargetIndicator = new GameObject("GrappleTargetIndicator");
+            SpriteRenderer sr = insGrappleTargetIndicator.AddComponent<SpriteRenderer>();
+
+            Texture2D tex = new Texture2D(32, 32);
+            Color[] colors = new Color[32 * 32];
+            Vector2 center = new Vector2(15.5f, 15.5f);
+            for (int x = 0; x < 32; x++)
+            {
+                for (int y = 0; y < 32; y++)
+                {
+                    float dist = Vector2.Distance(new Vector2(x, y), center);
+                    if ((dist >= 12f && dist <= 15f) || (dist <= 3f) || (Mathf.Abs(x - 15.5f) < 1f && dist <= 14f) || (Mathf.Abs(y - 15.5f) < 1f && dist <= 14f))
+                    {
+                        colors[y * 32 + x] = new Color(0f, 0.9f, 1f, 0.9f);
+                    }
+                    else
+                    {
+                        colors[y * 32 + x] = Color.clear;
+                    }
+                }
+            }
+            tex.SetPixels(colors);
+            tex.Apply();
+            sr.sprite = Sprite.Create(tex, new Rect(0, 0, 32, 32), new Vector2(0.5f, 0.5f), 16f);
+            sr.sortingOrder = 10;
+        }
+
+        insGrappleTargetIndicator.SetActive(false);
+    }
+
+    private void UpdateGrappleIndicator()
+    {
+        if (insGrappleTargetIndicator == null) return;
+
+        if (isFocusing)
+        {
+            if (!insGrappleTargetIndicator.activeSelf)
+            {
+                insGrappleTargetIndicator.SetActive(true);
+            }
+
+            Vector3 mouseWorldPos = GetMouseWorldPosition();
+            Vector3 dirToMouse = (mouseWorldPos - transform.position).normalized;
+            if (dirToMouse == Vector3.zero) dirToMouse = Vector3.right;
+
+            // Position indicator orbiting outside player at set radius
+            Vector3 targetPos = transform.position + dirToMouse * grappleIndicatorOrbitRadius;
+            insGrappleTargetIndicator.transform.position = targetPos;
+
+            // Align rotation with -90 degree offset for Upward-facing target graphics
+            float angle = (Mathf.Atan2(dirToMouse.y, dirToMouse.x) * Mathf.Rad2Deg) - 90f;
+            insGrappleTargetIndicator.transform.rotation = Quaternion.Euler(0f, 0f, angle);
+        }
+        else
+        {
+            if (insGrappleTargetIndicator.activeSelf)
+            {
+                insGrappleTargetIndicator.SetActive(false);
+            }
+        }
+    }
 
     private void HandleGrappleInput()
     {
@@ -1014,6 +1087,8 @@ public class PlayerController : MonoBehaviour
             CanvasGroup cg = modeMeterImage.GetComponent<CanvasGroup>();
             if (cg == null) cg = modeMeterImage.gameObject.AddComponent<CanvasGroup>();
             if (!meterCanvasGroups.Contains(cg)) meterCanvasGroups.Add(cg);
+
+            modeMeterImage.fillAmount = currentMeter / maxMeter;
         }
 
         SetMeterAlpha(0f);
