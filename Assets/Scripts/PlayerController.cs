@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Runtime.CompilerServices;
 using Unity.VectorGraphics;
+using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
@@ -38,17 +39,22 @@ public class PlayerController : MonoBehaviour
     private AudioSource audioSource;
     private int soundPlaying;
     private int maxSoundPlaying = 3;
+    private Animator animator;
 
     void Start()
     {
         rb = GetComponent<Rigidbody2D>();
         audioSource = GetComponent<AudioSource>();
         trailRenderer = GetComponent<TrailRenderer>();
-        spriteRenderer = GetComponent<SpriteRenderer>();
+        spriteRenderer = GetComponentInChildren<SpriteRenderer>();
         moveAction = InputSystem.actions.FindAction("Move");
         jumpAction = InputSystem.actions.FindAction("Jump");
         dashAction = InputSystem.actions.FindAction("Dash");
-        UnityEngine.Cursor.SetCursor(cursorTexture, Vector2.zero, cursorMode);
+        if (cursorTexture != null)
+        {
+            UnityEngine.Cursor.SetCursor(cursorTexture, Vector2.zero, cursorMode);
+        }
+        animator = GetComponentInChildren<Animator>();
     }        
 
     void Update()
@@ -66,6 +72,11 @@ public class PlayerController : MonoBehaviour
         if (IsGrounded())
         {
             doubleJump = true;
+
+            if (rb.linearVelocityY <= 0.25f)
+            {
+                animator.SetBool("isJump", false);
+            }
         }
 
         if (jumpAction.WasPressedThisFrame())
@@ -73,11 +84,15 @@ public class PlayerController : MonoBehaviour
             if (IsGrounded())
             {
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
+
+                animator.SetBool("isJump", true);
             }
             else if (doubleJump)
             {
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
                 doubleJump = false;
+
+                animator.SetBool("isJump", true);
             }
 
             PlayerCombat.Instance.DetachGrappling();
@@ -86,6 +101,8 @@ public class PlayerController : MonoBehaviour
         if (jumpAction.WasReleasedThisFrame() && rb.linearVelocityY > 0f)
         {
             rb.linearVelocity = new Vector2(rb.linearVelocityX, rb.linearVelocityY * 0.5f);
+
+            animator.SetBool("isJump", true);
         }
 
         if (dashAction.triggered && canDash)
@@ -105,6 +122,15 @@ public class PlayerController : MonoBehaviour
 
         inputValue = moveAction.ReadValue<Vector2>();
         rb.linearVelocity = new Vector2(inputValue.x * moveSpeed, rb.linearVelocityY);
+
+        if (rb.linearVelocityX > 0f || rb.linearVelocityX < 0f)
+        {
+            animator.SetBool("isRunning", true);
+        }
+        else
+        {
+            animator.SetBool("isRunning", false);
+        }
     }
 
     private void LateUpdate()

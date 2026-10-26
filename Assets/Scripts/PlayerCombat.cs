@@ -220,7 +220,7 @@ public class PlayerCombat : MonoBehaviour
 
             lineRendererManager.targets.Add(enemyPos.gameObject);
 
-            currentMeter -= maxMeter / 20;
+            currentMeter -= maxMeter / 40;
 
             if (lineRendererManager.activeCoroutine != null)
             {
