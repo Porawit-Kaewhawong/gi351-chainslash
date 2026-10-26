@@ -95,7 +95,13 @@ public class PlayerController : MonoBehaviour
                 animator.SetBool("isJump", true);
             }
 
-            PlayerCombat.Instance.DetachGrappling();
+            if (PlayerCombat.Instance.IsGrappling)
+            {
+                PlayerCombat.Instance.DetachGrappling();
+                rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
+
+                animator.SetBool("isJump", true);
+            }
         }
 
         if (jumpAction.WasReleasedThisFrame() && rb.linearVelocityY > 0f)
