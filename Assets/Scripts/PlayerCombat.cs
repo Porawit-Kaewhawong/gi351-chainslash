@@ -200,6 +200,10 @@ public class PlayerCombat : MonoBehaviour
             LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
             lineRendererManager.activeCoroutine = StartCoroutine(AnimateKillLine(insLineRendererCom));
         }
+        else
+        {
+            Debug.LogWarning("insLineRendererObj is missing!");
+        }
 
         attackAction.Disable();
         attackAction.Enable();

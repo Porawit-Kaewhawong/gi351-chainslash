@@ -78,7 +78,6 @@ public class Enemy : MonoBehaviour, IPointerEnterHandler
     {
         if (IsDead) return;
         IsDead = true;
-
         Destroy(gameObject);
     }
 

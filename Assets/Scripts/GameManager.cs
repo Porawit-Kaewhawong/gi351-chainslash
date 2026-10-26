@@ -4,12 +4,16 @@ using UnityEngine;
 
 public class GameManager : MonoBehaviour
 {
+    public static GameManager Instance;
+
     public List<GameObject> enemies = new List<GameObject>();
+    public List<GameObject> currentEnemies = new List<GameObject>();
     private float betweenWaveTime = 2f;
     private PlayerController player;
 
     void Start()
     {
+        Instance = this;
         player = FindFirstObjectByType<PlayerController>();
         StartCoroutine(spawnEnemies());
     }
@@ -23,10 +27,12 @@ public class GameManager : MonoBehaviour
                 Vector2 randomPos = Random.insideUnitCircle * 10f;
                 Vector2 spawnPos = (Vector2)player.gameObject.transform.position + (Vector2)randomPos;
 
-                Instantiate(enemy, spawnPos, Quaternion.identity);
+                GameObject thisEnemy = Instantiate(enemy, spawnPos, Quaternion.identity);
                 yield return new WaitForSeconds(0.1f);
             }
             yield return new WaitForSeconds(betweenWaveTime);
+
+            
         }
     }
 }

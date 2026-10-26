@@ -123,20 +123,15 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
 
             if (collider.TryGetComponent<Enemy>(out Enemy enemy))
             {
-                if (enemy != null && enemy.IsDead == false)
+                if (enemy != null && !enemy.IsDead)
                 {
                     enemy.OnDeath();
                 }
             }
-        }
 
-        foreach (Collider2D collider in withinRange)
-        {
-            if (collider == null || collider.gameObject == gameObject) continue;
-
-            if (collider.TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
+            else if (collider.TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
             {
-                if (chainEnemy != null && chainEnemy.IsDead == false)
+                if (chainEnemy != null && !chainEnemy.IsDead)
                 {
                     chainEnemy.StartCoroutine(chainEnemy.OnDeath());
                 }
