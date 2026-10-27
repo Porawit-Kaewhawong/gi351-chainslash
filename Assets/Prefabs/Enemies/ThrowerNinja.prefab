@@ -168,13 +168,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 19946d8ce2e44b59a1b6dca430693724, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ThrowerNinja
-  throwInterval: 3
-  throwRange: 13
-  minThrowDistance: 2.5
-  shurikenSpeed: 11
-  shurikenDamage: 12
-  throwWindup: 0.25
-  throwTelegraphColor: {r: 1, g: 0.55, b: 0.1, a: 1}
   moveSpeed: 2.5
   groundLayer:
     serializedVersion: 2
@@ -190,10 +183,27 @@ MonoBehaviour:
   contactDamage: 15
   attackCooldown: 1
   knockbackForce: 8
+  isHeavyEnemy: 0
+  grappleStunDuration: 0.45
+  dieOnHighSpeedWallSlam: 1
+  wallSlamSpeedThreshold: 11
   targetIndicator: {fileID: 4618780478795535015}
+  targetableOutlineColor: {r: 1, g: 0.9681574, b: 0.5330188, a: 1}
+  targetableOutlineThickness: 0.055
+  targetJitterStrength: 0.03
   dodgeTriggerDistance: 3.5
   dodgeForce: 9
   dodgeCooldown: 3
+  shurikenPrefab: {fileID: 9179823344550816202, guid: b07dbac2f40f83843adf16a59089582d, type: 3}
+  throwInterval: 3
+  throwRange: 13
+  minThrowDistance: 2.5
+  shurikenSpeed: 11
+  shurikenDamage: 12
+  throwWindup: 0.25
+  throwTelegraphColor: {r: 1, g: 0.55, b: 0.1, a: 1}
+  throwPoint: {fileID: 0}
+  throwSFX: {fileID: 0}
 --- !u!1 &4618780478795535015
 GameObject:
   m_ObjectHideFlags: 0
