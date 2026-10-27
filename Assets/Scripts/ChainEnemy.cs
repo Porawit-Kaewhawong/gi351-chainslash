@@ -23,6 +23,7 @@ public class ChainEnemy : EnemyBase
     private GameObject insExplosionRadius;
     private Coroutine fuseCoroutine;
     private bool isAggro;
+    private bool ownsExplodingLock;
 
     protected override float CurrentMoveSpeed => isAggro ? moveSpeed * aggroSpeedMultiplier : moveSpeed;
 
@@ -56,9 +57,26 @@ public class ChainEnemy : EnemyBase
 
     protected override void OnCollisionEnter2D(Collision2D collision)
     {
-        // Detonate immediately if Suicide Ninja collides with the Player
-        if (!IsDead && collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
+        if (IsDead) return;
+
+        // If punted into a wall or another enemy after a Grapple Kick, detonate on impact!
+        if (HandleThrownImpact(collision))
         {
+            return;
+        }
+
+        // Detonate immediately if Suicide Ninja collides with the Player (unless kicked away at high speed)
+        if (collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
+        {
+            if (player.TryExecuteGrappleKick(this))
+            {
+                if (fuseCoroutine == null)
+                {
+                    fuseCoroutine = StartCoroutine(TargetFuseCountdown());
+                }
+                return;
+            }
+
             OnDeath();
             return;
         }
@@ -68,6 +86,12 @@ public class ChainEnemy : EnemyBase
 
     private void OnDestroy()
     {
+        if (ownsExplodingLock)
+        {
+            isExploding = false;
+            ownsExplodingLock = false;
+        }
+
         if (insExplosionRadius != null)
         {
             Destroy(insExplosionRadius);
@@ -131,6 +155,7 @@ public class ChainEnemy : EnemyBase
         }
 
         isExploding = true;
+        ownsExplodingLock = true;
 
         Vector3 origScale = transform.localScale;
         float buildUpTime = 0.25f;
@@ -148,6 +173,28 @@ public class ChainEnemy : EnemyBase
             }
             yield return null;
         }
+
+        // Trigger explosion SFX and camera shake before chain-reacting neighboring enemies
+        PlayerController targetPlayer = playerController != null ? playerController : PlayerController.Instance;
+        if (targetPlayer != null)
+        {
+            if (explosionSound != null)
+            {
+                targetPlayer.PlaySFX(explosionSound);
+            }
+
+            targetPlayer.TriggerCameraShake(explosionShakeDuration);
+        }
+
+        if (explosionPrefab != null)
+        {
+            GameObject fx = Instantiate(explosionPrefab, transform.position, Quaternion.identity);
+            Destroy(fx, 0.5f);
+        }
+
+        // Release lock before triggering chain-reaction deaths so chained ChainEnemies can immediately sequence
+        isExploding = false;
+        ownsExplodingLock = false;
 
         // Execute Explosion Damage on both Player and neighboring Enemies
         float effectiveRadius = explosionRadius * 0.5f;
@@ -176,24 +223,6 @@ public class ChainEnemy : EnemyBase
                 }
             }
         }
-
-        if (explosionPrefab != null)
-        {
-            GameObject fx = Instantiate(explosionPrefab, transform.position, Quaternion.identity);
-            Destroy(fx, 0.5f);
-        }
-
-        if (playerController != null)
-        {
-            if (explosionSound != null)
-            {
-                playerController.PlaySFX(explosionSound);
-            }
-
-            playerController.StartCoroutine(playerController.ShakingTrigger(explosionShakeDuration));
-        }
-
-        isExploding = false;
 
         Destroy(insExplosionRadius);
         Destroy(gameObject);

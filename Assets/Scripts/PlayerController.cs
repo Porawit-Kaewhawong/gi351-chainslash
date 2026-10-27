@@ -18,22 +18,41 @@ public class PlayerController : MonoBehaviour
 
     [Header("Player Health System Settings")]
     [SerializeField] private float maxHealth = 100f;
-    [SerializeField] private float healthRegenDelay = 5f;            // Delay in seconds after taking a hit
+    [SerializeField] private float healthRegenDelay = 4f;            // Delay in seconds after taking a hit
     [SerializeField] private float healthRegenTickInterval = 0.05f;    // Regeneration speed (+1 per tick)
     [SerializeField] private Image healthBarImage;                  // Fill Image for Health
     [SerializeField] private GameObject healthBackgroundObject;     // Background / Frame for Health UI
     [SerializeField] private float healthFadeDuration = 0.25f;
+    [SerializeField] private Color damageFlashColor = new Color(1f, 0.2f, 0.2f, 1f);
+    [SerializeField] private float damageFlashDuration = 0.25f;
+    [SerializeField] private float damageShakeDuration = 0.15f;
+    [SerializeField] private AudioClip takeDamageSFX;
 
     [Header("Player Movement Settings")]
     [SerializeField] private float moveSpeed = 7.5f;
     [SerializeField] private float jumpHeight = 15f;
     [SerializeField] private Transform groundCheck;
     [SerializeField] private LayerMask groundLayer;
+    [SerializeField] private float coyoteTime = 0.12f;
+    [SerializeField] private float jumpBufferTime = 0.12f;
+    [SerializeField] private float airMomentumDecay = 8f;
+    [SerializeField] private List<AudioClip> walkSFXList = new List<AudioClip>();
+    [SerializeField] private float walkStepInterval = 0.28f;
+    [SerializeField] private AudioClip jumpSFX;
+    [SerializeField] private AudioClip doubleJumpSFX;
+
+    [Header("Wall Slide & Wall Jump Settings")]
+    [SerializeField] private bool enableWallMechanics = true;
+    [SerializeField] private float wallCheckDistance = 0.15f;
+    [SerializeField] private float wallSlideSpeed = 2.5f;
+    [SerializeField] private Vector2 wallJumpForce = new Vector2(11f, 14.5f);
+    [SerializeField] private float wallJumpInputLockTime = 0.15f;
 
     [Header("Player Dashing Settings")]
     [SerializeField] private float dashingPower = 15f;
     [SerializeField] private float dashingTime = 0.2f;
     [SerializeField] private float dashingCooldown = 1f;
+    [SerializeField] private AudioClip dashSFX;
 
     [Header("Chain Slash Mode Settings")]
     [SerializeField] private float maxMeter = 100f;
@@ -42,6 +61,9 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float slashDrawDuration = 0.18f;
     [SerializeField] private float slashDisappearDuration = 0.3f;
     [SerializeField] private AudioClip targetSelectSFX;
+    [SerializeField] private float targetSelectBasePitch = 0.95f;
+    [SerializeField] private float targetSelectPitchStep = 0.1f;
+    [SerializeField] private float targetSelectMaxPitch = 1.85f;
     [SerializeField] private AudioClip postSlashSFX;
     [SerializeField] private GameObject lineRendererObject;
     [SerializeField] private GameObject mouseTrailPrefab;
@@ -71,10 +93,16 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float minDistance = 0.75f;
     [SerializeField] private LayerMask grappleLayer;
 
+    [Header("Grapple Combat & Kick Settings")]
+    [SerializeField] private float grappleKickSpeedThreshold = 11f;
+    [SerializeField] private float grappleKickKnockback = 22f;
+    [SerializeField] private float grappleKickBounceForce = 12.5f;
+
     [Header("Grappling Visual & Polish")]
     [SerializeField] private int ropeSegments = 20;
     [SerializeField] private float waveFrequency = 12f;
     [SerializeField] private float waveAmplitude = 0.6f;
+    [SerializeField] private AudioClip grappleReleaseSFX;
     [SerializeField] private AudioClip grappleHitSFX;
     [SerializeField] private GameObject grappleImpactPrefab;
     [SerializeField] private GameObject grappleTargetIndicatorPrefab; // Optional custom target indicator prefab
@@ -88,6 +116,14 @@ public class PlayerController : MonoBehaviour
     private bool canDash = true;
     private bool isDashing;
     private Vector2 inputValue;
+    private float coyoteTimeCounter;
+    private float jumpBufferCounter;
+    private bool isWallSliding;
+    private int wallDirection;
+    private float wallJumpLockCounter;
+    private float lastGrappleKickTime;
+    private float walkStepTimer;
+    private int lastWalkSFXIndex = -1;
 
     // Health state
     public float CurrentHealth { get; private set; }
@@ -95,6 +131,7 @@ public class PlayerController : MonoBehaviour
     // Combat state
     public bool IsInMode { get; private set; }
     public bool IsGrappling { get; private set; }
+    private bool isThrowingHook = false;
     private bool isFocusing = false;
     private float currentMeter;
     private float defaultFixedDeltaTime;
@@ -102,12 +139,15 @@ public class PlayerController : MonoBehaviour
 
     // Grapple state
     private Vector2 grappleAnchorPoint;
+    private Transform grappleTargetTransform;
     private Vector2 currentHookTip;
     private GameObject insGrappleTargetIndicator;
 
     // Cinemachine Noise caching
     private float orgAmplitudeGain;
+    private float orgFrequencyGain;
     private NoiseSettings orgNoiseSettings;
+    private float shakeRemainingTime;
 
     // Active Coroutines
     private Coroutine activeMeterCoroutine;
@@ -115,6 +155,12 @@ public class PlayerController : MonoBehaviour
     private Coroutine activeHealthRegenCoroutine;
     private Coroutine activeHealthFadeCoroutine;
     private Coroutine activeGrapplingCoroutine;
+    private Coroutine activeShakeCoroutine;
+    private Coroutine activeDamageFlashCoroutine;
+
+    // Damage visual caching
+    private Color originalSpriteColor = Color.white;
+    private Color originalHealthBarColor = Color.white;
 
     // Instantiated Objects
     private GameObject insLineRendererObj;
@@ -130,7 +176,10 @@ public class PlayerController : MonoBehaviour
 
     // Cached Components
     private Rigidbody2D rb;
+    private Collider2D playerCollider;
     private AudioSource audioSource;
+    private AudioSource pitchedAudioSource;
+    private AudioSource shimmerAudioSource;
     private TrailRenderer trailRenderer;
     private SpriteRenderer spriteRenderer;
     private Animator animator;
@@ -153,9 +202,32 @@ public class PlayerController : MonoBehaviour
         Instance = this;
 
         rb = GetComponent<Rigidbody2D>();
+        playerCollider = GetComponent<Collider2D>();
+        if (playerCollider == null) playerCollider = GetComponentInChildren<Collider2D>();
         audioSource = GetComponent<AudioSource>();
+
+        // Secondary audio sources for pitch-modulated SFX (footsteps, jumps, and combo target locks)
+        pitchedAudioSource = gameObject.AddComponent<AudioSource>();
+        shimmerAudioSource = gameObject.AddComponent<AudioSource>();
+        if (audioSource != null)
+        {
+            pitchedAudioSource.outputAudioMixerGroup = audioSource.outputAudioMixerGroup;
+            pitchedAudioSource.spatialBlend = audioSource.spatialBlend;
+            pitchedAudioSource.volume = audioSource.volume;
+            pitchedAudioSource.playOnAwake = false;
+
+            shimmerAudioSource.outputAudioMixerGroup = audioSource.outputAudioMixerGroup;
+            shimmerAudioSource.spatialBlend = audioSource.spatialBlend;
+            shimmerAudioSource.volume = audioSource.volume;
+            shimmerAudioSource.playOnAwake = false;
+        }
+
         trailRenderer = GetComponent<TrailRenderer>();
         spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+        if (spriteRenderer != null)
+        {
+            originalSpriteColor = spriteRenderer.color;
+        }
         animator = GetComponentInChildren<Animator>();
         springJoint = GetComponent<SpringJoint2D>();
         grappleLine = GetComponent<LineRenderer>();
@@ -168,6 +240,7 @@ public class PlayerController : MonoBehaviour
             {
                 orgNoiseSettings = perlin.NoiseProfile;
                 orgAmplitudeGain = perlin.AmplitudeGain;
+                orgFrequencyGain = perlin.FrequencyGain;
             }
         }
 
@@ -206,17 +279,31 @@ public class PlayerController : MonoBehaviour
         UpdateMouseTrail();
         UpdateGrappleIndicator();
 
+        if (wallJumpLockCounter > 0f)
+        {
+            wallJumpLockCounter -= Time.deltaTime;
+        }
+
         if (isDashing) return;
 
-        if (IsGrounded())
+        bool grounded = IsGrounded();
+        if (grounded)
         {
+            coyoteTimeCounter = coyoteTime;
             doubleJump = true;
+            isWallSliding = false;
             if (rb.linearVelocityY <= 0.25f && animator != null)
             {
                 animator.SetBool("isJump", false);
             }
         }
+        else
+        {
+            coyoteTimeCounter -= Time.deltaTime;
+        }
 
+        UpdateWallSlideState(grounded);
+        HandleFootsteps(grounded);
         HandleJumpInput();
 
         if (dashAction != null && dashAction.triggered && canDash)
@@ -237,15 +324,41 @@ public class PlayerController : MonoBehaviour
         {
             inputValue = moveAction.ReadValue<Vector2>();
 
-            if (IsGrappling)
+            if (IsGrappling && springJoint != null && springJoint.enabled)
             {
                 Vector2 ropeDir = (grappleAnchorPoint - (Vector2)transform.position).normalized;
-                Vector2 perpendicular = new Vector2(-ropeDir.y, ropeDir.x);
-                rb.AddForce(perpendicular * inputValue.x * swingForce, ForceMode2D.Force);
+                // Right-handed perpendicular so pressing Right (+x) swings Right when hanging below an anchor
+                Vector2 perpendicular = new Vector2(ropeDir.y, -ropeDir.x);
+                if (perpendicular.x < 0f) perpendicular = -perpendicular;
+
+                Vector2 steerForce = (perpendicular * inputValue.x + inputValue * 0.5f) * swingForce;
+                rb.AddForce(steerForce, ForceMode2D.Force);
             }
-            else
+            else if (wallJumpLockCounter <= 0f)
             {
-                rb.linearVelocity = new Vector2(inputValue.x * moveSpeed, rb.linearVelocityY);
+                float targetSpeedX = inputValue.x * moveSpeed;
+                float currentSpeedX = rb.linearVelocityX;
+
+                // Preserve high-speed airborne momentum from grapple releases, dashes, or wall kicks
+                if (!IsGrounded() && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Sign(inputValue.x) == Mathf.Sign(currentSpeedX) && Mathf.Abs(inputValue.x) > 0.05f)
+                {
+                    float decayedX = Mathf.MoveTowards(currentSpeedX, targetSpeedX, airMomentumDecay * Time.fixedDeltaTime);
+                    rb.linearVelocity = new Vector2(decayedX, rb.linearVelocityY);
+                }
+                else if (!IsGrounded() && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Abs(inputValue.x) <= 0.05f)
+                {
+                    float coastX = Mathf.MoveTowards(currentSpeedX, 0f, airMomentumDecay * 0.75f * Time.fixedDeltaTime);
+                    rb.linearVelocity = new Vector2(coastX, rb.linearVelocityY);
+                }
+                else
+                {
+                    rb.linearVelocity = new Vector2(targetSpeedX, rb.linearVelocityY);
+                }
+
+                if (isWallSliding && rb.linearVelocityY < -wallSlideSpeed)
+                {
+                    rb.linearVelocity = new Vector2(rb.linearVelocityX, -wallSlideSpeed);
+                }
 
                 if (animator != null)
                 {
@@ -279,6 +392,7 @@ public class PlayerController : MonoBehaviour
             if (cg == null) cg = healthBarImage.gameObject.AddComponent<CanvasGroup>();
             if (!healthCanvasGroups.Contains(cg)) healthCanvasGroups.Add(cg);
 
+            originalHealthBarColor = healthBarImage.color;
             healthBarImage.fillAmount = CurrentHealth / maxHealth;
         }
 
@@ -304,6 +418,8 @@ public class PlayerController : MonoBehaviour
             healthBarImage.fillAmount = CurrentHealth / maxHealth;
         }
 
+        PlaySFX(takeDamageSFX);
+        TriggerDamageFeedback();
         ShowHealthBar();
 
         if (CurrentHealth <= 0f)
@@ -314,6 +430,41 @@ public class PlayerController : MonoBehaviour
 
         if (activeHealthRegenCoroutine != null) StopCoroutine(activeHealthRegenCoroutine);
         activeHealthRegenCoroutine = StartCoroutine(HealthRegenRoutine());
+    }
+
+    private void TriggerDamageFeedback()
+    {
+        if (activeDamageFlashCoroutine != null) StopCoroutine(activeDamageFlashCoroutine);
+        activeDamageFlashCoroutine = StartCoroutine(DamageFlashRoutine());
+
+        TriggerCameraShake(damageShakeDuration);
+    }
+
+    private IEnumerator DamageFlashRoutine()
+    {
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = damageFlashColor;
+        }
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = damageFlashColor;
+        }
+
+        yield return new WaitForSecondsRealtime(damageFlashDuration);
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+        }
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = originalHealthBarColor;
+        }
+
+        activeDamageFlashCoroutine = null;
     }
 
     private IEnumerator HealthRegenRoutine()
@@ -398,31 +549,166 @@ public class PlayerController : MonoBehaviour
 
     #region Movement & Jump Logic
 
+    private void UpdateWallSlideState(bool grounded)
+    {
+        if (!enableWallMechanics || grounded || IsGrappling || wallJumpLockCounter > 0f)
+        {
+            isWallSliding = false;
+            return;
+        }
+
+        int detectedWall = GetTouchingWallDirection();
+        if (detectedWall != 0 && rb.linearVelocityY <= 0.1f)
+        {
+            bool pressingTowardsWall = Mathf.Abs(inputValue.x) > 0.1f && Mathf.Sign(inputValue.x) == detectedWall;
+            if (pressingTowardsWall || isWallSliding)
+            {
+                isWallSliding = true;
+                wallDirection = detectedWall;
+                doubleJump = true;
+                return;
+            }
+        }
+
+        isWallSliding = false;
+    }
+
+    private int GetTouchingWallDirection()
+    {
+        Bounds bounds = playerCollider != null ? playerCollider.bounds : new Bounds(transform.position, new Vector3(0.8f, 1.2f, 0f));
+        Vector2 boxSize = new Vector2(0.05f, bounds.size.y * 0.7f);
+
+        Vector2 rightOrigin = new Vector2(bounds.max.x, bounds.center.y);
+        if (Physics2D.OverlapBox(rightOrigin + Vector2.right * (wallCheckDistance * 0.5f), boxSize, 0f, groundLayer))
+        {
+            return 1;
+        }
+
+        Vector2 leftOrigin = new Vector2(bounds.min.x, bounds.center.y);
+        if (Physics2D.OverlapBox(leftOrigin + Vector2.left * (wallCheckDistance * 0.5f), boxSize, 0f, groundLayer))
+        {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    private void HandleFootsteps(bool grounded)
+    {
+        if (grounded && !isDashing && !IsGrappling && Mathf.Abs(inputValue.x) > 0.1f && Mathf.Abs(rb.linearVelocityX) > 0.2f)
+        {
+            walkStepTimer -= Time.deltaTime;
+            if (walkStepTimer <= 0f)
+            {
+                walkStepTimer = walkStepInterval;
+                AudioClip stepClip = GetRandomWalkSFX();
+                if (stepClip != null)
+                {
+                    PlayPitchedSFX(stepClip, Random.Range(0.92f, 1.08f), 0.75f);
+                }
+            }
+        }
+        else
+        {
+            walkStepTimer = 0.05f;
+        }
+    }
+
+    private AudioClip GetRandomWalkSFX()
+    {
+        if (walkSFXList == null || walkSFXList.Count == 0) return null;
+        if (walkSFXList.Count == 1) return walkSFXList[0];
+
+        int index = Random.Range(0, walkSFXList.Count);
+        if (index == lastWalkSFXIndex)
+        {
+            index = (index + 1) % walkSFXList.Count;
+        }
+        lastWalkSFXIndex = index;
+        return walkSFXList[index];
+    }
+
     private void HandleJumpInput()
     {
         if (jumpAction == null) return;
 
         if (jumpAction.WasPressedThisFrame())
         {
+            jumpBufferCounter = jumpBufferTime;
+        }
+        else
+        {
+            jumpBufferCounter -= Time.deltaTime;
+        }
+
+        if (jumpBufferCounter > 0f)
+        {
             if (IsGrappling)
             {
-                Vector2 boostDir = (rb.linearVelocity.normalized + Vector2.up * 0.5f).normalized;
+                Vector2 currentVel = rb.linearVelocity;
+                Vector2 ropeDir = (grappleAnchorPoint - (Vector2)transform.position).normalized;
+                Vector2 baseDir = currentVel.sqrMagnitude > 0.25f ? currentVel.normalized : ropeDir;
+
+                // Allow player to direct the grapple jump boost using movement keys (WASD / Stick)
+                Vector2 boostDir;
+                if (inputValue.sqrMagnitude > 0.05f)
+                {
+                    boostDir = (inputValue.normalized * 0.7f + baseDir * 0.3f + Vector2.up * 0.45f).normalized;
+                }
+                else
+                {
+                    boostDir = (baseDir + Vector2.up * 0.55f).normalized;
+                }
+
+                float launchSpeed = Mathf.Max(currentVel.magnitude * releaseBoost, jumpHeight * releaseBoost);
                 DetachGrappling();
-                rb.linearVelocity = boostDir * jumpHeight * releaseBoost;
+                rb.linearVelocity = boostDir * launchSpeed;
+                doubleJump = true;
+                jumpBufferCounter = 0f;
+                coyoteTimeCounter = 0f;
+                PlayPitchedSFX(jumpSFX, 1.08f, 1f);
                 if (animator != null) animator.SetBool("isJump", true);
                 return;
             }
 
-            if (IsGrounded())
+            if (coyoteTimeCounter > 0f)
             {
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
+                coyoteTimeCounter = 0f;
+                jumpBufferCounter = 0f;
+                PlayPitchedSFX(jumpSFX, Random.Range(0.96f, 1.04f), 1f);
                 if (animator != null) animator.SetBool("isJump", true);
+                return;
             }
-            else if (doubleJump)
+
+            if (enableWallMechanics && isWallSliding)
+            {
+                int kickDir = -wallDirection;
+                rb.linearVelocity = new Vector2(kickDir * wallJumpForce.x, wallJumpForce.y);
+                wallJumpLockCounter = wallJumpInputLockTime;
+                isWallSliding = false;
+                doubleJump = true;
+                jumpBufferCounter = 0f;
+                PlayPitchedSFX(jumpSFX, 1.06f, 1f);
+
+                if (spriteRenderer != null)
+                {
+                    spriteRenderer.flipX = kickDir < 0;
+                }
+                if (animator != null) animator.SetBool("isJump", true);
+                return;
+            }
+
+            if (jumpAction.WasPressedThisFrame() && doubleJump)
             {
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
                 doubleJump = false;
+                jumpBufferCounter = 0f;
+                AudioClip clipToPlay = doubleJumpSFX != null ? doubleJumpSFX : jumpSFX;
+                float pitchToPlay = doubleJumpSFX != null ? Random.Range(0.96f, 1.05f) : 1.15f;
+                PlayPitchedSFX(clipToPlay, pitchToPlay, 1f);
                 if (animator != null) animator.SetBool("isJump", true);
+                return;
             }
         }
 
@@ -443,14 +729,28 @@ public class PlayerController : MonoBehaviour
     {
         canDash = false;
         isDashing = true;
+        isWallSliding = false;
 
+        if (IsGrappling)
+        {
+            DetachGrappling();
+        }
+
+        PlaySFX(dashSFX);
         if (animator != null) animator.SetBool("isDash", true);
 
         float originalGravity = rb.gravityScale;
         rb.gravityScale = 0f;
 
-        int dashDirection = spriteRenderer.flipX ? -1 : 1;
-        rb.linearVelocity = new Vector2(dashDirection * dashingPower, 0f);
+        int dashDirection = Mathf.Abs(inputValue.x) > 0.1f
+            ? (inputValue.x < 0f ? -1 : 1)
+            : (spriteRenderer != null && spriteRenderer.flipX ? -1 : 1);
+
+        // Preserve momentum if dashing out of a faster grapple swing
+        float currentHorizontalSpeed = Mathf.Sign(rb.linearVelocityX) == dashDirection ? Mathf.Abs(rb.linearVelocityX) : 0f;
+        float finalDashSpeed = Mathf.Max(dashingPower, currentHorizontalSpeed);
+
+        rb.linearVelocity = new Vector2(dashDirection * finalDashSpeed, 0f);
 
         if (trailRenderer != null) trailRenderer.emitting = true;
 
@@ -468,6 +768,14 @@ public class PlayerController : MonoBehaviour
 
     private void Flip()
     {
+        if (wallJumpLockCounter > 0f || spriteRenderer == null) return;
+
+        if (isWallSliding)
+        {
+            spriteRenderer.flipX = wallDirection > 0;
+            return;
+        }
+
         if (inputValue.x < 0f) spriteRenderer.flipX = true;
         else if (inputValue.x > 0f) spriteRenderer.flipX = false;
     }
@@ -625,8 +933,35 @@ public class PlayerController : MonoBehaviour
         if (!lineRendererManager.targets.Contains(enemyPos.gameObject))
         {
             lineRendererManager.targets.Add(enemyPos.gameObject);
-            currentMeter -= maxMeter / 40f;
-            PlaySFX(targetSelectSFX);
+            currentMeter = Mathf.Clamp(currentMeter - (maxMeter / 40f), 0f, maxMeter);
+            if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
+
+            int comboIndex = lineRendererManager.targets.Count - 1;
+            PlayJuicyTargetSelectSFX(comboIndex);
+            StartCoroutine(PunchTargetScaleRoutine(enemyPos));
+        }
+    }
+
+    private IEnumerator PunchTargetScaleRoutine(Transform targetTransform)
+    {
+        if (targetTransform == null) yield break;
+
+        Vector3 baseScale = targetTransform.localScale;
+        float duration = 0.08f;
+        float elapsed = 0f;
+
+        while (elapsed < duration && targetTransform != null)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = elapsed / duration;
+            float scaleFactor = Mathf.Lerp(1f, 1.25f, Mathf.Sin(t * Mathf.PI));
+            targetTransform.localScale = baseScale * scaleFactor;
+            yield return null;
+        }
+
+        if (targetTransform != null)
+        {
+            targetTransform.localScale = baseScale;
         }
     }
 
@@ -920,7 +1255,7 @@ public class PlayerController : MonoBehaviour
     {
         if (grappleAction == null) return;
 
-        if (grappleAction.IsPressed() && currentMeter <= 0)
+        if (isFocusing && currentMeter <= 0)
         {
             GrapplingHook();
             return;
@@ -929,11 +1264,11 @@ public class PlayerController : MonoBehaviour
         if (grappleAction.IsPressed())
         {
             if (IsInMode) return;
-            if (!IsGrappling && !isFocusing) GrapplingFocus();
+            if (!IsGrappling && !isThrowingHook && !isFocusing && currentMeter > 0f) GrapplingFocus();
         }
         else
         {
-            if (!IsGrappling && isFocusing) GrapplingHook();
+            if (!IsGrappling && !isThrowingHook && isFocusing) GrapplingHook();
         }
     }
 
@@ -945,8 +1280,11 @@ public class PlayerController : MonoBehaviour
 
     private IEnumerator AttachGrappleRoutine()
     {
-        IsGrappling = true;
+        isThrowingHook = true;
+        IsGrappling = false;
         isFocusing = false;
+        isWallSliding = false;
+        grappleTargetTransform = null;
 
         if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
         activeMeterCoroutine = StartCoroutine(MeterRegenerate());
@@ -954,46 +1292,122 @@ public class PlayerController : MonoBehaviour
         Time.timeScale = 1.0f;
         Time.fixedDeltaTime = defaultFixedDeltaTime;
 
-        if (Mouse.current == null || Camera.main == null || grappleLine == null) yield break;
+        if (Mouse.current == null || Camera.main == null || grappleLine == null)
+        {
+            isThrowingHook = false;
+            yield break;
+        }
 
-        Vector2 mousePos = Mouse.current.position.ReadValue();
-        Vector2 mouseWorldPos = Camera.main.ScreenToWorldPoint(mousePos);
+        Vector2 mouseWorldPos = GetMouseWorldPosition();
         Vector2 fireOrigin = transform.position;
         Vector2 dir = (mouseWorldPos - fireOrigin).normalized;
+        if (dir == Vector2.zero) dir = Vector2.right;
 
-        RaycastHit2D rayHit = Physics2D.Raycast(fireOrigin, dir, maxGrappleRange, grappleLayer);
+        RaycastHit2D rayHit = FindGrappleHit(fireOrigin, dir, out EnemyBase hitEnemy);
         grappleAnchorPoint = rayHit.collider != null ? rayHit.point : fireOrigin + (dir * maxGrappleRange);
 
         grappleLine.positionCount = ropeSegments;
         grappleLine.enabled = true;
 
+        PlaySFX(grappleReleaseSFX);
+
         float distance = Vector2.Distance(fireOrigin, grappleAnchorPoint);
-        float duration = distance / grappleSpeed;
+        float duration = Mathf.Max(0.02f, distance / grappleSpeed);
         float timer = 0f;
 
         while (timer < duration)
         {
             timer += Time.deltaTime;
             float progress = Mathf.Clamp01(timer / duration);
+            if (hitEnemy != null && !hitEnemy.IsDead)
+            {
+                grappleAnchorPoint = GetEnemyGrapplePoint(hitEnemy);
+            }
             currentHookTip = Vector2.Lerp(fireOrigin, grappleAnchorPoint, progress);
 
             RenderProceduralRope(transform.position, currentHookTip, progress, true);
             yield return null;
         }
 
+        isThrowingHook = false;
+
         if (rayHit.collider != null)
         {
+            IsGrappling = true;
             PlaySFX(grappleHitSFX);
 
-            if (rayHit.collider.TryGetComponent<EnemyBase>(out EnemyBase enemy))
+            if (hitEnemy == null)
             {
-                Vector2 pullDir = ((Vector2)transform.position - rayHit.point).normalized;
-                enemy.OnGrappled(pullDir * pullForce * 1.5f);
+                hitEnemy = rayHit.collider.GetComponentInParent<EnemyBase>();
             }
 
             if (grappleImpactPrefab != null)
             {
                 Instantiate(grappleImpactPrefab, grappleAnchorPoint, Quaternion.identity);
+            }
+
+            if (hitEnemy != null && !hitEnemy.IsHeavyEnemy)
+            {
+                // Pause meter regeneration while reeling the enemy in for the kick
+                if (activeMeterCoroutine != null)
+                {
+                    StopCoroutine(activeMeterCoroutine);
+                    activeMeterCoroutine = null;
+                }
+
+                // 1. Pull the enemy rapidly toward the player along the grapple rope
+                hitEnemy.OnGrappled(Vector2.zero);
+                doubleJump = true;
+                canDash = true;
+
+                Rigidbody2D enemyRb = hitEnemy.GetComponent<Rigidbody2D>();
+                float maxReelDuration = 0.65f;
+                float reelTimer = 0f;
+                float kickDistance = 1.55f;
+
+                while (IsGrappling && reelTimer < maxReelDuration && hitEnemy != null && !hitEnemy.IsDead)
+                {
+                    reelTimer += Time.deltaTime;
+                    Vector2 enemyCenter = GetEnemyGrapplePoint(hitEnemy);
+                    Vector2 toPlayer = (Vector2)transform.position - enemyCenter;
+                    float distToPlayer = toPlayer.magnitude;
+
+                    // 2. Once the enemy is pulled right up close to the player, kick them off far!
+                    if (distToPlayer <= kickDistance)
+                    {
+                        ForceExecuteGrappleKick(hitEnemy, dir);
+                        yield break;
+                    }
+
+                    if (enemyRb != null)
+                    {
+                        Vector2 reelDir = toPlayer.normalized;
+                        enemyRb.linearVelocity = reelDir * pullForce;
+                    }
+
+                    RenderProceduralRope(transform.position, enemyCenter, 1f, false);
+                    yield return null;
+                }
+
+                if (IsGrappling && hitEnemy != null && !hitEnemy.IsDead)
+                {
+                    ForceExecuteGrappleKick(hitEnemy, dir);
+                }
+                else
+                {
+                    DetachGrappling();
+                    if (!IsInMode && !isFocusing)
+                    {
+                        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+                        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+                    }
+                }
+                yield break;
+            }
+
+            if (hitEnemy != null)
+            {
+                grappleTargetTransform = hitEnemy.transform;
             }
 
             if (springJoint != null)
@@ -1005,6 +1419,17 @@ public class PlayerController : MonoBehaviour
 
             while (IsGrappling && springJoint != null && springJoint.enabled)
             {
+                if (grappleTargetTransform != null)
+                {
+                    if (hitEnemy != null && hitEnemy.IsDead)
+                    {
+                        DetachGrappling();
+                        yield break;
+                    }
+                    grappleAnchorPoint = hitEnemy != null ? GetEnemyGrapplePoint(hitEnemy) : (Vector2)grappleTargetTransform.position;
+                    springJoint.connectedAnchor = grappleAnchorPoint;
+                }
+
                 if (springJoint.distance > minDistance)
                 {
                     springJoint.distance -= pullForce * Time.deltaTime;
@@ -1017,6 +1442,159 @@ public class PlayerController : MonoBehaviour
         else
         {
             DetachGrappling();
+        }
+    }
+
+    private Vector2 GetEnemyGrapplePoint(EnemyBase enemy)
+    {
+        if (enemy == null) return Vector2.zero;
+        Collider2D col = enemy.GetComponent<Collider2D>();
+        return col != null ? (Vector2)col.bounds.center : (Vector2)enemy.transform.position;
+    }
+
+    /// <summary>
+    /// Finds the closest valid grapple target along the aim direction, detecting both grappleLayer walls and any EnemyBase colliders.
+    /// </summary>
+    private RaycastHit2D FindGrappleHit(Vector2 origin, Vector2 dir, out EnemyBase hitEnemy)
+    {
+        hitEnemy = null;
+
+        // 1. Check environment on grappleLayer
+        RaycastHit2D wallHit = Physics2D.Raycast(origin, dir, maxGrappleRange, grappleLayer);
+        float maxCheckDist = wallHit.collider != null ? wallHit.distance : maxGrappleRange;
+
+        // 2. Check for enemies along the ray
+        RaycastHit2D[] allHits = Physics2D.CircleCastAll(origin, 0.25f, dir, maxCheckDist);
+        float closestEnemyDist = float.MaxValue;
+        RaycastHit2D bestEnemyHit = default;
+
+        foreach (RaycastHit2D candidate in allHits)
+        {
+            if (candidate.collider == null || candidate.collider.isTrigger) continue;
+            if (candidate.collider.gameObject == gameObject || candidate.collider.transform.IsChildOf(transform)) continue;
+
+            EnemyBase enemy = candidate.collider.GetComponentInParent<EnemyBase>();
+            if (enemy != null && !enemy.IsDead)
+            {
+                Vector2 toEnemy = ((Vector2)candidate.collider.bounds.center - origin).normalized;
+                if (Vector2.Dot(toEnemy, dir) < 0.25f) continue;
+
+                if (candidate.distance < closestEnemyDist)
+                {
+                    closestEnemyDist = candidate.distance;
+                    bestEnemyHit = candidate;
+                    hitEnemy = enemy;
+                }
+            }
+        }
+
+        if (hitEnemy != null)
+        {
+            return bestEnemyHit;
+        }
+
+        return wallHit;
+    }
+
+    /// <summary>
+    /// Checks if the player is actively swinging/reeling on the grapple hook (or reeling in a grappled enemy) to kick the enemy on contact.
+    /// </summary>
+    public bool TryExecuteGrappleKick(EnemyBase enemy)
+    {
+        if (enemy == null || enemy.IsDead) return false;
+        if (Time.time < lastGrappleKickTime + 0.15f) return true; // Prevent multi-frame collision re-triggers
+
+        // Allow kick if actively grappling at speed, OR if this enemy is currently being reeled in by the grapple
+        bool isBeingReeledIn = IsGrappling && enemy.IsGrappleStunned;
+        bool isSwingingFast = IsGrappling && rb.linearVelocity.magnitude >= grappleKickSpeedThreshold;
+
+        if (!isBeingReeledIn && !isSwingingFast) return false;
+
+        Vector2 fallbackDir = ((Vector2)(enemy.transform.position - transform.position)).normalized;
+        ForceExecuteGrappleKick(enemy, fallbackDir);
+        return true;
+    }
+
+    private void ForceExecuteGrappleKick(EnemyBase enemy, Vector2 preferredDir)
+    {
+        if (enemy == null || enemy.IsDead) return;
+        lastGrappleKickTime = Time.time;
+
+        if (IsGrappling)
+        {
+            DetachGrappling();
+        }
+
+        // Determine launch direction: use held movement direction if steering, otherwise launch away along preferredDir
+        Vector2 kickDir;
+        if (Mathf.Abs(inputValue.x) > 0.1f)
+        {
+            kickDir = new Vector2(Mathf.Sign(inputValue.x), 0.35f).normalized;
+        }
+        else if (preferredDir.sqrMagnitude > 0.01f)
+        {
+            kickDir = (preferredDir.normalized + Vector2.up * 0.3f).normalized;
+        }
+        else
+        {
+            float facingDir = spriteRenderer != null && spriteRenderer.flipX ? -1f : 1f;
+            kickDir = new Vector2(facingDir, 0.35f).normalized;
+        }
+
+        enemy.OnGrappleKicked(kickDir * grappleKickKnockback);
+
+        // Visual & audio impact feedback
+        if (grappleImpactPrefab != null)
+        {
+            Instantiate(grappleImpactPrefab, enemy.transform.position, Quaternion.identity);
+        }
+        else if (slashImpactPrefab != null)
+        {
+            Instantiate(slashImpactPrefab, enemy.transform.position, Quaternion.identity);
+        }
+
+        PlaySFX(grappleHitSFX != null ? grappleHitSFX : postSlashSFX);
+        StartCoroutine(GrappleKickHitstopAndShakeRoutine());
+
+        // Bounce player into an aerial vault, refresh mobility, and reduce mode meter by 1 target's cost
+        float recoilX = -Mathf.Sign(kickDir.x) * moveSpeed * 0.45f;
+        rb.linearVelocity = new Vector2(recoilX, grappleKickBounceForce);
+        doubleJump = true;
+        canDash = true;
+
+        ConsumeMeter(maxMeter / 10f);
+    }
+
+    private IEnumerator GrappleKickHitstopAndShakeRoutine()
+    {
+        if (hitstopDuration > 0f && !IsInMode && !isFocusing)
+        {
+            Time.timeScale = 0f;
+            yield return new WaitForSecondsRealtime(hitstopDuration * 0.8f);
+            if (!IsInMode && !isFocusing)
+            {
+                Time.timeScale = 1f;
+            }
+        }
+
+        TriggerCameraShake(0.15f);
+    }
+
+    public void ConsumeMeter(float amount)
+    {
+        if (amount <= 0f) return;
+
+        currentMeter = Mathf.Clamp(currentMeter - amount, 0f, maxMeter);
+        if (modeMeterImage != null)
+        {
+            modeMeterImage.fillAmount = currentMeter / maxMeter;
+        }
+
+        ShowMeterBar();
+        if (!IsInMode && !isFocusing)
+        {
+            if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+            activeMeterCoroutine = StartCoroutine(MeterRegenerate());
         }
     }
 
@@ -1063,6 +1641,8 @@ public class PlayerController : MonoBehaviour
     public void DetachGrappling()
     {
         IsGrappling = false;
+        isThrowingHook = false;
+        grappleTargetTransform = null;
         if (grappleLine != null) grappleLine.enabled = false;
         if (springJoint != null) springJoint.enabled = false;
     }
@@ -1181,18 +1761,49 @@ public class PlayerController : MonoBehaviour
         activeMeterCoroutine = null;
     }
 
+    public void TriggerCameraShake(float duration)
+    {
+        shakeRemainingTime = Mathf.Max(shakeRemainingTime, duration);
+        if (activeShakeCoroutine == null)
+        {
+            activeShakeCoroutine = StartCoroutine(ShakingTrigger(duration));
+        }
+    }
+
     public IEnumerator ShakingTrigger(float duration)
     {
+        shakeRemainingTime = Mathf.Max(shakeRemainingTime, duration);
+
+        if (perlin == null && cinemachineCamera != null)
+        {
+            perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
+        }
+
         if (perlin != null)
         {
-            perlin.NoiseProfile = noiseSettings;
+            if (noiseSettings != null)
+            {
+                perlin.NoiseProfile = noiseSettings;
+            }
             perlin.AmplitudeGain = 10f;
+            if (perlin.FrequencyGain <= 0.01f)
+            {
+                perlin.FrequencyGain = 2f;
+            }
 
-            yield return new WaitForSeconds(duration);
+            while (shakeRemainingTime > 0f)
+            {
+                shakeRemainingTime -= Time.unscaledDeltaTime;
+                yield return null;
+            }
 
             perlin.NoiseProfile = orgNoiseSettings;
             perlin.AmplitudeGain = orgAmplitudeGain;
+            perlin.FrequencyGain = orgFrequencyGain;
         }
+
+        shakeRemainingTime = 0f;
+        activeShakeCoroutine = null;
     }
 
     public void PlaySFX(AudioClip audioClip)
@@ -1201,6 +1812,55 @@ public class PlayerController : MonoBehaviour
         {
             audioSource.PlayOneShot(audioClip);
             soundPlaying++;
+        }
+    }
+
+    public void PlayPitchedSFX(AudioClip audioClip, float pitch = 1f, float volumeScale = 1f)
+    {
+        if (audioClip == null || soundPlaying >= maxSoundPlaying) return;
+
+        AudioSource src = pitchedAudioSource != null ? pitchedAudioSource : audioSource;
+        if (src != null)
+        {
+            src.pitch = pitch;
+            src.PlayOneShot(audioClip, volumeScale);
+            soundPlaying++;
+        }
+    }
+
+    private void PlayJuicyTargetSelectSFX(int comboIndex)
+    {
+        if (targetSelectSFX == null) return;
+
+        float comboPitch = Mathf.Clamp(
+            targetSelectBasePitch + (comboIndex * targetSelectPitchStep),
+            0.5f,
+            targetSelectMaxPitch
+        );
+
+        // Primary lock-on hit with ascending combo pitch and slight volume boost per chain
+        float primaryVolume = Mathf.Clamp(0.9f + (comboIndex * 0.05f), 0.9f, 1.2f);
+        AudioSource primarySrc = pitchedAudioSource != null ? pitchedAudioSource : audioSource;
+        if (primarySrc != null)
+        {
+            primarySrc.pitch = comboPitch;
+            primarySrc.PlayOneShot(targetSelectSFX, primaryVolume);
+        }
+
+        // Harmonic metallic shimmer overtone (a musical fifth higher) slightly delayed in real-time
+        if (shimmerAudioSource != null)
+        {
+            StartCoroutine(TargetShimmerEchoRoutine(comboPitch * 1.5f));
+        }
+    }
+
+    private IEnumerator TargetShimmerEchoRoutine(float shimmerPitch)
+    {
+        yield return new WaitForSecondsRealtime(0.022f);
+        if (shimmerAudioSource != null && targetSelectSFX != null)
+        {
+            shimmerAudioSource.pitch = Mathf.Min(shimmerPitch, 2.4f);
+            shimmerAudioSource.PlayOneShot(targetSelectSFX, 0.35f);
         }
     }
 

@@ -36,10 +36,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     [SerializeField] protected float attackCooldown = 1f;
     [SerializeField] protected float knockbackForce = 8f;
 
+    [Header("Grapple Interaction Settings")]
+    [SerializeField] protected bool isHeavyEnemy = false;
+    [SerializeField] protected float grappleStunDuration = 0.45f;
+    [SerializeField] protected bool dieOnHighSpeedWallSlam = true;
+    [SerializeField] protected float wallSlamSpeedThreshold = 11f;
+
     [Header("UI & Visual Indicators")]
     [SerializeField] protected GameObject targetIndicator;
 
     public bool IsDead { get; protected set; }
+    public bool IsHeavyEnemy => isHeavyEnemy;
+    public bool IsGrappleStunned => grappleStunTimer > 0f;
     public State CurrentState => currentState;
 
     protected State currentState = State.Normal;
@@ -47,6 +55,8 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     protected float lastJumpTime;
     protected float nextJumpTime;
     protected float lastAttackTime;
+    protected float grappleStunTimer;
+    protected bool wasKickedByPlayer;
     protected bool isTarget = false;
 
     protected Rigidbody2D rb;
@@ -82,6 +92,15 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     {
         if (IsDead) return;
 
+        if (grappleStunTimer > 0f)
+        {
+            grappleStunTimer -= Time.deltaTime;
+            if (grappleStunTimer <= 0f)
+            {
+                wasKickedByPlayer = false;
+            }
+        }
+
         UpdateTargetIndicator();
         CheckMouseHover();
         FlipAndRotate();
@@ -98,6 +117,13 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     protected virtual void OnCollisionEnter2D(Collision2D collision)
     {
+        if (IsDead) return;
+
+        if (HandleThrownImpact(collision))
+        {
+            return;
+        }
+
         HandlePlayerContact(collision);
     }
 
@@ -106,12 +132,48 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         HandlePlayerContact(collision);
     }
 
+    protected virtual bool HandleThrownImpact(Collision2D collision)
+    {
+        if (!IsGrappleStunned || !wasKickedByPlayer) return false;
+
+        float impactSpeed = collision.relativeVelocity.magnitude;
+        if (impactSpeed < wallSlamSpeedThreshold) return false;
+
+        // Domino impact into another enemy
+        if (collision.gameObject.TryGetComponent<EnemyBase>(out EnemyBase otherEnemy) && !otherEnemy.IsDead)
+        {
+            Vector2 dominoDir = (otherEnemy.transform.position - transform.position).normalized;
+            otherEnemy.OnDeath(dominoDir);
+            OnDeath(-dominoDir);
+            return true;
+        }
+
+        // High-speed wall/ground slam after being Grapple-Kicked
+        if (dieOnHighSpeedWallSlam && ((1 << collision.gameObject.layer) & groundLayer) != 0)
+        {
+            Vector2 bounceNormal = collision.contactCount > 0 ? collision.GetContact(0).normal : Vector2.up;
+            OnDeath(bounceNormal);
+            return true;
+        }
+
+        return false;
+    }
+
     protected virtual void HandlePlayerContact(Collision2D collision)
     {
         if (IsDead) return;
 
         if (collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
         {
+            // Check if the player is executing a high-speed Grapple Swing Kick / Momentum Bash
+            if (player.TryExecuteGrappleKick(this))
+            {
+                return;
+            }
+
+            // Do not deal contact damage while stunned from being yanked/kicked
+            if (IsGrappleStunned) return;
+
             if (Time.time >= lastAttackTime + attackCooldown)
             {
                 lastAttackTime = Time.time;
@@ -183,7 +245,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     protected virtual void Movement()
     {
-        if (playerController == null) return;
+        if (playerController == null || IsGrappleStunned) return;
 
         Vector2 diff = playerController.transform.position - transform.position;
         if (diff.sqrMagnitude < 0.0001f) return;
@@ -291,6 +353,8 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             spriteRenderer.color = originalColor;
         }
 
+        if (IsGrappleStunned) yield break;
+
         currentState = State.Diving;
         Vector2 diveDir = (playerController.transform.position - transform.position).normalized;
         rb.linearVelocity = diveDir * jumpForce * 1.5f;
@@ -348,7 +412,30 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     public virtual void OnGrappled(Vector2 pullForce)
     {
-        rb.AddForce(pullForce, ForceMode2D.Impulse);
+        currentState = State.Normal;
+        grappleStunTimer = grappleStunDuration * 1.5f;
+        wasKickedByPlayer = false;
+
+        if (spriteRenderer != null && !isTarget)
+        {
+            spriteRenderer.color = originalColor;
+        }
+
+        rb.linearVelocity = pullForce;
+    }
+
+    public virtual void OnGrappleKicked(Vector2 kickImpulse)
+    {
+        currentState = State.Normal;
+        grappleStunTimer = grappleStunDuration * 2f;
+        wasKickedByPlayer = true;
+
+        if (spriteRenderer != null && !isTarget)
+        {
+            spriteRenderer.color = originalColor;
+        }
+
+        rb.linearVelocity = kickImpulse;
     }
 
     // Add these alongside OnCollisionEnter2D inside EnemyBase.cs to support Trigger Colliders:
@@ -368,6 +455,13 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
         if (other.TryGetComponent<PlayerController>(out PlayerController player))
         {
+            if (player.TryExecuteGrappleKick(this))
+            {
+                return;
+            }
+
+            if (IsGrappleStunned) return;
+
             if (Time.time >= lastAttackTime + attackCooldown)
             {
                 lastAttackTime = Time.time;

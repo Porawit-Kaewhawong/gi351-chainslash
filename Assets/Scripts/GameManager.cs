@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Events;
 
 public class GameManager : MonoBehaviour
 {
@@ -33,10 +34,30 @@ public class GameManager : MonoBehaviour
     [SerializeField] private List<EnemySpawnConfig> enemyConfigs = new List<EnemySpawnConfig>();
 
     [Header("Wave & Timing Settings")]
+    [Tooltip("Total number of waves to spawn. Set to 0 or negative for endless waves.")]
+    [SerializeField] private int totalWaves = 5;
+    [Tooltip("Wait until all enemies in the current wave are defeated before starting the next wave timer.")]
+    [SerializeField] private bool waitForWaveClear = true;
     [SerializeField] private int enemiesPerWave = 10; // Used for WeightedRandom mode
+    [Tooltip("Extra enemies added per subsequent wave for escalating difficulty.")]
+    [SerializeField] private int bonusEnemiesPerWave = 2;
     [SerializeField] private float timeBetweenWaves = 3f;
     [SerializeField] private float timeBetweenSpawns = 0.2f;
     [SerializeField] private int maxActiveEnemies = 20;
+
+    [Header("Portal & Level Progression")]
+    [Tooltip("Portal prefab to spawn once all waves are completed and all enemies are gone.")]
+    [SerializeField] private GameObject portalPrefab;
+    [Tooltip("Optional existing Portal object in the scene (hidden at start, activated when all waves are cleared).")]
+    [SerializeField] private GameObject portalSceneObject;
+    [Tooltip("Optional specific Transform where the portal spawns. If empty, spawns on valid ground near the player.")]
+    [SerializeField] private Transform portalSpawnPoint;
+
+    [Header("Wave UI & Events (Optional)")]
+    [SerializeField] private GameObject victoryUIObject;
+    public UnityEvent<int, int> onWaveStarted;
+    public UnityEvent<int> onWaveCleared;
+    public UnityEvent onAllWavesCompleted;
 
     [Header("Ground & Raycast Settings")]
     [SerializeField] private LayerMask groundLayer;
@@ -47,6 +68,11 @@ public class GameManager : MonoBehaviour
 
     [Header("Spawn Validation")]
     [SerializeField] private Vector2 checkExtent = new Vector2(0.8f, 0.8f);
+
+    public int CurrentWave { get; private set; }
+    public int TotalWaves => totalWaves;
+    public int ActiveEnemyCount => activeEnemies.Count;
+    public bool AllWavesCompleted { get; private set; }
 
     private PlayerController player;
     private List<GameObject> activeEnemies = new List<GameObject>();
@@ -65,6 +91,16 @@ public class GameManager : MonoBehaviour
 
         waitForSpawnInterval = new WaitForSeconds(timeBetweenSpawns);
         waitForWaveInterval = new WaitForSeconds(timeBetweenWaves);
+
+        if (victoryUIObject != null)
+        {
+            victoryUIObject.SetActive(false);
+        }
+
+        if (portalSceneObject != null)
+        {
+            portalSceneObject.SetActive(false);
+        }
     }
 
     private void Start()
@@ -83,12 +119,19 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator SpawnRoutine()
     {
-        while (true)
+        CurrentWave = 0;
+        AllWavesCompleted = false;
+
+        // Loop while in endless mode (totalWaves <= 0) or until totalWaves is reached
+        while (totalWaves <= 0 || CurrentWave < totalWaves)
         {
+            CurrentWave++;
+            onWaveStarted?.Invoke(CurrentWave, totalWaves);
+
             // Clean up destroyed enemy references
             activeEnemies.RemoveAll(enemy => enemy == null);
 
-            if (player != null && activeEnemies.Count < maxActiveEnemies)
+            if (player != null)
             {
                 if (spawnMode == SpawnMode.PerWaveCounts)
                 {
@@ -100,22 +143,102 @@ public class GameManager : MonoBehaviour
                 }
             }
 
-            yield return waitForWaveInterval;
+            // Wait for the current wave to be cleared if enabled, or if this is the final wave
+            bool isFinalWave = totalWaves > 0 && CurrentWave >= totalWaves;
+            if (waitForWaveClear || isFinalWave)
+            {
+                while (activeEnemies.Count > 0)
+                {
+                    activeEnemies.RemoveAll(enemy => enemy == null);
+                    yield return null;
+                }
+            }
+
+            onWaveCleared?.Invoke(CurrentWave);
+
+            // Wait between waves if there are more waves coming
+            if (!isFinalWave)
+            {
+                yield return waitForWaveInterval;
+            }
         }
+
+        // Ensure any remaining enemies in the scene (including pre-placed enemies) are completely gone
+        while (activeEnemies.Count > 0 || FindObjectsByType<EnemyBase>(FindObjectsSortMode.None).Length > 0)
+        {
+            activeEnemies.RemoveAll(enemy => enemy == null);
+            yield return null;
+        }
+
+        AllWavesCompleted = true;
+        Debug.Log($"All {totalWaves} waves completed!");
+
+        SpawnNextLevelPortal();
+
+        if (victoryUIObject != null)
+        {
+            victoryUIObject.SetActive(true);
+        }
+
+        onAllWavesCompleted?.Invoke();
+    }
+
+    private void SpawnNextLevelPortal()
+    {
+        if (portalSceneObject != null)
+        {
+            if (portalSpawnPoint != null)
+            {
+                portalSceneObject.transform.position = portalSpawnPoint.position;
+            }
+            portalSceneObject.SetActive(true);
+            return;
+        }
+
+        if (portalPrefab == null) return;
+
+        Vector2 spawnPos;
+        if (portalSpawnPoint != null)
+        {
+            spawnPos = portalSpawnPoint.position;
+        }
+        else if (player != null && TryGetValidSpawnPoint(out Vector2 validGroundPoint, portalPrefab))
+        {
+            spawnPos = validGroundPoint;
+        }
+        else if (player != null)
+        {
+            spawnPos = (Vector2)player.transform.position + Vector2.right * 3f;
+        }
+        else
+        {
+            spawnPos = Vector2.zero;
+        }
+
+        Instantiate(portalPrefab, spawnPos, Quaternion.identity);
     }
 
     // Mode 1: Spawns specific quantities per enemy type per wave
     private IEnumerator SpawnByWaveCounts()
     {
+        int waveBonus = Mathf.Max(0, (CurrentWave - 1) * bonusEnemiesPerWave);
+
         foreach (EnemySpawnConfig config in enemyConfigs)
         {
             if (config.prefab == null) continue;
 
-            for (int i = 0; i < config.spawnCount; i++)
-            {
-                if (activeEnemies.Count >= maxActiveEnemies) yield break;
+            int countToSpawn = config.spawnCount + (config.spawnCount > 0 ? waveBonus : 0);
 
-                if (TryGetValidSpawnPoint(out Vector2 spawnPoint, config.prefab))
+            for (int i = 0; i < countToSpawn; i++)
+            {
+                // Wait if maxActiveEnemies cap is currently reached so the wave still spawns its full quota
+                while (activeEnemies.Count >= maxActiveEnemies)
+                {
+                    activeEnemies.RemoveAll(enemy => enemy == null);
+                    yield return null;
+                }
+
+                if ( player != null && TryGetValidSpawnPoint(out Vector2 spawnPoint, config.prefab))
                 {
                     GameObject spawnedEnemy = Instantiate(config.prefab, spawnPoint, Quaternion.identity);
                     activeEnemies.Add(spawnedEnemy);
@@ -140,12 +263,18 @@ public class GameManager : MonoBehaviour
 
         if (totalWeight <= 0) yield break;
 
-        for (int i = 0; i < enemiesPerWave; i++)
+        int totalToSpawn = enemiesPerWave + Mathf.Max(0, (CurrentWave - 1) * bonusEnemiesPerWave);
+
+        for (int i = 0; i < totalToSpawn; i++)
         {
-            if (activeEnemies.Count >= maxActiveEnemies) yield break;
+            while (activeEnemies.Count >= maxActiveEnemies)
+            {
+                activeEnemies.RemoveAll(enemy => enemy == null);
+                yield return null;
+            }
 
             GameObject selectedPrefab = GetRandomPrefabByWeight(totalWeight);
-            if (selectedPrefab != null && TryGetValidSpawnPoint(out Vector2 spawnPoint, selectedPrefab))
+            if (player != null && selectedPrefab != null && TryGetValidSpawnPoint(out Vector2 spawnPoint, selectedPrefab))
             {
                 GameObject spawnedEnemy = Instantiate(selectedPrefab, spawnPoint, Quaternion.identity);
                 activeEnemies.Add(spawnedEnemy);
