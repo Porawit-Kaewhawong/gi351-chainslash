@@ -172,7 +172,6 @@ MonoBehaviour:
   slowMoveSpeed: 1.35
   armorColor: {r: 0.65, g: 0.75, b: 0.9, a: 1}
   hitFlashColor: {r: 1, g: 1, b: 1, a: 1}
-  hitKnockbackForce: 6
   moveSpeed: 1.35
   groundLayer:
     serializedVersion: 2
@@ -188,10 +187,26 @@ MonoBehaviour:
   contactDamage: 15
   attackCooldown: 1
   knockbackForce: 8
+  isHeavyEnemy: 0
+  grappleStunDuration: 0.45
+  dieOnHighSpeedWallSlam: 1
+  wallSlamSpeedThreshold: 11
   targetIndicator: {fileID: 4618780478795535015}
   dodgeTriggerDistance: 3.5
   dodgeForce: 9
   dodgeCooldown: 3
+  slowMoveSpeed: 1.35
+  armorColor: {r: 0.65, g: 0.75, b: 0.9, a: 1}
+  hitFlashColor: {r: 1, g: 1, b: 1, a: 1}
+  armorClangSFX: {fileID: 0}
+  hitVFXPrefab: {fileID: 0}
+  armorShatterVFX: {fileID: 0}
+  requiredWeakPointCount: 3
+  weakPointPrefab: {fileID: 0}
+  backPointOffsets:
+  - {x: -1.96, y: 1.7}
+  - {x: -1.06, y: 0.03}
+  - {x: -0.72, y: 3.07}
 --- !u!1 &4618780478795535015
 GameObject:
   m_ObjectHideFlags: 0

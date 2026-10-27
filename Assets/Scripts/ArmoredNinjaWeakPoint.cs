@@ -11,9 +11,11 @@ public class ArmoredNinjaWeakPoint : EnemyBase
     private ArmoredNinja ownerNinja;
     private int pointIndex;
     private bool isSlashed = false;
+    private bool isCurrentlyVisible = false;
 
     public int PointIndex => pointIndex;
     public bool IsSlashed => isSlashed;
+    public bool IsCurrentlyVisible => isCurrentlyVisible;
 
     protected override void Awake()
     {
@@ -44,6 +46,9 @@ public class ArmoredNinjaWeakPoint : EnemyBase
         originalColor = normalColor;
         spriteRenderer.color = originalColor;
         spriteRenderer.sortingOrder = 6;
+
+        // Target points start invisible until the player enters slash mode
+        SetVisible(false);
     }
 
     public void Initialize(ArmoredNinja ninja, int index)
@@ -60,12 +65,8 @@ public class ArmoredNinjaWeakPoint : EnemyBase
         IsDead = false;
         isTarget = false;
 
-        if (col != null) col.enabled = true;
-        if (spriteRenderer != null)
-        {
-            spriteRenderer.enabled = true;
-            spriteRenderer.color = originalColor;
-        }
+        // Hidden by default until slash mode begins
+        SetVisible(false);
     }
 
     public void Deactivate()
@@ -74,9 +75,64 @@ public class ArmoredNinjaWeakPoint : EnemyBase
         IsDead = true;
         isTarget = false;
 
-        if (col != null) col.enabled = false;
-        if (spriteRenderer != null) spriteRenderer.enabled = false;
+        SetVisible(false);
         gameObject.SetActive(false);
+    }
+
+    /// <summary>
+    /// Controls weak point visibility and targetability based on whether the player is in slash mode.
+    /// </summary>
+    public void SetVisible(bool visible)
+    {
+        if (isSlashed)
+        {
+            isCurrentlyVisible = false;
+            if (spriteRenderer != null) spriteRenderer.enabled = false;
+            if (col != null) col.enabled = false;
+            if (targetIndicator != null) targetIndicator.SetActive(false);
+            return;
+        }
+
+        isCurrentlyVisible = visible;
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.enabled = visible;
+            if (visible && !isTarget)
+            {
+                spriteRenderer.color = originalColor;
+            }
+        }
+
+        if (col != null)
+        {
+            col.enabled = visible;
+        }
+
+        if (targetIndicator != null)
+        {
+            targetIndicator.SetActive(visible && !isTarget);
+        }
+    }
+
+    protected override void Update()
+    {
+        if (IsDead || isSlashed) return;
+
+        // The 3 target points on its back are only visible when the player is about to slash.
+        // The points disappear when the player is not slashing.
+        bool isAboutToSlash = PlayerController.Instance != null && PlayerController.Instance.IsInMode;
+
+        if (isCurrentlyVisible != isAboutToSlash)
+        {
+            SetVisible(isAboutToSlash);
+        }
+
+        if (isAboutToSlash)
+        {
+            UpdateTargetIndicator();
+            CheckMouseHover();
+        }
     }
 
     public override void OnDeath(Vector2 deathImpulse = default)
@@ -95,15 +151,7 @@ public class ArmoredNinjaWeakPoint : EnemyBase
             playerController.PlaySFX(breakSFX);
         }
 
-        if (spriteRenderer != null)
-        {
-            spriteRenderer.enabled = false;
-        }
-
-        if (col != null)
-        {
-            col.enabled = false;
-        }
+        SetVisible(false);
 
         if (ownerNinja != null)
         {

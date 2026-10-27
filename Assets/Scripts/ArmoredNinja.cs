@@ -26,6 +26,7 @@ public class ArmoredNinja : Enemy
     private List<ArmoredNinjaWeakPoint> weakPoints = new List<ArmoredNinjaWeakPoint>();
     private int slashedPointsCount = 0;
     private Coroutine flashCoroutine;
+    private bool isDefeated = false;
 
     public int SlashedPointsCount => slashedPointsCount;
     public int TotalWeakPoints => requiredWeakPointCount;
@@ -103,7 +104,7 @@ public class ArmoredNinja : Enemy
     {
         base.Update();
 
-        if (IsDead) return;
+        if (IsDead || isDefeated) return;
 
         UpdateWeakPointsPosition();
     }
@@ -129,7 +130,7 @@ public class ArmoredNinja : Enemy
 
     public void OnWeakPointSlashed(ArmoredNinjaWeakPoint point, Vector2 slashImpulse)
     {
-        if (IsDead) return;
+        if (IsDead || isDefeated) return;
 
         slashedPointsCount++;
 
@@ -150,7 +151,7 @@ public class ArmoredNinja : Enemy
 
     public override void OnDeath(Vector2 deathImpulse = default)
     {
-        if (IsDead) return;
+        if (IsDead || isDefeated) return;
 
         // The ninja can only be killed after all 3 points have been slashed!
         if (slashedPointsCount < requiredWeakPointCount)
@@ -175,13 +176,16 @@ public class ArmoredNinja : Enemy
 
     private void DefeatArmoredNinja(Vector2 impulse)
     {
-        if (IsDead) return;
+        if (isDefeated) return;
+        isDefeated = true;
         IsDead = true;
 
         if (GameManager.Instance != null)
         {
             GameManager.Instance.UnregisterEnemy(gameObject);
         }
+
+        if (col != null) col.enabled = false;
 
         if (armorShatterVFX != null)
         {
