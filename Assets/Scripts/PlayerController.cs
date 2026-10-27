@@ -808,6 +808,7 @@ public class PlayerController : MonoBehaviour
     private void EnterChainSlashMode()
     {
         IsInMode = true;
+        if (animator != null) animator.SetBool("isInMode", true);
 
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = defaultFixedDeltaTime * Time.timeScale;
@@ -842,6 +843,7 @@ public class PlayerController : MonoBehaviour
     private void ExitChainSlashMode()
     {
         IsInMode = false;
+        if (animator != null) animator.SetBool("isInMode", false);
 
         if (targetGroup != null && targetGroup.Targets.Count > 1)
         {
