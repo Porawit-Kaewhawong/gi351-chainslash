@@ -171,8 +171,8 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
                 return;
             }
 
-            // Do not deal contact damage while stunned from being yanked/kicked
-            if (IsGrappleStunned) return;
+            // Do not deal contact damage while stunned from being yanked/kicked or while player has immunity frames
+            if (IsGrappleStunned || player.IsImmune) return;
 
             if (Time.time >= lastAttackTime + attackCooldown)
             {

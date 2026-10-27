@@ -23,6 +23,7 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Image healthBarImage;                  // Fill Image for Health
     [SerializeField] private GameObject healthBackgroundObject;     // Background / Frame for Health UI
     [SerializeField] private float healthFadeDuration = 0.25f;
+    [SerializeField] private float immunityDuration = 0.8f;
     [SerializeField] private Color damageFlashColor = new Color(1f, 0.2f, 0.2f, 1f);
     [SerializeField] private float damageFlashDuration = 0.25f;
     [SerializeField] private float damageShakeDuration = 0.15f;
@@ -127,6 +128,8 @@ public class PlayerController : MonoBehaviour
 
     // Health state
     public float CurrentHealth { get; private set; }
+    public bool IsImmune => Time.unscaledTime < immunityEndTime || isDashing;
+    private float immunityEndTime;
 
     // Combat state
     public bool IsInMode { get; private set; }
@@ -409,8 +412,9 @@ public class PlayerController : MonoBehaviour
 
     public void TakeDamage(float amount)
     {
-        if (CurrentHealth <= 0f) return;
+        if (CurrentHealth <= 0f || IsImmune) return;
 
+        immunityEndTime = Time.unscaledTime + immunityDuration;
         CurrentHealth = Mathf.Clamp(CurrentHealth - amount, 0f, maxHealth);
 
         if (healthBarImage != null)
