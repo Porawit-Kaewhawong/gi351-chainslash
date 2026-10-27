@@ -5,6 +5,7 @@ using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+using UnityEngine.Tilemaps;
 using UnityEngine.UI;
 
 [RequireComponent(typeof(Rigidbody2D), typeof(AudioSource))]
@@ -133,6 +134,9 @@ public class PlayerController : MonoBehaviour
     private bool isIdleSquashed;
     private Vector3 originalSpriteScale = Vector3.one;
     private Vector3 originalSpriteLocalPos = Vector3.zero;
+    private Vector3 initialSpawnPosition;
+    private float defaultGravityScale = 2f;
+    private bool pendingSpawnReset;
 
     // Health state
     public float CurrentHealth { get; private set; }
@@ -172,7 +176,7 @@ public class PlayerController : MonoBehaviour
 
     // Damage visual caching
     private Color originalSpriteColor = Color.white;
-    private Color originalHealthBarColor = Color.white;
+    private Color originalHealthBarColor = Color.lightGreen;
     private SpriteRenderer modeDimRenderer;
     private static Sprite cachedSolidWhiteSprite;
 
@@ -199,6 +203,7 @@ public class PlayerController : MonoBehaviour
     private Animator animator;
     private SpringJoint2D springJoint;
     private LineRenderer grappleLine;
+    private Camera mainCamera;
     private CinemachineCamera cinemachineCamera;
     private CinemachineBasicMultiChannelPerlin perlin;
 
@@ -210,12 +215,20 @@ public class PlayerController : MonoBehaviour
     {
         if (Instance != null && Instance != this)
         {
+            Instance.SetSpawnPositionForNewScene(transform.position);
             Destroy(gameObject);
             return;
         }
         Instance = this;
+        transform.SetParent(null);
+        DontDestroyOnLoad(gameObject);
+        initialSpawnPosition = transform.position;
 
         rb = GetComponent<Rigidbody2D>();
+        if (rb != null)
+        {
+            defaultGravityScale = rb.gravityScale;
+        }
         playerCollider = GetComponent<Collider2D>();
         if (playerCollider == null) playerCollider = GetComponentInChildren<Collider2D>();
         audioSource = GetComponent<AudioSource>();
@@ -248,9 +261,296 @@ public class PlayerController : MonoBehaviour
         springJoint = GetComponent<SpringJoint2D>();
         grappleLine = GetComponent<LineRenderer>();
 
-        cinemachineCamera = FindAnyObjectByType<CinemachineCamera>();
+        BindSceneCameraAndTargets();
+
+        moveAction = InputSystem.actions.FindAction("Move");
+        jumpAction = InputSystem.actions.FindAction("Jump");
+        dashAction = InputSystem.actions.FindAction("Dash");
+        attackAction = InputSystem.actions.FindAction("Attack");
+        grappleAction = InputSystem.actions.FindAction("Grapple");
+    }
+
+    private void OnEnable()
+    {
+        SceneManager.sceneLoaded += OnSceneLoaded;
+    }
+
+    private void OnDisable()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+
+        if (insGrappleTargetIndicator != null)
+        {
+            Destroy(insGrappleTargetIndicator);
+        }
+    }
+
+    public void SetSpawnPositionForNewScene(Vector3 spawnPos)
+    {
+        initialSpawnPosition = spawnPos;
+        pendingSpawnReset = true;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (Instance != this) return;
+
+        // If returning to the Main Menu scene, clean up the persistent Player instance
+        if (FindFirstObjectByType<MainMenu>() != null)
+        {
+            Time.timeScale = 1f;
+            if (defaultFixedDeltaTime > 0f)
+            {
+                Time.fixedDeltaTime = defaultFixedDeltaTime;
+            }
+            Destroy(gameObject);
+            return;
+        }
+
+        ResetStateForLoadedScene();
+    }
+
+    private void ResetStateForLoadedScene()
+    {
+        DetachGrappling();
+        isFocusing = false;
+        IsInMode = false;
+        isDashing = false;
+        canDash = true;
+        isWallSliding = false;
+        ResetIdleSquashBob();
+
+        if (insMouseTrail != null)
+        {
+            Destroy(insMouseTrail);
+            insMouseTrail = null;
+        }
+
+        if (insLineRendererObj != null)
+        {
+            Destroy(insLineRendererObj);
+            insLineRendererObj = null;
+            insLineRendererCom = null;
+        }
+
+        if (defaultFixedDeltaTime > 0f)
+        {
+            Time.timeScale = 1f;
+            Time.fixedDeltaTime = defaultFixedDeltaTime;
+        }
+
+        if (rb != null)
+        {
+            rb.simulated = true;
+            rb.constraints = RigidbodyConstraints2D.FreezeRotation;
+            rb.gravityScale = defaultGravityScale;
+            rb.linearVelocity = Vector2.zero;
+        }
+
+        if (animator != null)
+        {
+            animator.SetBool("isInMode", false);
+            animator.SetBool("isDash", false);
+            animator.SetBool("isJump", false);
+            animator.SetBool("isRunning", false);
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+            spriteRenderer.transform.localScale = originalSpriteScale;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+            spriteRenderer.transform.localRotation = Quaternion.identity;
+        }
+
+        Vector3 targetSpawnPos = GetSceneSpawnPosition();
+        transform.position = ResolveSafePlayerPosition(targetSpawnPos);
+        Physics2D.SyncTransforms();
+        pendingSpawnReset = false;
+
+        if (trailRenderer != null)
+        {
+            trailRenderer.emitting = false;
+            trailRenderer.Clear();
+        }
+
+        CurrentHealth = maxHealth;
+        currentMeter = maxMeter;
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = originalHealthBarColor;
+            healthBarImage.fillAmount = 1f;
+        }
+        SetHealthAlpha(0f);
+
+        if (modeMeterImage != null)
+        {
+            modeMeterImage.fillAmount = 1f;
+        }
+        SetMeterAlpha(0f);
+
+        BindSceneCameraAndTargets();
+        SetupGrappleIndicator();
+        SetupModeDimOverlay();
+    }
+
+    private Vector3 GetSceneSpawnPosition()
+    {
+        GameManager gm = GameManager.Instance != null ? GameManager.Instance : FindFirstObjectByType<GameManager>();
+        if (gm != null && gm.PlayerSpawnPoint != null)
+        {
+            return gm.PlayerSpawnPoint.position;
+        }
+
+        if (pendingSpawnReset)
+        {
+            return initialSpawnPosition;
+        }
+
+        GameObject namedSpawn = GameObject.Find("PlayerSpawnPoint");
+        if (namedSpawn == null)
+        {
+            namedSpawn = GameObject.Find("SpawnPoint");
+        }
+        if (namedSpawn != null)
+        {
+            return namedSpawn.transform.position;
+        }
+
+        return initialSpawnPosition;
+    }
+
+    private Vector3 ResolveSafePlayerPosition(Vector3 desiredPos)
+    {
+        Vector2 boxSize = new Vector2(0.9f, 1.4f);
+        float halfHeight = 0.75f;
+
+        if (playerCollider is BoxCollider2D boxCol)
+        {
+            boxSize = Vector2.Scale(boxCol.size, transform.localScale) * 0.92f;
+            halfHeight = (boxCol.size.y * Mathf.Abs(transform.localScale.y)) * 0.5f;
+        }
+        else if (playerCollider != null && playerCollider.bounds.size.sqrMagnitude > 0.01f)
+        {
+            boxSize = (Vector2)playerCollider.bounds.size * 0.92f;
+            halfHeight = playerCollider.bounds.extents.y;
+        }
+
+        // 1. If desiredPos is already free of ground/wall colliders and has ground beneath it, use it directly
+        if (Physics2D.OverlapBox(desiredPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(desiredPos))
+        {
+            return desiredPos;
+        }
+
+        // 2. Try stepping straight up out of any embedded floor at desiredPos.x
+        for (float upOffset = 0.25f; upOffset <= 8f; upOffset += 0.25f)
+        {
+            Vector3 liftedPos = desiredPos + Vector3.up * upOffset;
+            if (Physics2D.OverlapBox(liftedPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(liftedPos))
+            {
+                return liftedPos;
+            }
+        }
+
+        // 3. Scan horizontal offsets around desiredPos (and world origin) from open air to find a clean floor surface
+        float[] xOffsets = new float[] { 0f, 1.5f, -1.5f, 3f, -3f, 4.5f, -4.5f, 6f, -6f, 8f, -8f };
+        float[] yProbes = new float[] { 0.5f, 2f, -1f, 4f, 6.5f };
+        Vector3[] searchCenters = new Vector3[] { desiredPos, Vector3.zero };
+
+        foreach (Vector3 center in searchCenters)
+        {
+            foreach (float xOffset in xOffsets)
+            {
+                foreach (float yProbe in yProbes)
+                {
+                    Vector2 rayOrigin = new Vector2(center.x + xOffset, center.y + yProbe);
+                    if (Physics2D.OverlapPoint(rayOrigin, groundLayer) != null)
+                    {
+                        continue;
+                    }
+
+                    RaycastHit2D hit = Physics2D.Raycast(rayOrigin, Vector2.down, 25f, groundLayer);
+                    if (hit.collider != null && hit.distance > 0.02f && hit.normal.y >= 0.7f)
+                    {
+                        Vector2 candidatePos = hit.point + Vector2.up * (halfHeight + 0.1f);
+                        if (Physics2D.OverlapBox(candidatePos, boxSize, 0f, groundLayer) == null)
+                        {
+                            return new Vector3(candidatePos.x, candidatePos.y, desiredPos.z);
+                        }
+                    }
+                }
+            }
+        }
+
+        return desiredPos;
+    }
+
+    private bool HasGroundBelow(Vector3 checkPos)
+    {
+        RaycastHit2D hit = Physics2D.Raycast(checkPos + Vector3.up * 0.5f, Vector2.down, 25f, groundLayer);
+        return hit.collider != null;
+    }
+
+    private void BindSceneCameraAndTargets()
+    {
+        // 1. Automatically detect the Main Camera in the active scene
+        mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (mainCamera != null)
+        {
+            if (mainCamera.GetComponent<CinemachineBrain>() == null)
+            {
+                mainCamera.gameObject.AddComponent<CinemachineBrain>();
+            }
+
+            Canvas playerCanvas = GetComponentInChildren<Canvas>(true);
+            if (playerCanvas != null && playerCanvas.renderMode == RenderMode.WorldSpace)
+            {
+                playerCanvas.worldCamera = mainCamera;
+            }
+        }
+
+        // 2. Automatically detect the CinemachineTargetGroup in the active scene and bind the Player
+        if (targetGroup == null)
+        {
+            targetGroup = FindFirstObjectByType<CinemachineTargetGroup>();
+        }
+
+        if (targetGroup != null)
+        {
+            if (targetGroup.Targets.Count == 0)
+            {
+                targetGroup.AddMember(transform, 5f, 5f);
+            }
+            else
+            {
+                targetGroup.Targets[0].Object = transform;
+            }
+
+            if (targetGroup.Targets.Count < 2)
+            {
+                targetGroup.AddMember(null, 5f, 5f);
+            }
+            else
+            {
+                targetGroup.Targets[1].Object = null;
+            }
+        }
+
+        // 3. Automatically detect CinemachineCamera and assign Target Group as its Tracking Target
+        cinemachineCamera = FindFirstObjectByType<CinemachineCamera>();
         if (cinemachineCamera != null)
         {
+            cinemachineCamera.Target.TrackingTarget = targetGroup != null ? targetGroup.transform : transform;
+
             perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
             if (perlin != null)
             {
@@ -259,12 +559,15 @@ public class PlayerController : MonoBehaviour
                 orgFrequencyGain = perlin.FrequencyGain;
             }
         }
+    }
 
-        moveAction = InputSystem.actions.FindAction("Move");
-        jumpAction = InputSystem.actions.FindAction("Jump");
-        dashAction = InputSystem.actions.FindAction("Dash");
-        attackAction = InputSystem.actions.FindAction("Attack");
-        grappleAction = InputSystem.actions.FindAction("Grapple");
+    private Camera GetActiveCamera()
+    {
+        if (mainCamera == null)
+        {
+            mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        }
+        return mainCamera;
     }
 
     private void Start()
@@ -288,6 +591,7 @@ public class PlayerController : MonoBehaviour
     {
         if (Keyboard.current != null && Keyboard.current.rKey.isPressed)
         {
+            pendingSpawnReset = true;
             SceneManager.LoadScene(SceneManager.GetActiveScene().name);
             ChainEnemy.isExploding = false;
         }
@@ -560,6 +864,7 @@ public class PlayerController : MonoBehaviour
 
     private void Die()
     {
+        pendingSpawnReset = true;
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
         ChainEnemy.isExploding = false;
     }
@@ -905,7 +1210,7 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        if (mouseTrailPrefab != null && Camera.main != null && Mouse.current != null)
+        if (mouseTrailPrefab != null && GetActiveCamera() != null && Mouse.current != null)
         {
             insMouseTrail = Instantiate(mouseTrailPrefab, startMousePos, Quaternion.identity);
         }
@@ -966,6 +1271,8 @@ public class PlayerController : MonoBehaviour
 
     private void SetupModeDimOverlay()
     {
+        if (modeDimRenderer != null) return;
+
         if (cachedSolidWhiteSprite == null)
         {
             Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
@@ -976,9 +1283,10 @@ public class PlayerController : MonoBehaviour
         }
 
         GameObject dimObj = new GameObject("ChainSlashDimOverlay");
-        if (Camera.main != null)
+        Camera activeCam = GetActiveCamera();
+        if (activeCam != null)
         {
-            dimObj.transform.SetParent(Camera.main.transform, false);
+            dimObj.transform.SetParent(activeCam.transform, false);
             dimObj.transform.localPosition = new Vector3(0f, 0f, 10f);
         }
         else
@@ -1049,11 +1357,12 @@ public class PlayerController : MonoBehaviour
 
     private Vector3 GetMouseWorldPosition()
     {
-        if (Camera.main == null || Mouse.current == null) return Vector3.zero;
+        Camera activeCam = GetActiveCamera();
+        if (activeCam == null || Mouse.current == null) return Vector3.zero;
 
         Vector3 mouseScreenPos = Mouse.current.position.ReadValue();
-        mouseScreenPos.z = -Camera.main.transform.position.z;
-        Vector3 worldPos = Camera.main.ScreenToWorldPoint(mouseScreenPos);
+        mouseScreenPos.z = -activeCam.transform.position.z;
+        Vector3 worldPos = activeCam.ScreenToWorldPoint(mouseScreenPos);
         worldPos.z = 0f;
         return worldPos;
     }
@@ -1323,6 +1632,12 @@ public class PlayerController : MonoBehaviour
 
     private void SetupGrappleIndicator()
     {
+        if (insGrappleTargetIndicator != null)
+        {
+            insGrappleTargetIndicator.SetActive(false);
+            return;
+        }
+
         if (grappleTargetIndicatorPrefab != null)
         {
             insGrappleTargetIndicator = Instantiate(grappleTargetIndicatorPrefab, transform.position, Quaternion.identity);
@@ -1356,6 +1671,7 @@ public class PlayerController : MonoBehaviour
             sr.sortingOrder = 10;
         }
 
+        DontDestroyOnLoad(insGrappleTargetIndicator);
         insGrappleTargetIndicator.SetActive(false);
     }
 
@@ -1431,7 +1747,7 @@ public class PlayerController : MonoBehaviour
         Time.timeScale = 1.0f;
         Time.fixedDeltaTime = defaultFixedDeltaTime;
 
-        if (Mouse.current == null || Camera.main == null || grappleLine == null)
+        if (Mouse.current == null || GetActiveCamera() == null || grappleLine == null)
         {
             isThrowingHook = false;
             yield break;

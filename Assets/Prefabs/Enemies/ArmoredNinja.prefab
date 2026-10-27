@@ -168,10 +168,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f9a1d8656b9b410cbdc4b4f6193afcf5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ArmoredNinja
-  requiredWeakPointCount: 3
-  slowMoveSpeed: 1.35
-  armorColor: {r: 0.65, g: 0.75, b: 0.9, a: 1}
-  hitFlashColor: {r: 1, g: 1, b: 1, a: 1}
   moveSpeed: 1.35
   groundLayer:
     serializedVersion: 2
@@ -183,6 +179,7 @@ MonoBehaviour:
   wallCheckDistance: 0.6
   groundCheckDistance: 0.6
   windUpDuration: 0.4
+  showTelegraphColor: 0
   telegraphColor: {r: 1, g: 0, b: 0, a: 1}
   contactDamage: 15
   attackCooldown: 1
@@ -192,21 +189,21 @@ MonoBehaviour:
   dieOnHighSpeedWallSlam: 1
   wallSlamSpeedThreshold: 11
   targetIndicator: {fileID: 4618780478795535015}
-  dodgeTriggerDistance: 3.5
-  dodgeForce: 9
-  dodgeCooldown: 3
+  targetableOutlineColor: {r: 0.6509804, g: 0.7490196, b: 0.9019608, a: 1}
+  targetableOutlineThickness: 0.055
+  targetJitterStrength: 0.03
   slowMoveSpeed: 1.35
   armorColor: {r: 0.65, g: 0.75, b: 0.9, a: 1}
   hitFlashColor: {r: 1, g: 1, b: 1, a: 1}
-  armorClangSFX: {fileID: 0}
+  armorClangSFX: {fileID: 8300000, guid: 4479b1a8ec906564284337fd242e6102, type: 3}
   hitVFXPrefab: {fileID: 0}
   armorShatterVFX: {fileID: 0}
+  immuneToShurikens: 1
+  immuneToExplosions: 1
   requiredWeakPointCount: 3
-  weakPointPrefab: {fileID: 0}
-  backPointOffsets:
-  - {x: -1.96, y: 1.7}
-  - {x: -1.06, y: 0.03}
-  - {x: -0.72, y: 3.07}
+  weakPointPrefab: {fileID: 8851218834900263158, guid: c556ad43c9ba3be4abe38f3dd274a5c2, type: 3}
+  circleOrbitRadiusMin: 2
+  circleOrbitRadiusMax: 4
 --- !u!1 &4618780478795535015
 GameObject:
   m_ObjectHideFlags: 0
@@ -223,7 +220,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1534673693254457762
 Transform:
   m_ObjectHideFlags: 0
@@ -289,7 +286,7 @@ SpriteRenderer:
   m_SortingOrder: 4
   m_MaskInteraction: 0
   m_Sprite: {fileID: 3625043607559282579, guid: 19fb86013d8c24d6cb8410c0aadf30fa, type: 3}
-  m_Color: {r: 0.9880041, g: 1, b: 0.6179246, a: 1}
+  m_Color: {r: 0.6509804, g: 0.7490196, b: 0.9019608, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0

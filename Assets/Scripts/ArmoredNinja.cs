@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class ArmoredNinja : Enemy
+public class ArmoredNinja : EnemyBase
 {
     [Header("Armored Ninja Settings")]
     [SerializeField] private float slowMoveSpeed = 1.35f;
@@ -12,31 +12,28 @@ public class ArmoredNinja : Enemy
     [SerializeField] private GameObject hitVFXPrefab;
     [SerializeField] private GameObject armorShatterVFX;
 
-    [Header("Back Target Points Settings")]
+    [Header("Immunity Settings")]
+    [SerializeField] private bool immuneToShurikens = true;
+    [SerializeField] private bool immuneToExplosions = true;
+
+    [Header("Target Circles Settings")]
     [SerializeField] private int requiredWeakPointCount = 3;
     [SerializeField] private GameObject weakPointPrefab;
-    [Tooltip("Local offsets on the back (when facing right, X is flipped when facing left)")]
-    [SerializeField] private Vector2[] backPointOffsets = new Vector2[]
-    {
-        new Vector2(-0.45f, 0.95f),  // Upper back
-        new Vector2(-0.55f, 0.65f),  // Mid back
-        new Vector2(-0.45f, 0.35f)   // Lower back
-    };
+    [SerializeField] private float circleOrbitRadiusMin = 1.8f;
+    [SerializeField] private float circleOrbitRadiusMax = 2.4f;
 
-    private List<ArmoredNinjaWeakPoint> weakPoints = new List<ArmoredNinjaWeakPoint>();
+    private readonly List<ArmoredNinjaWeakPoint> weakPoints = new List<ArmoredNinjaWeakPoint>();
+    private Transform weakPointContainer;
     private int slashedPointsCount = 0;
-    private Coroutine flashCoroutine;
     private bool isDefeated = false;
-
-    public int SlashedPointsCount => slashedPointsCount;
-    public int TotalWeakPoints => requiredWeakPointCount;
-    public bool AllPointsSlashed => slashedPointsCount >= requiredWeakPointCount;
+    private bool areWeakPointsActive = false;
+    private float modeExitTimer = 0f;
+    private Coroutine flashCoroutine;
 
     protected override void Awake()
     {
         base.Awake();
 
-        // Moves slower than regular ninja and has heavy resistance
         moveSpeed = slowMoveSpeed;
         isHeavyEnemy = true;
 
@@ -53,13 +50,17 @@ public class ArmoredNinja : Enemy
     protected override void Start()
     {
         base.Start();
-
-        SpawnOrInitializeWeakPoints();
+        CreateWeakPointContainer();
     }
 
-    private void SpawnOrInitializeWeakPoints()
+    private void CreateWeakPointContainer()
     {
         weakPoints.Clear();
+
+        GameObject containerObj = new GameObject("WeakPointContainer");
+        weakPointContainer = containerObj.transform;
+        weakPointContainer.SetParent(transform, false);
+        weakPointContainer.localPosition = new Vector3(0f, 0.65f, 0f);
 
         for (int i = 0; i < requiredWeakPointCount; i++)
         {
@@ -67,36 +68,117 @@ public class ArmoredNinja : Enemy
 
             if (weakPointPrefab != null)
             {
-                GameObject obj = Instantiate(weakPointPrefab, transform.position, Quaternion.identity);
+                GameObject obj = Instantiate(weakPointPrefab, weakPointContainer);
                 point = obj.GetComponent<ArmoredNinjaWeakPoint>();
                 if (point == null) point = obj.AddComponent<ArmoredNinjaWeakPoint>();
             }
             else
             {
-                GameObject obj = new GameObject($"ArmoredNinja_WeakPoint_{i}");
+                GameObject obj = new GameObject($"WeakPoint_{i}");
+                obj.transform.SetParent(weakPointContainer, false);
                 obj.layer = gameObject.layer;
-                obj.tag = gameObject.tag;
-
-                CircleCollider2D circleCol = obj.AddComponent<CircleCollider2D>();
-                circleCol.radius = 0.38f;
-                circleCol.isTrigger = true;
-
-                Rigidbody2D kinematicRb = obj.AddComponent<Rigidbody2D>();
-                kinematicRb.bodyType = RigidbodyType2D.Kinematic;
-                kinematicRb.gravityScale = 0f;
 
                 SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
-                sr.sprite = ArmoredNinjaWeakPoint.GetOrCreateWeakPointSprite();
+                if (spriteRenderer != null) sr.sprite = spriteRenderer.sprite;
+                sr.color = new Color(1f, 0.6f, 0.15f, 1f);
                 sr.sortingOrder = 7;
+                obj.transform.localScale = Vector3.one * 1.5f;
+
+                CircleCollider2D circleCol = obj.AddComponent<CircleCollider2D>();
+                circleCol.radius = 0.5f;
+                circleCol.isTrigger = true;
 
                 point = obj.AddComponent<ArmoredNinjaWeakPoint>();
             }
 
             point.Initialize(this, i);
-
-            Vector2 offset = (i < backPointOffsets.Length) ? backPointOffsets[i] : new Vector2(-0.5f, 0.6f);
-            point.Activate((Vector2)transform.position + offset);
+            point.Deactivate();
             weakPoints.Add(point);
+        }
+    }
+
+    public override void TrySelectTarget()
+    {
+        if (IsDead || isDefeated) return;
+
+        bool wasTarget = isTarget;
+        base.TrySelectTarget();
+
+        // When the armored enemy is targeted in Chain Slash mode, display 3 random circles around itself
+        if (!wasTarget && isTarget)
+        {
+            ShowRandomCircles();
+        }
+    }
+
+    private void ShowRandomCircles()
+    {
+        slashedPointsCount = 0;
+        areWeakPointsActive = true;
+        modeExitTimer = 0f;
+
+        Vector3 centerPos = weakPointContainer != null
+            ? weakPointContainer.position
+            : transform.position + new Vector3(0f, 0.65f, 0f);
+
+        List<Vector2> placedOffsets = new List<Vector2>();
+
+        for (int i = 0; i < weakPoints.Count; i++)
+        {
+            if (weakPoints[i] == null) continue;
+
+            Vector2 offset = Vector2.zero;
+            bool foundValid = false;
+
+            // Pick a fully random angle and distance, with just enough separation so circles don't completely overlap
+            for (int attempt = 0; attempt < 15; attempt++)
+            {
+                float angle = Random.Range(0f, 360f);
+                float dist = Random.Range(circleOrbitRadiusMin, circleOrbitRadiusMax);
+                offset = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * dist;
+
+                bool tooClose = false;
+                for (int j = 0; j < placedOffsets.Count; j++)
+                {
+                    if (Vector2.Distance(offset, placedOffsets[j]) < 0.85f)
+                    {
+                        tooClose = true;
+                        break;
+                    }
+                }
+
+                if (!tooClose)
+                {
+                    foundValid = true;
+                    break;
+                }
+            }
+
+            if (!foundValid)
+            {
+                float angle = Random.Range(0f, 360f);
+                float dist = Random.Range(circleOrbitRadiusMin, circleOrbitRadiusMax);
+                offset = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * dist;
+            }
+
+            placedOffsets.Add(offset);
+            Vector3 worldPos = centerPos + (Vector3)offset;
+            weakPoints[i].ActivateAndShow(worldPos);
+        }
+    }
+
+    private void ResetWeakPoints()
+    {
+        slashedPointsCount = 0;
+        areWeakPointsActive = false;
+        isTarget = false;
+
+        for (int i = 0; i < weakPoints.Count; i++)
+        {
+            if (weakPoints[i] != null)
+            {
+                weakPoints[i].Deactivate();
+            }
         }
     }
 
@@ -106,25 +188,18 @@ public class ArmoredNinja : Enemy
 
         if (IsDead || isDefeated) return;
 
-        UpdateWeakPointsPosition();
-    }
-
-    private void UpdateWeakPointsPosition()
-    {
-        // When facing right (spriteRenderer.flipX == false), the back is on the left (-X).
-        // When facing left (spriteRenderer.flipX == true), the back is on the right (+X).
-        bool facingLeft = (spriteRenderer != null && spriteRenderer.flipX);
-        float sideMultiplier = facingLeft ? -1f : 1f;
-
-        for (int i = 0; i < weakPoints.Count; i++)
+        // Reset circles if the player leaves Chain Slash mode without slashing (grace period for animation)
+        if (areWeakPointsActive && (PlayerController.Instance == null || !PlayerController.Instance.IsInMode))
         {
-            if (weakPoints[i] == null || weakPoints[i].IsSlashed) continue;
-
-            Vector2 offset = (i < backPointOffsets.Length) ? backPointOffsets[i] : new Vector2(-0.5f, 0.6f);
-            // Flip X offset according to facing direction so it stays on the back
-            offset.x *= sideMultiplier;
-
-            weakPoints[i].transform.position = (Vector2)transform.position + offset;
+            modeExitTimer += Time.unscaledDeltaTime;
+            if (modeExitTimer > 0.45f)
+            {
+                ResetWeakPoints();
+            }
+        }
+        else
+        {
+            modeExitTimer = 0f;
         }
     }
 
@@ -133,16 +208,8 @@ public class ArmoredNinja : Enemy
         if (IsDead || isDefeated) return;
 
         slashedPointsCount++;
+        TriggerFlash();
 
-        // Visual flash feedback on the ninja
-        if (flashCoroutine != null) StopCoroutine(flashCoroutine);
-        flashCoroutine = StartCoroutine(ArmorFlashRoutine());
-
-        // Darken armor slightly as points are broken
-        float damageRatio = (float)slashedPointsCount / requiredWeakPointCount;
-        originalColor = Color.Lerp(armorColor, new Color(0.35f, 0.38f, 0.45f, 1f), damageRatio);
-
-        // When all 3 points have been slashed, the ninja is defeated!
         if (slashedPointsCount >= requiredWeakPointCount)
         {
             DefeatArmoredNinja(slashImpulse);
@@ -153,56 +220,73 @@ public class ArmoredNinja : Enemy
     {
         if (IsDead || isDefeated) return;
 
-        // The ninja can only be killed after all 3 points have been slashed!
-        if (slashedPointsCount < requiredWeakPointCount)
+        // If player managed to select all circles, the enemy dies!
+        if (AreAllCirclesSelected() || slashedPointsCount >= requiredWeakPointCount)
         {
-            // Direct slashes to the body ping off the armor
-            if (armorClangSFX != null && playerController != null)
-            {
-                playerController.PlaySFX(armorClangSFX);
-            }
-
-            if (flashCoroutine != null) StopCoroutine(flashCoroutine);
-            flashCoroutine = StartCoroutine(ArmorFlashRoutine());
-
-            // Reset target state on body so player can target the back points
-            isTarget = false;
+            DefeatArmoredNinja(deathImpulse);
             return;
         }
 
-        // All 3 points have been slashed - execute defeat
-        DefeatArmoredNinja(deathImpulse);
+        // If not, the enemy won't take any damage and plays SFX for failed hit
+        HandleDeflectedHit();
     }
 
-    private void DefeatArmoredNinja(Vector2 impulse)
+    private bool AreAllCirclesSelected()
     {
-        if (isDefeated) return;
-        isDefeated = true;
-        IsDead = true;
+        if (weakPoints.Count < requiredWeakPointCount) return false;
 
-        if (GameManager.Instance != null)
+        for (int i = 0; i < weakPoints.Count; i++)
         {
-            GameManager.Instance.UnregisterEnemy(gameObject);
+            if (weakPoints[i] == null || (!weakPoints[i].IsTarget && !weakPoints[i].IsSlashed))
+            {
+                return false;
+            }
         }
+        return true;
+    }
 
-        if (col != null) col.enabled = false;
+    public bool IsImmuneToShurikens => immuneToShurikens;
+    public bool IsImmuneToExplosions => immuneToExplosions;
 
-        if (armorShatterVFX != null)
+    public void DeflectProjectile(Vector2 hitPoint)
+    {
+        if (IsDead || isDefeated) return;
+        PlayClangSFX();
+        TriggerFlash();
+    }
+
+    public void OnExplosionHit(Vector3 explosionPos)
+    {
+        if (IsDead || isDefeated) return;
+        PlayClangSFX();
+        TriggerFlash();
+    }
+
+    private void HandleDeflectedHit()
+    {
+        PlayClangSFX();
+        TriggerFlash();
+        StartCoroutine(ResetAfterDeflectRoutine());
+    }
+
+    private IEnumerator ResetAfterDeflectRoutine()
+    {
+        yield return new WaitForSeconds(0.2f);
+        ResetWeakPoints();
+    }
+
+    private void PlayClangSFX()
+    {
+        if (armorClangSFX != null && playerController != null)
         {
-            Instantiate(armorShatterVFX, transform.position, Quaternion.identity);
+            playerController.PlayPitchedSFX(armorClangSFX, Random.Range(0.96f, 1.04f), 1f);
         }
-        else if (hitVFXPrefab != null)
-        {
-            Instantiate(hitVFXPrefab, transform.position, Quaternion.identity);
-        }
+    }
 
-        if (impulse != default)
-        {
-            rb.AddForce(impulse * 15f, ForceMode2D.Impulse);
-        }
-
-        CleanUpWeakPoints();
-        Destroy(gameObject);
+    private void TriggerFlash()
+    {
+        if (flashCoroutine != null) StopCoroutine(flashCoroutine);
+        flashCoroutine = StartCoroutine(ArmorFlashRoutine());
     }
 
     private IEnumerator ArmorFlashRoutine()
@@ -218,6 +302,34 @@ public class ArmoredNinja : Enemy
         {
             spriteRenderer.color = originalColor;
         }
+    }
+
+    private void DefeatArmoredNinja(Vector2 impulse)
+    {
+        if (isDefeated) return;
+        isDefeated = true;
+        IsDead = true;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.UnregisterEnemy(gameObject);
+        }
+
+        if (col != null) col.enabled = false;
+
+        GameObject fx = armorShatterVFX != null ? armorShatterVFX : hitVFXPrefab;
+        if (fx != null)
+        {
+            Instantiate(fx, transform.position, Quaternion.identity);
+        }
+
+        if (impulse != default && rb != null)
+        {
+            rb.AddForce(impulse * 15f, ForceMode2D.Impulse);
+        }
+
+        CleanUpWeakPoints();
+        Destroy(gameObject);
     }
 
     private void CleanUpWeakPoints()
@@ -236,5 +348,169 @@ public class ArmoredNinja : Enemy
     {
         CleanUpWeakPoints();
     }
+}
+
+public class ArmoredNinjaWeakPoint : EnemyBase
+{
+    [Header("Weak Point Settings")]
+    [SerializeField] private Color normalColor = new Color(1f, 0.6f, 0.15f, 1f);
+    [SerializeField] private Color selectedColor = new Color(0.2f, 0.95f, 1f, 1f);
+    [SerializeField] private GameObject breakVFX;
+    [SerializeField] private AudioClip breakSFX;
+
+    private ArmoredNinja ownerNinja;
+    private int pointIndex;
+    private bool isSlashed = false;
+
+    public int PointIndex => pointIndex;
+    public bool IsSlashed => isSlashed;
+
+    protected override void Awake()
+    {
+        // Lightweight setup: avoid heavy EnemyBase Awake (outlines, patrol, physics)
+        col = GetComponent<Collider2D>();
+        if (col != null) col.isTrigger = true;
+
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer != null)
+        {
+            if (spriteRenderer.color.a > 0f) normalColor = spriteRenderer.color;
+            originalColor = normalColor;
+            spriteRenderer.sortingOrder = 7;
+        }
+
+        rb = GetComponent<Rigidbody2D>();
+        if (rb != null)
+        {
+            rb.bodyType = RigidbodyType2D.Kinematic;
+            rb.gravityScale = 0f;
+            rb.linearVelocity = Vector2.zero;
+        }
+
+        Deactivate();
+    }
+
+    public void Initialize(ArmoredNinja ninja, int index)
+    {
+        ownerNinja = ninja;
+        pointIndex = index;
+    }
+
+    public void ActivateAndShow(Vector3 worldPos)
+    {
+        transform.position = worldPos;
+        isSlashed = false;
+        IsDead = false;
+        isTarget = false;
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = normalColor;
+            spriteRenderer.enabled = true;
+        }
+
+        if (col != null) col.enabled = true;
+
+        gameObject.SetActive(true);
+    }
+
+    public void Deactivate()
+    {
+        isSlashed = false;
+        IsDead = false;
+        isTarget = false;
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.enabled = false;
+        }
+
+        if (col != null) col.enabled = false;
+
+        gameObject.SetActive(false);
+    }
+
+    public override void TrySelectTarget()
+    {
+        if (IsDead || isSlashed || isTarget) return;
+
+        if (PlayerController.Instance != null && PlayerController.Instance.IsInMode)
+        {
+            isTarget = true;
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.color = selectedColor;
+            }
+
+            PlayerController.Instance.TargetSetup(transform);
+        }
+    }
+
+    protected override void Update()
+    {
+        if (IsDead || isSlashed || !gameObject.activeSelf) return;
+
+        if (!isTarget && PlayerController.Instance != null && PlayerController.Instance.IsInMode)
+        {
+            CheckMouseHover();
+        }
+    }
+
+    protected override void CheckMouseHover()
+    {
+        if (isTarget || col == null) return;
+
+        Camera cam = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (cam == null || UnityEngine.InputSystem.Mouse.current == null) return;
+
+        Vector3 screenPos = UnityEngine.InputSystem.Mouse.current.position.ReadValue();
+        screenPos.z = -cam.transform.position.z;
+        Vector2 mouseWorld = cam.ScreenToWorldPoint(screenPos);
+
+        // Check collider or generous proximity for smooth mouse swipes
+        if (col.OverlapPoint(mouseWorld) || Vector2.Distance(transform.position, mouseWorld) <= 0.6f)
+        {
+            TrySelectTarget();
+        }
+    }
+
+    public override void OnPointerEnter(UnityEngine.EventSystems.PointerEventData eventData)
+    {
+        TrySelectTarget();
+    }
+
+    public override void OnDeath(Vector2 deathImpulse = default)
+    {
+        // Weak points can ONLY be triggered when targeted by the player's chain slash
+        if (isSlashed || !isTarget) return;
+        isSlashed = true;
+        IsDead = true;
+
+        if (breakVFX != null)
+        {
+            Instantiate(breakVFX, transform.position, Quaternion.identity);
+        }
+
+        if (breakSFX != null && PlayerController.Instance != null)
+        {
+            PlayerController.Instance.PlaySFX(breakSFX);
+        }
+
+        if (spriteRenderer != null) spriteRenderer.enabled = false;
+        if (col != null) col.enabled = false;
+
+        if (ownerNinja != null)
+        {
+            ownerNinja.OnWeakPointSlashed(this, deathImpulse);
+        }
+    }
+
+    // Stubs to disable enemy movement/patrol behaviors for stationary circles
+    protected override void Movement() {}
+    protected override void UpdateTargetIndicator() {}
+    protected override void FlipAndRotate() {}
+    protected override void HandlePlayerContact(Collision2D collision) {}
+    protected override void HandlePlayerTriggerContact(Collider2D other) {}
+    protected override bool HandleThrownImpact(Collision2D collision) => false;
 }
 

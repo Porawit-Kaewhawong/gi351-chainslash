@@ -23,8 +23,13 @@ public class MainMenu : MonoBehaviour
     [Header("Audio Settings")]
     [SerializeField] private AudioSource bgmAudioSource;
     [SerializeField] private AudioSource sfxAudioSource;
+    [SerializeField] private AudioClip buttonClickSFX;
+    [SerializeField] private AudioClip buttonHoverSFX;
+    [SerializeField] [Range(0f, 1f)] private float sfxVolume = 1f;
 
     private bool isTransitioning = false;
+    private float lastPlayedSFXTime = -10f;
+    private AudioClip lastPlayedSFXClip;
     private Vector3 initialBackgroundPos;
     private Vector3 initialBackgroundScale = Vector3.one;
 
@@ -38,8 +43,29 @@ public class MainMenu : MonoBehaviour
 
     private void Awake()
     {
+        EnsureAudioSources();
         EnsureTransitionUI();
         CacheMenuUIElements();
+    }
+
+    private void EnsureAudioSources()
+    {
+        if (sfxAudioSource == null)
+        {
+            AudioSource existingSource = GetComponent<AudioSource>();
+            if (existingSource != null && existingSource != bgmAudioSource)
+            {
+                sfxAudioSource = existingSource;
+            }
+            else
+            {
+                GameObject sfxObj = new GameObject("MenuSFXAudioSource");
+                sfxObj.transform.SetParent(transform, false);
+                sfxAudioSource = sfxObj.AddComponent<AudioSource>();
+                sfxAudioSource.playOnAwake = false;
+                sfxAudioSource.spatialBlend = 0f;
+            }
+        }
     }
 
     private void Start()
@@ -361,7 +387,7 @@ public class MainMenu : MonoBehaviour
         }
 
         // Spawn a seamless cross-scene fade-in overlay so the gameplay scene opens smoothly from black
-        SpawnCrossSceneFadeIn(0.45f);
+        SpawnCrossSceneFadeIn(0.45f, sfxAudioSource);
 
         LoadTargetGameScene();
     }
@@ -387,10 +413,15 @@ public class MainMenu : MonoBehaviour
         SceneManager.LoadScene(0);
     }
 
-    private static void SpawnCrossSceneFadeIn(float duration)
+    private void SpawnCrossSceneFadeIn(float duration, AudioSource activeSfxSource)
     {
         GameObject fadeCarryObj = new GameObject("CrossSceneFadeIn");
         DontDestroyOnLoad(fadeCarryObj);
+
+        if (activeSfxSource != null && activeSfxSource.isPlaying && activeSfxSource.gameObject != gameObject)
+        {
+            activeSfxSource.transform.SetParent(fadeCarryObj.transform, false);
+        }
 
         Canvas canvas = fadeCarryObj.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
@@ -413,12 +444,13 @@ public class MainMenu : MonoBehaviour
         cg.blocksRaycasts = false;
 
         CrossSceneFadeRunner runner = fadeCarryObj.AddComponent<CrossSceneFadeRunner>();
-        runner.BeginFadeIn(cg, duration);
+        runner.BeginFadeIn(cg, duration, activeSfxSource);
     }
 
     private IEnumerator TransitionAndQuit()
     {
         isTransitioning = true;
+        PlayButtonClickSFX();
 
         if (transitionCanvasGroup != null)
         {
@@ -464,20 +496,53 @@ public class MainMenu : MonoBehaviour
 
     public void PlaySFX(AudioClip clip)
     {
-        if (sfxAudioSource != null && clip != null)
+        if (clip == null) return;
+
+        // Avoid double-playing the exact same clip on pointer-down + button-click release within the same press
+        if (clip == lastPlayedSFXClip && Time.unscaledTime - lastPlayedSFXTime < 0.2f)
         {
-            sfxAudioSource.PlayOneShot(clip);
+            return;
+        }
+
+        EnsureAudioSources();
+        if (sfxAudioSource != null)
+        {
+            lastPlayedSFXClip = clip;
+            lastPlayedSFXTime = Time.unscaledTime;
+            sfxAudioSource.PlayOneShot(clip, sfxVolume);
+        }
+    }
+
+    public void PlayButtonClickSFX(AudioClip customClip = null)
+    {
+        AudioClip clipToPlay = customClip != null
+            ? customClip
+            : (buttonClickSFX != null ? buttonClickSFX : startTransitionSFX);
+
+        PlaySFX(clipToPlay);
+    }
+
+    public void PlayButtonHoverSFX(AudioClip customClip = null)
+    {
+        AudioClip clipToPlay = customClip != null ? customClip : buttonHoverSFX;
+        if (clipToPlay != null)
+        {
+            EnsureAudioSources();
+            if (sfxAudioSource != null)
+            {
+                sfxAudioSource.PlayOneShot(clipToPlay, sfxVolume * 0.7f);
+            }
         }
     }
 
     private class CrossSceneFadeRunner : MonoBehaviour
     {
-        public void BeginFadeIn(CanvasGroup cg, float duration)
+        public void BeginFadeIn(CanvasGroup cg, float duration, AudioSource carriedAudio)
         {
-            StartCoroutine(FadeInRoutine(cg, duration));
+            StartCoroutine(FadeInRoutine(cg, duration, carriedAudio));
         }
 
-        private IEnumerator FadeInRoutine(CanvasGroup cg, float duration)
+        private IEnumerator FadeInRoutine(CanvasGroup cg, float duration, AudioSource carriedAudio)
         {
             // Wait one frame for the new scene to initialize
             yield return null;
@@ -488,6 +553,16 @@ public class MainMenu : MonoBehaviour
                 elapsed += Time.unscaledDeltaTime;
                 float t = Mathf.Clamp01(elapsed / duration);
                 cg.alpha = 1f - (t * t);
+                yield return null;
+            }
+
+            if (cg != null)
+            {
+                cg.alpha = 0f;
+            }
+
+            while (carriedAudio != null && carriedAudio.isPlaying)
+            {
                 yield return null;
             }
 

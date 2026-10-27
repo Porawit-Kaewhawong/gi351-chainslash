@@ -1,7 +1,7 @@
 using System.Collections;
 using UnityEngine;
 
-public class ThrowerNinja : Enemy
+public class ThrowerNinja : EnemyBase
 {
     [Header("Thrower Ninja Settings")]
     [SerializeField] private GameObject shurikenPrefab;
@@ -14,6 +14,10 @@ public class ThrowerNinja : Enemy
     [SerializeField] private Color throwTelegraphColor = new Color(1f, 0.55f, 0.1f, 1f);
     [SerializeField] private Transform throwPoint;
     [SerializeField] private AudioClip throwSFX;
+
+    [Header("Death Projectiles Settings")]
+    [SerializeField] private int deathProjectileCount = 2;
+    [SerializeField] private float deathProjectileSpeed = 13.5f;
 
     private float nextThrowTime;
     private bool isThrowing;
@@ -93,6 +97,62 @@ public class ThrowerNinja : Enemy
         }
 
         isThrowing = false;
+    }
+
+    public override void OnDeath(Vector2 deathImpulse = default)
+    {
+        if (IsDead) return;
+        IsDead = true;
+
+        SpawnDeathShurikens();
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.UnregisterEnemy(gameObject);
+        }
+
+        if (deathImpulse != default && rb != null)
+        {
+            rb.AddForce(deathImpulse * 15f, ForceMode2D.Impulse);
+        }
+
+        Destroy(gameObject);
+    }
+
+    private void SpawnDeathShurikens()
+    {
+        Vector2 spawnOrigin = throwPoint != null ? (Vector2)throwPoint.position : (Vector2)transform.position + Vector2.up * 0.5f;
+
+        // Throw 2 shurikens in random spread-out directions that damage other enemies
+        float baseAngle = Random.Range(0f, 360f);
+        float angleStep = 360f / Mathf.Max(1, deathProjectileCount);
+
+        for (int i = 0; i < deathProjectileCount; i++)
+        {
+            float angle = baseAngle + (i * angleStep) + Random.Range(-25f, 25f);
+            Vector2 randomDir = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)).normalized;
+
+            GameObject proj = null;
+            if (shurikenPrefab != null)
+            {
+                proj = Instantiate(shurikenPrefab, spawnOrigin, Quaternion.identity);
+            }
+            else
+            {
+                proj = Shuriken.CreateDefaultShuriken(spawnOrigin, randomDir, deathProjectileSpeed, shurikenDamage, groundLayer);
+            }
+
+            if (proj != null && proj.TryGetComponent<Shuriken>(out Shuriken shurikenComp))
+            {
+                shurikenComp.SetCanDamageEnemies(true, gameObject);
+                shurikenComp.Launch(randomDir, deathProjectileSpeed, shurikenDamage);
+            }
+        }
+
+        if (throwSFX != null && playerController != null)
+        {
+            playerController.PlaySFX(throwSFX);
+        }
     }
 }
 

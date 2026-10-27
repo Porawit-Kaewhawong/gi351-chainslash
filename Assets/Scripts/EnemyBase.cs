@@ -29,6 +29,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     [Header("Telegraph Wind-up Settings")]
     [SerializeField] protected float windUpDuration = 0.4f;
+    [SerializeField] protected bool showTelegraphColor = false;
     [SerializeField] protected Color telegraphColor = Color.red;
 
     [Header("Attack Settings")]
@@ -51,6 +52,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     public bool IsDead { get; protected set; }
     public bool IsHeavyEnemy => isHeavyEnemy;
     public bool IsGrappleStunned => grappleStunTimer > 0f;
+    public bool IsTarget => isTarget;
     public State CurrentState => currentState;
 
     protected State currentState = State.Normal;
@@ -61,6 +63,9 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     protected float grappleStunTimer;
     protected bool wasKickedByPlayer;
     protected bool isTarget = false;
+    protected int wallRunDirection = 1;
+    protected float wallRunStartTime;
+    protected float defaultGravityScale = 1f;
 
     protected Rigidbody2D rb;
     protected Collider2D col;
@@ -90,7 +95,12 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     protected virtual void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        if (rb != null)
+        {
+            defaultGravityScale = rb.gravityScale;
+        }
         col = GetComponent<Collider2D>();
+        jumpsLeft = maxJumps;
 
         if (targetIndicator != null)
         {
@@ -352,20 +362,40 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         switch (currentState)
         {
             case State.WallSticking:
+                if (rb != null)
+                {
+                    rb.gravityScale = 0f;
+                    float climbSpeed = Mathf.Max(speed * 1.6f, 4.2f);
+                    rb.linearVelocity = new Vector2(wallRunDirection * 1.5f, climbSpeed);
+                }
+                break;
+
             case State.Telegraphing:
-                rb.linearVelocity = Vector2.zero;
+                if (rb != null)
+                {
+                    rb.gravityScale = 0f;
+                    rb.linearVelocity = Vector2.zero;
+                }
                 break;
 
             case State.Diving:
-                rb.AddForce(dir * speed * 2.5f);
+                if (rb != null)
+                {
+                    rb.gravityScale = defaultGravityScale;
+                    rb.AddForce(dir * speed * 2.5f);
+                }
                 break;
 
             case State.Normal:
             case State.Dodging:
-                rb.AddForce(new Vector2(dir.x * speed, 0f));
-                Vector2 velocity = rb.linearVelocity;
-                velocity.x = Mathf.Clamp(velocity.x, -speed * 1.5f, speed * 1.5f);
-                rb.linearVelocity = velocity;
+                if (rb != null)
+                {
+                    rb.gravityScale = defaultGravityScale;
+                    rb.AddForce(new Vector2(dir.x * speed, 0f));
+                    Vector2 velocity = rb.linearVelocity;
+                    velocity.x = Mathf.Clamp(velocity.x, -speed * 1.5f, speed * 1.5f);
+                    rb.linearVelocity = velocity;
+                }
                 break;
         }
 
@@ -374,18 +404,69 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     protected virtual void HandleJump(Vector2 dir)
     {
+        if (col == null) return;
         Bounds bounds = col.bounds;
 
+        // Cast from the bottom of the collider so collider height (1.3) never swallows groundCheckDistance
+        Vector2 groundBoxOrigin = new Vector2(bounds.center.x, bounds.min.y + 0.06f);
+        Vector2 groundBoxSize = new Vector2(bounds.size.x * 0.75f, 0.08f);
         bool grounded = Physics2D.BoxCast(
-            bounds.center,
-            new Vector2(bounds.size.x * 0.8f, 0.05f),
+            groundBoxOrigin,
+            groundBoxSize,
             0f,
             Vector2.down,
-            groundCheckDistance,
+            0.16f,
             groundLayer
         );
 
-        if (grounded && Time.time > lastJumpTime + 0.1f && currentState != State.Telegraphing)
+        int desiredWallDir = Mathf.Abs(dir.x) > 0.01f ? (dir.x > 0f ? 1 : -1) : wallRunDirection;
+        bool isTouchingWall = IsTouchingWall(bounds, desiredWallDir);
+
+        if (currentState == State.WallSticking)
+        {
+            bool stillOnWall = IsTouchingWall(bounds, wallRunDirection);
+            bool hitCeiling = Physics2D.BoxCast(
+                new Vector2(bounds.center.x, bounds.max.y - 0.05f),
+                new Vector2(bounds.size.x * 0.6f, 0.08f),
+                0f,
+                Vector2.up,
+                0.2f,
+                groundLayer
+            );
+
+            // If the enemy ran all the way up past the top of the wall/ledge, vault onto the platform!
+            if (!stillOnWall && Time.time > wallRunStartTime + 0.1f)
+            {
+                currentState = State.Normal;
+                if (rb != null)
+                {
+                    rb.gravityScale = defaultGravityScale;
+                    rb.linearVelocity = new Vector2(wallRunDirection * CurrentMoveSpeed * 1.6f, jumpForce * 0.45f);
+                }
+                lastJumpTime = Time.time;
+                nextJumpTime = Time.time + jumpCooldown;
+                return;
+            }
+
+            // If the wall-run timer finished or the enemy hit a ceiling, telegraph and dive at the player
+            if (Time.time >= nextJumpTime || hitCeiling)
+            {
+                StartCoroutine(TelegraphAndDive());
+            }
+            return;
+        }
+
+        if (currentState == State.Telegraphing || currentState == State.Diving)
+        {
+            if (currentState == State.Diving && grounded && Time.time > lastJumpTime + 0.15f)
+            {
+                currentState = State.Normal;
+                jumpsLeft = maxJumps;
+            }
+            return;
+        }
+
+        if (grounded && Time.time > lastJumpTime + 0.1f)
         {
             jumpsLeft = maxJumps;
             if (currentState != State.Normal && currentState != State.Dodging)
@@ -394,29 +475,19 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             }
         }
 
-        Vector2 faceDirection = new Vector2(Mathf.Sign(dir.x), 0);
-        bool isTouchingWall = Physics2D.Raycast(
-            bounds.center,
-            faceDirection,
-            bounds.extents.x + wallCheckDistance,
-            groundLayer
-        );
-
-        if (currentState == State.WallSticking)
+        // Start wall-running when contacting a wall in the direction of the player
+        if (isTouchingWall && Time.time >= wallRunStartTime + 0.35f)
         {
-            if (Time.time >= nextJumpTime)
-            {
-                StartCoroutine(TelegraphAndDive());
-            }
-            return;
-        }
-
-        if (currentState == State.Telegraphing || currentState == State.Diving) return;
-
-        if (!grounded && isTouchingWall && jumpsLeft > 0 && Time.time >= lastJumpTime + 0.3f)
-        {
+            wallRunDirection = desiredWallDir;
+            wallRunStartTime = Time.time;
             currentState = State.WallSticking;
-            nextJumpTime = Time.time + 2f;
+            nextJumpTime = Time.time + 1.1f;
+            if (rb != null)
+            {
+                rb.gravityScale = 0f;
+                float climbSpeed = Mathf.Max(CurrentMoveSpeed * 1.6f, 4.2f);
+                rb.linearVelocity = new Vector2(wallRunDirection * 1.5f, climbSpeed);
+            }
             return;
         }
 
@@ -433,11 +504,26 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         }
     }
 
+    protected bool IsTouchingWall(Bounds bounds, int horizontalDir)
+    {
+        if (horizontalDir == 0) horizontalDir = 1;
+        Vector2 castDir = new Vector2(Mathf.Sign(horizontalDir), 0f);
+        Vector2 castSize = new Vector2(0.08f, bounds.size.y * 0.65f);
+        float castDist = bounds.extents.x + Mathf.Max(0.15f, wallCheckDistance * 0.5f);
+
+        return Physics2D.BoxCast(bounds.center, castSize, 0f, castDir, castDist, groundLayer);
+    }
+
     protected virtual IEnumerator TelegraphAndDive()
     {
         currentState = State.Telegraphing;
+        if (rb != null)
+        {
+            rb.gravityScale = 0f;
+            rb.linearVelocity = Vector2.zero;
+        }
 
-        if (spriteRenderer != null && !isTarget)
+        if (showTelegraphColor && spriteRenderer != null && !isTarget)
         {
             spriteRenderer.color = telegraphColor;
         }
@@ -449,11 +535,21 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             spriteRenderer.color = originalColor;
         }
 
-        if (IsGrappleStunned) yield break;
+        if (rb != null)
+        {
+            rb.gravityScale = defaultGravityScale;
+        }
+
+        if (IsGrappleStunned || IsDead) yield break;
 
         currentState = State.Diving;
-        Vector2 diveDir = (playerController.transform.position - transform.position).normalized;
-        rb.linearVelocity = diveDir * jumpForce * 1.5f;
+        lastJumpTime = Time.time;
+        if (playerController != null && rb != null)
+        {
+            Vector2 diveDir = (playerController.transform.position - transform.position).normalized;
+            if (diveDir.sqrMagnitude < 0.01f) diveDir = new Vector2(-wallRunDirection, 0.5f).normalized;
+            rb.linearVelocity = diveDir * jumpForce * 1.5f;
+        }
     }
 
     protected virtual void Jump()
@@ -526,14 +622,17 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     {
         if (spriteRenderer == null) return;
 
-        if (currentState == State.WallSticking)
+        if (currentState == State.WallSticking || currentState == State.Telegraphing)
         {
-            float wallDir = Mathf.Sign(playerController.transform.position.x - transform.position.x);
-            transform.rotation = Quaternion.Euler(0f, 0f, wallDir * -90f);
+            // Rotate only the child SpriteRenderer (not the root Collider2D) so feet press against the wall and the ninja runs upward
+            transform.rotation = Quaternion.identity;
+            spriteRenderer.flipX = wallRunDirection < 0;
+            spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, wallRunDirection * 90f);
         }
         else
         {
             transform.rotation = Quaternion.identity;
+            spriteRenderer.transform.localRotation = Quaternion.identity;
 
             if (rb.linearVelocityX < -0.1f)
             {
@@ -552,9 +651,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         grappleStunTimer = grappleStunDuration * 1.5f;
         wasKickedByPlayer = false;
 
-        if (spriteRenderer != null && !isTarget)
+        if (rb != null)
         {
-            spriteRenderer.color = originalColor;
+            rb.gravityScale = defaultGravityScale;
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.transform.localRotation = Quaternion.identity;
+            if (!isTarget)
+            {
+                spriteRenderer.color = originalColor;
+            }
         }
 
         rb.linearVelocity = pullForce;
@@ -566,9 +674,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         grappleStunTimer = grappleStunDuration * 2f;
         wasKickedByPlayer = true;
 
-        if (spriteRenderer != null && !isTarget)
+        if (rb != null)
         {
-            spriteRenderer.color = originalColor;
+            rb.gravityScale = defaultGravityScale;
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.transform.localRotation = Quaternion.identity;
+            if (!isTarget)
+            {
+                spriteRenderer.color = originalColor;
+            }
         }
 
         rb.linearVelocity = kickImpulse;

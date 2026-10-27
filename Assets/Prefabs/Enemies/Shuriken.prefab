@@ -141,8 +141,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 324af6a8bdaa4638bf3b8cf18a82bb84, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Shuriken
-  speed: 10
-  damage: 10
+  speed: 15
+  damage: 15
   spinSpeed: 720
   lifetime: 5
   groundLayer:
@@ -150,3 +150,13 @@ MonoBehaviour:
     m_Bits: 64
   hitEffectPrefab: {fileID: 0}
   hitSFX: {fileID: 0}
+  enableTrail: 1
+  trailTime: 0.22
+  trailStartWidth: 0.35
+  trailColor: {r: 0.85, g: 0.95, b: 1, a: 0.85}
+  canDamageEnemies: 0
+  reflectSFX: {fileID: 8300000, guid: 98936b8a712d84748be947cc31bd8e4a, type: 3}
+  reflectColor: {r: 0.2, g: 0.95, b: 1, a: 1}
+  reflectSpeedMultiplier: 1.5
+  reflectDamageMultiplier: 2.5
+  reflectRadius: 0.85

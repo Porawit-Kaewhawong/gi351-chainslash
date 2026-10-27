@@ -81,7 +81,7 @@ SpriteRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 0
+  m_SortingOrder: 4
   m_MaskInteraction: 0
   m_Sprite: {fileID: 7482667652216324306, guid: 311925a002f4447b3a28927169b83ea6, type: 3}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
@@ -151,8 +151,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d743d0890d080d84cbf2717b4e428a9a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PortalNextLevel
-  nextSceneName: Level2Scene
   teleportDelay: 0.1
-  portalEnterSFX: {fileID: 0}
+  portalEnterSFX: {fileID: 8300000, guid: cb8cdd2c56f5c2440a92a295bf525259, type: 3}
+  portalSFXVolume: 1
   animateSpawnScale: 1
   spawnAnimationDuration: 0.35
+  animateIdlePulse: 1
+  idlePulseSpeed: 3
+  idlePulseAmount: 0.06
+  zoomInDuration: 0.85
+  zoomInOrthoSize: 1.8
+  fadeInStartNormalizedTime: 0.2
+  blackScreenHoldDuration: 0.1
+  fadeOutDuration: 0.6
+  portalEnterExpandMultiplier: 1.35

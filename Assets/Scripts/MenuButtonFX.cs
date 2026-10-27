@@ -38,9 +38,9 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
     public void OnPointerEnter(PointerEventData eventData)
     {
         targetScale = originalScale * hoverScale;
-        if (mainMenu != null && hoverSFX != null)
+        if (mainMenu != null)
         {
-            mainMenu.PlaySFX(hoverSFX);
+            mainMenu.PlayButtonHoverSFX(hoverSFX);
         }
     }
 
@@ -52,9 +52,9 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
     public void OnPointerDown(PointerEventData eventData)
     {
         targetScale = originalScale * clickScale;
-        if (mainMenu != null && clickSFX != null)
+        if (mainMenu != null)
         {
-            mainMenu.PlaySFX(clickSFX);
+            mainMenu.PlayButtonClickSFX(clickSFX);
         }
     }
 }

@@ -213,6 +213,17 @@ public class ChainEnemy : EnemyBase
             {
                 if (!enemy.IsDead)
                 {
+                    // Armored Ninja and its weak points are completely immune to explosion damage
+                    ArmoredNinja armoredNinja = collider.GetComponentInParent<ArmoredNinja>();
+                    if (armoredNinja != null || enemy is ArmoredNinja || enemy is ArmoredNinjaWeakPoint || collider.GetComponentInParent<ArmoredNinjaWeakPoint>() != null)
+                    {
+                        if (armoredNinja != null)
+                        {
+                            armoredNinja.OnExplosionHit(transform.position);
+                        }
+                        continue;
+                    }
+
                     enemy.OnDeath();
                 }
             }
