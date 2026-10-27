@@ -1,111 +1,230 @@
+using System.Collections;
 using UnityEngine;
-using UnityEngine.EventSystems;
 
-public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
+public class ChainEnemy : EnemyBase
 {
-    [Header("Chain Enemy Settings")]
-    [SerializeField] private float moveSpeed = 2.5f;
-    [SerializeField] private GameObject targetIndicator;
+    public static bool isExploding = false;
+
+    [Header("Suicide Aggression Settings")]
+    [SerializeField] private float aggroDistance = 4.5f;
+    [SerializeField] private float aggroSpeedMultiplier = 1.8f;
+
+    [Header("Target Fuse Settings")]
+    [SerializeField] private float targetFuseDuration = 2.0f;
+
+    [Header("Explosion Settings")]
+    [SerializeField] private float explosionDamage = 35f;
+    [SerializeField] private AudioClip explosionSound;
+    [SerializeField] private GameObject explosionPrefab;
     [SerializeField] private GameObject explosionRadiusPrefab;
     [SerializeField] private float explosionRadius = 5f;
-    private bool isDead = false;
-    private bool isTarget = false;
-    private Rigidbody2D rb;
-    private GameObject theObject;
-    private SpriteRenderer spriteRenderer;
-    private PlayerController playerController;
+    [SerializeField] private float explosionShakeDuration = 0.25f;
 
-    private void Awake()
+    private GameObject insExplosionRadius;
+    private Coroutine fuseCoroutine;
+    private bool isAggro;
+    private bool ownsExplodingLock;
+
+    protected override float CurrentMoveSpeed => isAggro ? moveSpeed * aggroSpeedMultiplier : moveSpeed;
+
+    protected override void Start()
     {
-        explosionRadius = explosionRadius / 2;
-        spriteRenderer = GetComponent<SpriteRenderer>();
-        playerController = FindFirstObjectByType<PlayerController>();
-        theObject = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
-        theObject.SetActive(false);
-        rb = GetComponent<Rigidbody2D>();
-    }
+        base.Start();
 
-    void Update()
-    {
-        if (isDead) return;
-        theObject.transform.position = transform.position;
-
-        if (PlayerCombat.Instance.isInMode && !isTarget)
+        if (explosionRadiusPrefab != null)
         {
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(true);
-            }
-        }
-        else if (!PlayerCombat.Instance.isInMode && !isTarget)
-        {
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(false);
-            }
-            theObject.SetActive(false);
-        }
-        else if (!PlayerCombat.Instance.isInMode && isTarget)
-        {
-            theObject.SetActive(false);
-        }
-
-        Movement();
-    }
-
-    public void OnPointerEnter(PointerEventData eventData)
-    {
-        if (PlayerCombat.Instance.isInMode && !isTarget)
-        {
-            spriteRenderer.color = Color.purple;
-            PlayerCombat.Instance.TargetSetup(transform);
-            isTarget = true;
-
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(false);
-            }
-            theObject.SetActive(true);
+            insExplosionRadius = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
+            insExplosionRadius.SetActive(false);
         }
     }
 
-    public void OnDeath()
+    protected override void Update()
     {
-        if (isDead) return;
-        isDead = true;
+        base.Update();
 
-        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, explosionRadius);
+        if (IsDead) return;
+
+        if (insExplosionRadius != null && insExplosionRadius.activeSelf)
+        {
+            insExplosionRadius.transform.position = transform.position;
+        }
+
+        if (playerController != null)
+        {
+            isAggro = Vector2.Distance(transform.position, playerController.transform.position) <= aggroDistance;
+        }
+    }
+
+    protected override void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (IsDead) return;
+
+        // If punted into a wall or another enemy after a Grapple Kick, detonate on impact!
+        if (HandleThrownImpact(collision))
+        {
+            return;
+        }
+
+        // Detonate immediately if Suicide Ninja collides with the Player (unless kicked away at high speed)
+        if (collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
+        {
+            if (player.TryExecuteGrappleKick(this))
+            {
+                if (fuseCoroutine == null)
+                {
+                    fuseCoroutine = StartCoroutine(TargetFuseCountdown());
+                }
+                return;
+            }
+
+            OnDeath();
+            return;
+        }
+
+        base.OnCollisionEnter2D(collision);
+    }
+
+    private void OnDestroy()
+    {
+        if (ownsExplodingLock)
+        {
+            isExploding = false;
+            ownsExplodingLock = false;
+        }
+
+        if (insExplosionRadius != null)
+        {
+            Destroy(insExplosionRadius);
+        }
+    }
+
+    public override void TrySelectTarget()
+    {
+        bool wasTarget = isTarget;
+        base.TrySelectTarget();
+
+        if (!wasTarget && isTarget && fuseCoroutine == null)
+        {
+            fuseCoroutine = StartCoroutine(TargetFuseCountdown());
+        }
+    }
+
+    private IEnumerator TargetFuseCountdown()
+    {
+        float timer = 0f;
+
+        while (timer < targetFuseDuration)
+        {
+            timer += Time.deltaTime;
+
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.color = (Mathf.Sin(timer * 20f) > 0) ? Color.red : Color.purple;
+            }
+
+            yield return null;
+        }
+
+        OnDeath();
+    }
+
+    public override void OnDeath(Vector2 deathImpulse = default)
+    {
+        if (IsDead) return;
+
+        if (fuseCoroutine != null)
+        {
+            StopCoroutine(fuseCoroutine);
+        }
+
+        StartCoroutine(ExplosionSequence());
+    }
+
+    private IEnumerator ExplosionSequence()
+    {
+        IsDead = true;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.UnregisterEnemy(gameObject);
+        }
+
+        while (isExploding)
+        {
+            yield return null;
+        }
+
+        isExploding = true;
+        ownsExplodingLock = true;
+
+        Vector3 origScale = transform.localScale;
+        float buildUpTime = 0.25f;
+        float elapsed = 0f;
+
+        while (elapsed < buildUpTime)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / buildUpTime;
+
+            transform.localScale = Vector3.Lerp(origScale, origScale * 1.35f, t);
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.color = (Mathf.Sin(elapsed * 35f) > 0) ? Color.red : Color.white;
+            }
+            yield return null;
+        }
+
+        // Trigger explosion SFX and camera shake before chain-reacting neighboring enemies
+        PlayerController targetPlayer = playerController != null ? playerController : PlayerController.Instance;
+        if (targetPlayer != null)
+        {
+            if (explosionSound != null)
+            {
+                targetPlayer.PlaySFX(explosionSound);
+            }
+
+            targetPlayer.TriggerCameraShake(explosionShakeDuration);
+        }
+
+        if (explosionPrefab != null)
+        {
+            GameObject fx = Instantiate(explosionPrefab, transform.position, Quaternion.identity);
+            Destroy(fx, 0.5f);
+        }
+
+        // Release lock before triggering chain-reaction deaths so chained ChainEnemies can immediately sequence
+        isExploding = false;
+        ownsExplodingLock = false;
+
+        // Execute Explosion Damage on both Player and neighboring Enemies
+        float effectiveRadius = explosionRadius * 0.5f;
+        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, effectiveRadius);
 
         foreach (Collider2D collider in withinRange)
         {
-            if (collider.gameObject == gameObject) continue;
+            if (collider == null || collider.gameObject == gameObject) continue;
 
-            if (collider.TryGetComponent<Enemy>(out Enemy enemy))
+            if (collider.TryGetComponent<PlayerController>(out PlayerController player))
             {
-                if (enemy != null)
+                player.TakeDamage(explosionDamage);
+
+                if (collider.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
+                {
+                    Vector2 pushDir = (player.transform.position - transform.position).normalized;
+                    if (pushDir == Vector2.zero) pushDir = Vector2.up;
+                    playerRb.AddForce(pushDir * 12f, ForceMode2D.Impulse);
+                }
+            }
+            else if (collider.TryGetComponent<EnemyBase>(out EnemyBase enemy))
+            {
+                if (!enemy.IsDead)
                 {
                     enemy.OnDeath();
                 }
             }
-            else if (collider.TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
-            {
-                if (chainEnemy != null)
-                {
-                    chainEnemy.OnDeath();
-                }
-            }
         }
 
-        theObject.SetActive(true);
-
-        Destroy(theObject, 0.5f);
+        Destroy(insExplosionRadius);
         Destroy(gameObject);
-    }
-
-    void Movement()
-    {
-        // Here
-        Vector2 dir = (playerController.gameObject.transform.position - gameObject.transform.position).normalized;
-        rb.AddForce(dir * moveSpeed);
     }
 }

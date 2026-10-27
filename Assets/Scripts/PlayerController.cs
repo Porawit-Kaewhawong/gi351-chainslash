@@ -1,142 +1,1868 @@
 using System.Collections;
-using System.Runtime.CompilerServices;
-using Unity.VectorGraphics;
+using System.Collections.Generic;
+using Unity.Cinemachine;
+using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
+[RequireComponent(typeof(Rigidbody2D), typeof(AudioSource))]
 public class PlayerController : MonoBehaviour
 {
+    public static PlayerController Instance { get; private set; }
+
+    [Header("Mouse Cursor Settings")]
+    [SerializeField] private Texture2D cursorTexture;
+    [SerializeField] private CursorMode cursorMode = CursorMode.Auto;
+
+    [Header("Player Health System Settings")]
+    [SerializeField] private float maxHealth = 100f;
+    [SerializeField] private float healthRegenDelay = 4f;            // Delay in seconds after taking a hit
+    [SerializeField] private float healthRegenTickInterval = 0.05f;    // Regeneration speed (+1 per tick)
+    [SerializeField] private Image healthBarImage;                  // Fill Image for Health
+    [SerializeField] private GameObject healthBackgroundObject;     // Background / Frame for Health UI
+    [SerializeField] private float healthFadeDuration = 0.25f;
+    [SerializeField] private Color damageFlashColor = new Color(1f, 0.2f, 0.2f, 1f);
+    [SerializeField] private float damageFlashDuration = 0.25f;
+    [SerializeField] private float damageShakeDuration = 0.15f;
+    [SerializeField] private AudioClip takeDamageSFX;
+
     [Header("Player Movement Settings")]
     [SerializeField] private float moveSpeed = 7.5f;
     [SerializeField] private float jumpHeight = 15f;
     [SerializeField] private Transform groundCheck;
     [SerializeField] private LayerMask groundLayer;
+    [SerializeField] private float coyoteTime = 0.12f;
+    [SerializeField] private float jumpBufferTime = 0.12f;
+    [SerializeField] private float airMomentumDecay = 8f;
+    [SerializeField] private List<AudioClip> walkSFXList = new List<AudioClip>();
+    [SerializeField] private float walkStepInterval = 0.28f;
+    [SerializeField] private AudioClip jumpSFX;
+    [SerializeField] private AudioClip doubleJumpSFX;
+
+    [Header("Wall Slide & Wall Jump Settings")]
+    [SerializeField] private bool enableWallMechanics = true;
+    [SerializeField] private float wallCheckDistance = 0.15f;
+    [SerializeField] private float wallSlideSpeed = 2.5f;
+    [SerializeField] private Vector2 wallJumpForce = new Vector2(11f, 14.5f);
+    [SerializeField] private float wallJumpInputLockTime = 0.15f;
+
+    [Header("Player Dashing Settings")]
+    [SerializeField] private float dashingPower = 15f;
+    [SerializeField] private float dashingTime = 0.2f;
+    [SerializeField] private float dashingCooldown = 1f;
+    [SerializeField] private AudioClip dashSFX;
+
+    [Header("Chain Slash Mode Settings")]
+    [SerializeField] private float maxMeter = 100f;
+    [SerializeField] private float timeSpeed = 0.25f;
+    [SerializeField] private float minPointDistance = 0.1f;
+    [SerializeField] private float slashDrawDuration = 0.18f;
+    [SerializeField] private float slashDisappearDuration = 0.3f;
+    [SerializeField] private AudioClip targetSelectSFX;
+    [SerializeField] private float targetSelectBasePitch = 0.95f;
+    [SerializeField] private float targetSelectPitchStep = 0.1f;
+    [SerializeField] private float targetSelectMaxPitch = 1.85f;
+    [SerializeField] private AudioClip postSlashSFX;
+    [SerializeField] private GameObject lineRendererObject;
+    [SerializeField] private GameObject mouseTrailPrefab;
+    [SerializeField] private CinemachineTargetGroup targetGroup;
+
+    [Header("Chain Slash Meter UI Settings")]
+    [SerializeField] private Image modeMeterImage;                 // Fill Image for Meter
+    [SerializeField] private GameObject modeMeterBarObject;          // Background / Frame for Meter UI
+    [SerializeField] private float meterFadeDuration = 0.25f;
+    [SerializeField] private NoiseSettings noiseSettings;
+
+    [Header("Slash Visuals & Juice")]
+    [SerializeField] private float hitstopDuration = 0.05f;
+    [SerializeField] private float jitterStrength = 0.1f;
+    [SerializeField] private GameObject slashImpactPrefab;
+    [SerializeField] private GameObject slashPathParticlePrefab;
+    [SerializeField] private Gradient drawGradient;
+    [SerializeField] private Gradient flashGradient;
+    [SerializeField] private Gradient dissolveGradient;
+
+    [Header("Grappling Hook Settings")]
+    [SerializeField] private float maxGrappleRange = 12f;
+    [SerializeField] private float grappleSpeed = 35f;
+    [SerializeField] private float pullForce = 25f;
+    [SerializeField] private float swingForce = 15f;
+    [SerializeField] private float releaseBoost = 1.3f;
+    [SerializeField] private float minDistance = 0.75f;
+    [SerializeField] private LayerMask grappleLayer;
+
+    [Header("Grapple Combat & Kick Settings")]
+    [SerializeField] private float grappleKickSpeedThreshold = 11f;
+    [SerializeField] private float grappleKickKnockback = 22f;
+    [SerializeField] private float grappleKickBounceForce = 12.5f;
+
+    [Header("Grappling Visual & Polish")]
+    [SerializeField] private int ropeSegments = 20;
+    [SerializeField] private float waveFrequency = 12f;
+    [SerializeField] private float waveAmplitude = 0.6f;
+    [SerializeField] private AudioClip grappleReleaseSFX;
+    [SerializeField] private AudioClip grappleHitSFX;
+    [SerializeField] private GameObject grappleImpactPrefab;
+    [SerializeField] private GameObject grappleTargetIndicatorPrefab; // Optional custom target indicator prefab
+    [SerializeField] private float grappleIndicatorOrbitRadius = 1.8f;  // Orbit distance outside the player
+
+    [Header("Audio Settings")]
+    [SerializeField] private int maxSoundPlaying = 3;
+
+    // Movement state
     private bool doubleJump;
+    private bool canDash = true;
+    private bool isDashing;
     private Vector2 inputValue;
+    private float coyoteTimeCounter;
+    private float jumpBufferCounter;
+    private bool isWallSliding;
+    private int wallDirection;
+    private float wallJumpLockCounter;
+    private float lastGrappleKickTime;
+    private float walkStepTimer;
+    private int lastWalkSFXIndex = -1;
+
+    // Health state
+    public float CurrentHealth { get; private set; }
+
+    // Combat state
+    public bool IsInMode { get; private set; }
+    public bool IsGrappling { get; private set; }
+    private bool isThrowingHook = false;
+    private bool isFocusing = false;
+    private float currentMeter;
+    private float defaultFixedDeltaTime;
+    private List<Vector3> drawnLinePoints = new List<Vector3>();
+
+    // Grapple state
+    private Vector2 grappleAnchorPoint;
+    private Transform grappleTargetTransform;
+    private Vector2 currentHookTip;
+    private GameObject insGrappleTargetIndicator;
+
+    // Cinemachine Noise caching
+    private float orgAmplitudeGain;
+    private float orgFrequencyGain;
+    private NoiseSettings orgNoiseSettings;
+    private float shakeRemainingTime;
+
+    // Active Coroutines
+    private Coroutine activeMeterCoroutine;
+    private Coroutine activeMeterFadeCoroutine;
+    private Coroutine activeHealthRegenCoroutine;
+    private Coroutine activeHealthFadeCoroutine;
+    private Coroutine activeGrapplingCoroutine;
+    private Coroutine activeShakeCoroutine;
+    private Coroutine activeDamageFlashCoroutine;
+
+    // Damage visual caching
+    private Color originalSpriteColor = Color.white;
+    private Color originalHealthBarColor = Color.white;
+
+    // Instantiated Objects
+    private GameObject insLineRendererObj;
+    private LineRenderer insLineRendererCom;
+    private GameObject insMouseTrail;
+
+    // Input Actions
     private InputAction moveAction;
     private InputAction jumpAction;
     private InputAction dashAction;
+    private InputAction attackAction;
+    private InputAction grappleAction;
+
+    // Cached Components
     private Rigidbody2D rb;
-
-    [Header("Player Dashing Settings")]
-    [SerializeField] private float dashingPower = 15;
-    [SerializeField] private float dashingTime = 0.2f;
-    [SerializeField] private float dashingCooldown = 1f;
-    private bool canDash = true;
-    private bool isDashing;
-    private TrailRenderer trailRenderer;
-
-    [Header("Player Visual Settings")]
-    private SpriteRenderer spriteRenderer;
+    private Collider2D playerCollider;
     private AudioSource audioSource;
+    private AudioSource pitchedAudioSource;
+    private AudioSource shimmerAudioSource;
+    private TrailRenderer trailRenderer;
+    private SpriteRenderer spriteRenderer;
+    private Animator animator;
+    private SpringJoint2D springJoint;
+    private LineRenderer grappleLine;
+    private CinemachineCamera cinemachineCamera;
+    private CinemachineBasicMultiChannelPerlin perlin;
 
-    void Start()
+    private int soundPlaying;
+    private List<CanvasGroup> meterCanvasGroups = new List<CanvasGroup>();
+    private List<CanvasGroup> healthCanvasGroups = new List<CanvasGroup>();
+
+    private void Awake()
     {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+
         rb = GetComponent<Rigidbody2D>();
+        playerCollider = GetComponent<Collider2D>();
+        if (playerCollider == null) playerCollider = GetComponentInChildren<Collider2D>();
         audioSource = GetComponent<AudioSource>();
+
+        // Secondary audio sources for pitch-modulated SFX (footsteps, jumps, and combo target locks)
+        pitchedAudioSource = gameObject.AddComponent<AudioSource>();
+        shimmerAudioSource = gameObject.AddComponent<AudioSource>();
+        if (audioSource != null)
+        {
+            pitchedAudioSource.outputAudioMixerGroup = audioSource.outputAudioMixerGroup;
+            pitchedAudioSource.spatialBlend = audioSource.spatialBlend;
+            pitchedAudioSource.volume = audioSource.volume;
+            pitchedAudioSource.playOnAwake = false;
+
+            shimmerAudioSource.outputAudioMixerGroup = audioSource.outputAudioMixerGroup;
+            shimmerAudioSource.spatialBlend = audioSource.spatialBlend;
+            shimmerAudioSource.volume = audioSource.volume;
+            shimmerAudioSource.playOnAwake = false;
+        }
+
         trailRenderer = GetComponent<TrailRenderer>();
-        spriteRenderer = GetComponent<SpriteRenderer>();
+        spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+        if (spriteRenderer != null)
+        {
+            originalSpriteColor = spriteRenderer.color;
+        }
+        animator = GetComponentInChildren<Animator>();
+        springJoint = GetComponent<SpringJoint2D>();
+        grappleLine = GetComponent<LineRenderer>();
+
+        cinemachineCamera = FindAnyObjectByType<CinemachineCamera>();
+        if (cinemachineCamera != null)
+        {
+            perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
+            if (perlin != null)
+            {
+                orgNoiseSettings = perlin.NoiseProfile;
+                orgAmplitudeGain = perlin.AmplitudeGain;
+                orgFrequencyGain = perlin.FrequencyGain;
+            }
+        }
+
         moveAction = InputSystem.actions.FindAction("Move");
         jumpAction = InputSystem.actions.FindAction("Jump");
         dashAction = InputSystem.actions.FindAction("Dash");
-    }        
+        attackAction = InputSystem.actions.FindAction("Attack");
+        grappleAction = InputSystem.actions.FindAction("Grapple");
+    }
 
-    void Update()
+    private void Start()
     {
-        if (Keyboard.current.rKey.isPressed)
+        defaultFixedDeltaTime = Time.fixedDeltaTime;
+        currentMeter = maxMeter;
+        CurrentHealth = maxHealth;
+
+        if (cursorTexture != null)
         {
-            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+            Cursor.SetCursor(cursorTexture, Vector2.zero, cursorMode);
         }
 
-        if (isDashing)
+        SetupMeterUI();
+        SetupHealthUI();
+        SetupGrappleIndicator();
+    }
+
+    private void Update()
+    {
+        if (Keyboard.current != null && Keyboard.current.rKey.isPressed)
         {
+            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+            ChainEnemy.isExploding = false;
+        }
+
+        RecordDrawnLinePoints();
+        UpdateMouseTrail();
+        UpdateGrappleIndicator();
+
+        if (wallJumpLockCounter > 0f)
+        {
+            wallJumpLockCounter -= Time.deltaTime;
+        }
+
+        if (isDashing) return;
+
+        bool grounded = IsGrounded();
+        if (grounded)
+        {
+            coyoteTimeCounter = coyoteTime;
+            doubleJump = true;
+            isWallSliding = false;
+            if (rb.linearVelocityY <= 0.25f && animator != null)
+            {
+                animator.SetBool("isJump", false);
+            }
+        }
+        else
+        {
+            coyoteTimeCounter -= Time.deltaTime;
+        }
+
+        UpdateWallSlideState(grounded);
+        HandleFootsteps(grounded);
+        HandleJumpInput();
+
+        if (dashAction != null && dashAction.triggered && canDash)
+        {
+            StartCoroutine(DashRoutine());
+        }
+
+        HandleCombatInput();
+        HandleGrappleInput();
+        Flip();
+    }
+
+    private void FixedUpdate()
+    {
+        if (isDashing) return;
+
+        if (moveAction != null)
+        {
+            inputValue = moveAction.ReadValue<Vector2>();
+
+            if (IsGrappling && springJoint != null && springJoint.enabled)
+            {
+                Vector2 ropeDir = (grappleAnchorPoint - (Vector2)transform.position).normalized;
+                // Right-handed perpendicular so pressing Right (+x) swings Right when hanging below an anchor
+                Vector2 perpendicular = new Vector2(ropeDir.y, -ropeDir.x);
+                if (perpendicular.x < 0f) perpendicular = -perpendicular;
+
+                Vector2 steerForce = (perpendicular * inputValue.x + inputValue * 0.5f) * swingForce;
+                rb.AddForce(steerForce, ForceMode2D.Force);
+            }
+            else if (wallJumpLockCounter <= 0f)
+            {
+                float targetSpeedX = inputValue.x * moveSpeed;
+                float currentSpeedX = rb.linearVelocityX;
+
+                // Preserve high-speed airborne momentum from grapple releases, dashes, or wall kicks
+                if (!IsGrounded() && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Sign(inputValue.x) == Mathf.Sign(currentSpeedX) && Mathf.Abs(inputValue.x) > 0.05f)
+                {
+                    float decayedX = Mathf.MoveTowards(currentSpeedX, targetSpeedX, airMomentumDecay * Time.fixedDeltaTime);
+                    rb.linearVelocity = new Vector2(decayedX, rb.linearVelocityY);
+                }
+                else if (!IsGrounded() && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Abs(inputValue.x) <= 0.05f)
+                {
+                    float coastX = Mathf.MoveTowards(currentSpeedX, 0f, airMomentumDecay * 0.75f * Time.fixedDeltaTime);
+                    rb.linearVelocity = new Vector2(coastX, rb.linearVelocityY);
+                }
+                else
+                {
+                    rb.linearVelocity = new Vector2(targetSpeedX, rb.linearVelocityY);
+                }
+
+                if (isWallSliding && rb.linearVelocityY < -wallSlideSpeed)
+                {
+                    rb.linearVelocity = new Vector2(rb.linearVelocityX, -wallSlideSpeed);
+                }
+
+                if (animator != null)
+                {
+                    animator.SetBool("isRunning", Mathf.Abs(rb.linearVelocityX) > 0.05f);
+                }
+            }
+        }
+    }
+
+    private void LateUpdate()
+    {
+        soundPlaying = 0;
+    }
+
+    #region Health System Logic
+
+    private void SetupHealthUI()
+    {
+        healthCanvasGroups.Clear();
+
+        if (healthBackgroundObject != null)
+        {
+            CanvasGroup cg = healthBackgroundObject.GetComponent<CanvasGroup>();
+            if (cg == null) cg = healthBackgroundObject.AddComponent<CanvasGroup>();
+            if (!healthCanvasGroups.Contains(cg)) healthCanvasGroups.Add(cg);
+        }
+
+        if (healthBarImage != null)
+        {
+            CanvasGroup cg = healthBarImage.GetComponent<CanvasGroup>();
+            if (cg == null) cg = healthBarImage.gameObject.AddComponent<CanvasGroup>();
+            if (!healthCanvasGroups.Contains(cg)) healthCanvasGroups.Add(cg);
+
+            originalHealthBarColor = healthBarImage.color;
+            healthBarImage.fillAmount = CurrentHealth / maxHealth;
+        }
+
+        SetHealthAlpha(0f); // Hidden when health is full
+    }
+
+    private void SetHealthAlpha(float alpha)
+    {
+        foreach (CanvasGroup cg in healthCanvasGroups)
+        {
+            if (cg != null) cg.alpha = alpha;
+        }
+    }
+
+    public void TakeDamage(float amount)
+    {
+        if (CurrentHealth <= 0f) return;
+
+        CurrentHealth = Mathf.Clamp(CurrentHealth - amount, 0f, maxHealth);
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.fillAmount = CurrentHealth / maxHealth;
+        }
+
+        PlaySFX(takeDamageSFX);
+        TriggerDamageFeedback();
+        ShowHealthBar();
+
+        if (CurrentHealth <= 0f)
+        {
+            Die();
             return;
         }
 
-        if (IsGrounded())
+        if (activeHealthRegenCoroutine != null) StopCoroutine(activeHealthRegenCoroutine);
+        activeHealthRegenCoroutine = StartCoroutine(HealthRegenRoutine());
+    }
+
+    private void TriggerDamageFeedback()
+    {
+        if (activeDamageFlashCoroutine != null) StopCoroutine(activeDamageFlashCoroutine);
+        activeDamageFlashCoroutine = StartCoroutine(DamageFlashRoutine());
+
+        TriggerCameraShake(damageShakeDuration);
+    }
+
+    private IEnumerator DamageFlashRoutine()
+    {
+        if (spriteRenderer != null)
         {
-            doubleJump = true;
+            spriteRenderer.color = damageFlashColor;
         }
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = damageFlashColor;
+        }
+
+        yield return new WaitForSecondsRealtime(damageFlashDuration);
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+        }
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = originalHealthBarColor;
+        }
+
+        activeDamageFlashCoroutine = null;
+    }
+
+    private IEnumerator HealthRegenRoutine()
+    {
+        yield return new WaitForSeconds(healthRegenDelay);
+
+        while (CurrentHealth < maxHealth)
+        {
+            CurrentHealth = Mathf.Clamp(CurrentHealth + 1f, 0f, maxHealth);
+
+            if (healthBarImage != null)
+            {
+                healthBarImage.fillAmount = CurrentHealth / maxHealth;
+            }
+
+            yield return new WaitForSeconds(healthRegenTickInterval);
+        }
+
+        HideHealthBarWithPulse();
+        activeHealthRegenCoroutine = null;
+    }
+
+    private void ShowHealthBar()
+    {
+        if (activeHealthFadeCoroutine != null) StopCoroutine(activeHealthFadeCoroutine);
+        activeHealthFadeCoroutine = StartCoroutine(FadeHealthBar(1f, false));
+    }
+
+    private void HideHealthBarWithPulse()
+    {
+        if (activeHealthFadeCoroutine != null) StopCoroutine(activeHealthFadeCoroutine);
+        activeHealthFadeCoroutine = StartCoroutine(FadeHealthBar(0f, true));
+    }
+
+    private IEnumerator FadeHealthBar(float targetAlpha, bool pulseOnFull)
+    {
+        if (healthCanvasGroups.Count == 0) yield break;
+
+        if (pulseOnFull)
+        {
+            float pulseTimer = 0f;
+            float pulseDuration = 0.15f;
+            while (pulseTimer < pulseDuration)
+            {
+                pulseTimer += Time.deltaTime;
+                float scale = Mathf.Lerp(1f, 1.15f, Mathf.Sin((pulseTimer / pulseDuration) * Mathf.PI));
+
+                foreach (CanvasGroup cg in healthCanvasGroups)
+                {
+                    if (cg != null) cg.transform.localScale = Vector3.one * scale;
+                }
+                yield return null;
+            }
+
+            foreach (CanvasGroup cg in healthCanvasGroups)
+            {
+                if (cg != null) cg.transform.localScale = Vector3.one;
+            }
+        }
+
+        float startAlpha = healthCanvasGroups.Count > 0 && healthCanvasGroups[0] != null ? healthCanvasGroups[0].alpha : 0f;
+        float timer = 0f;
+
+        while (timer < healthFadeDuration)
+        {
+            timer += Time.deltaTime;
+            float currentAlpha = Mathf.Lerp(startAlpha, targetAlpha, timer / healthFadeDuration);
+            SetHealthAlpha(currentAlpha);
+            yield return null;
+        }
+
+        SetHealthAlpha(targetAlpha);
+    }
+
+    private void Die()
+    {
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        ChainEnemy.isExploding = false;
+    }
+
+    #endregion
+
+    #region Movement & Jump Logic
+
+    private void UpdateWallSlideState(bool grounded)
+    {
+        if (!enableWallMechanics || grounded || IsGrappling || wallJumpLockCounter > 0f)
+        {
+            isWallSliding = false;
+            return;
+        }
+
+        int detectedWall = GetTouchingWallDirection();
+        if (detectedWall != 0 && rb.linearVelocityY <= 0.1f)
+        {
+            bool pressingTowardsWall = Mathf.Abs(inputValue.x) > 0.1f && Mathf.Sign(inputValue.x) == detectedWall;
+            if (pressingTowardsWall || isWallSliding)
+            {
+                isWallSliding = true;
+                wallDirection = detectedWall;
+                doubleJump = true;
+                return;
+            }
+        }
+
+        isWallSliding = false;
+    }
+
+    private int GetTouchingWallDirection()
+    {
+        Bounds bounds = playerCollider != null ? playerCollider.bounds : new Bounds(transform.position, new Vector3(0.8f, 1.2f, 0f));
+        Vector2 boxSize = new Vector2(0.05f, bounds.size.y * 0.7f);
+
+        Vector2 rightOrigin = new Vector2(bounds.max.x, bounds.center.y);
+        if (Physics2D.OverlapBox(rightOrigin + Vector2.right * (wallCheckDistance * 0.5f), boxSize, 0f, groundLayer))
+        {
+            return 1;
+        }
+
+        Vector2 leftOrigin = new Vector2(bounds.min.x, bounds.center.y);
+        if (Physics2D.OverlapBox(leftOrigin + Vector2.left * (wallCheckDistance * 0.5f), boxSize, 0f, groundLayer))
+        {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    private void HandleFootsteps(bool grounded)
+    {
+        if (grounded && !isDashing && !IsGrappling && Mathf.Abs(inputValue.x) > 0.1f && Mathf.Abs(rb.linearVelocityX) > 0.2f)
+        {
+            walkStepTimer -= Time.deltaTime;
+            if (walkStepTimer <= 0f)
+            {
+                walkStepTimer = walkStepInterval;
+                AudioClip stepClip = GetRandomWalkSFX();
+                if (stepClip != null)
+                {
+                    PlayPitchedSFX(stepClip, Random.Range(0.92f, 1.08f), 0.75f);
+                }
+            }
+        }
+        else
+        {
+            walkStepTimer = 0.05f;
+        }
+    }
+
+    private AudioClip GetRandomWalkSFX()
+    {
+        if (walkSFXList == null || walkSFXList.Count == 0) return null;
+        if (walkSFXList.Count == 1) return walkSFXList[0];
+
+        int index = Random.Range(0, walkSFXList.Count);
+        if (index == lastWalkSFXIndex)
+        {
+            index = (index + 1) % walkSFXList.Count;
+        }
+        lastWalkSFXIndex = index;
+        return walkSFXList[index];
+    }
+
+    private void HandleJumpInput()
+    {
+        if (jumpAction == null) return;
 
         if (jumpAction.WasPressedThisFrame())
         {
-            if (IsGrounded())
+            jumpBufferCounter = jumpBufferTime;
+        }
+        else
+        {
+            jumpBufferCounter -= Time.deltaTime;
+        }
+
+        if (jumpBufferCounter > 0f)
+        {
+            if (IsGrappling)
+            {
+                Vector2 currentVel = rb.linearVelocity;
+                Vector2 ropeDir = (grappleAnchorPoint - (Vector2)transform.position).normalized;
+                Vector2 baseDir = currentVel.sqrMagnitude > 0.25f ? currentVel.normalized : ropeDir;
+
+                // Allow player to direct the grapple jump boost using movement keys (WASD / Stick)
+                Vector2 boostDir;
+                if (inputValue.sqrMagnitude > 0.05f)
+                {
+                    boostDir = (inputValue.normalized * 0.7f + baseDir * 0.3f + Vector2.up * 0.45f).normalized;
+                }
+                else
+                {
+                    boostDir = (baseDir + Vector2.up * 0.55f).normalized;
+                }
+
+                float launchSpeed = Mathf.Max(currentVel.magnitude * releaseBoost, jumpHeight * releaseBoost);
+                DetachGrappling();
+                rb.linearVelocity = boostDir * launchSpeed;
+                doubleJump = true;
+                jumpBufferCounter = 0f;
+                coyoteTimeCounter = 0f;
+                PlayPitchedSFX(jumpSFX, 1.08f, 1f);
+                if (animator != null) animator.SetBool("isJump", true);
+                return;
+            }
+
+            if (coyoteTimeCounter > 0f)
             {
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
+                coyoteTimeCounter = 0f;
+                jumpBufferCounter = 0f;
+                PlayPitchedSFX(jumpSFX, Random.Range(0.96f, 1.04f), 1f);
+                if (animator != null) animator.SetBool("isJump", true);
+                return;
             }
-            else if (doubleJump)
+
+            if (enableWallMechanics && isWallSliding)
+            {
+                int kickDir = -wallDirection;
+                rb.linearVelocity = new Vector2(kickDir * wallJumpForce.x, wallJumpForce.y);
+                wallJumpLockCounter = wallJumpInputLockTime;
+                isWallSliding = false;
+                doubleJump = true;
+                jumpBufferCounter = 0f;
+                PlayPitchedSFX(jumpSFX, 1.06f, 1f);
+
+                if (spriteRenderer != null)
+                {
+                    spriteRenderer.flipX = kickDir < 0;
+                }
+                if (animator != null) animator.SetBool("isJump", true);
+                return;
+            }
+
+            if (jumpAction.WasPressedThisFrame() && doubleJump)
             {
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
                 doubleJump = false;
+                jumpBufferCounter = 0f;
+                AudioClip clipToPlay = doubleJumpSFX != null ? doubleJumpSFX : jumpSFX;
+                float pitchToPlay = doubleJumpSFX != null ? Random.Range(0.96f, 1.05f) : 1.15f;
+                PlayPitchedSFX(clipToPlay, pitchToPlay, 1f);
+                if (animator != null) animator.SetBool("isJump", true);
+                return;
             }
         }
 
         if (jumpAction.WasReleasedThisFrame() && rb.linearVelocityY > 0f)
         {
             rb.linearVelocity = new Vector2(rb.linearVelocityX, rb.linearVelocityY * 0.5f);
+            if (animator != null) animator.SetBool("isJump", true);
         }
-
-        if (dashAction.triggered && canDash)
-        {
-            StartCoroutine(Dash());
-        }
-
-        Flip();
-    }
-
-    void FixedUpdate()
-    {
-        if (isDashing)
-        {
-            return;
-        }
-
-        inputValue = moveAction.ReadValue<Vector2>();
-        rb.linearVelocity = new Vector2(inputValue.x * moveSpeed, rb.linearVelocityY);
     }
 
     private bool IsGrounded()
     {
+        if (groundCheck == null) return false;
         return Physics2D.OverlapCircle(groundCheck.position, 0.2f, groundLayer);
     }
 
-    private void Flip()
-    {
-        if (inputValue.x < 0f)
-        {
-            spriteRenderer.flipX = true;
-        }
-        else if (inputValue.x > 0f)
-        {
-            spriteRenderer.flipX = false;
-        }
-    }
-
-    private IEnumerator Dash()
+    private IEnumerator DashRoutine()
     {
         canDash = false;
         isDashing = true;
+        isWallSliding = false;
+
+        if (IsGrappling)
+        {
+            DetachGrappling();
+        }
+
+        PlaySFX(dashSFX);
+        if (animator != null) animator.SetBool("isDash", true);
 
         float originalGravity = rb.gravityScale;
         rb.gravityScale = 0f;
 
-        int dashDirection = spriteRenderer.flipX ? -1 : 1;
-        rb.linearVelocity = new Vector2(dashDirection * dashingPower, 0f);
-        trailRenderer.emitting = true;
+        int dashDirection = Mathf.Abs(inputValue.x) > 0.1f
+            ? (inputValue.x < 0f ? -1 : 1)
+            : (spriteRenderer != null && spriteRenderer.flipX ? -1 : 1);
+
+        // Preserve momentum if dashing out of a faster grapple swing
+        float currentHorizontalSpeed = Mathf.Sign(rb.linearVelocityX) == dashDirection ? Mathf.Abs(rb.linearVelocityX) : 0f;
+        float finalDashSpeed = Mathf.Max(dashingPower, currentHorizontalSpeed);
+
+        rb.linearVelocity = new Vector2(dashDirection * finalDashSpeed, 0f);
+
+        if (trailRenderer != null) trailRenderer.emitting = true;
 
         yield return new WaitForSeconds(dashingTime);
-        trailRenderer.emitting = false;
+
+        if (trailRenderer != null) trailRenderer.emitting = false;
         rb.gravityScale = originalGravity;
         isDashing = false;
+
+        if (animator != null) animator.SetBool("isDash", false);
 
         yield return new WaitForSeconds(dashingCooldown);
         canDash = true;
     }
 
+    private void Flip()
+    {
+        if (wallJumpLockCounter > 0f || spriteRenderer == null) return;
+
+        if (isWallSliding)
+        {
+            spriteRenderer.flipX = wallDirection > 0;
+            return;
+        }
+
+        if (inputValue.x < 0f) spriteRenderer.flipX = true;
+        else if (inputValue.x > 0f) spriteRenderer.flipX = false;
+    }
+
+    #endregion
+
+    #region Chain Slash Mode Logic
+
+    private void HandleCombatInput()
+    {
+        if (attackAction == null) return;
+
+        if (attackAction.IsPressed() && currentMeter <= 0)
+        {
+            ExitChainSlashMode();
+            return;
+        }
+
+        if (attackAction.IsPressed())
+        {
+            if (isFocusing) return;
+            if (!IsInMode) EnterChainSlashMode();
+        }
+        else
+        {
+            if (IsInMode) ExitChainSlashMode();
+        }
+    }
+
+    private void EnterChainSlashMode()
+    {
+        IsInMode = true;
+
+        Time.timeScale = timeSpeed;
+        Time.fixedDeltaTime = defaultFixedDeltaTime * Time.timeScale;
+
+        drawnLinePoints.Clear();
+        Vector3 startMousePos = GetMouseWorldPosition();
+        drawnLinePoints.Add(startMousePos);
+
+        if (lineRendererObject != null)
+        {
+            insLineRendererObj = Instantiate(lineRendererObject);
+            insLineRendererCom = insLineRendererObj.GetComponent<LineRenderer>();
+            if (insLineRendererCom != null)
+            {
+                insLineRendererCom.positionCount = 1;
+                insLineRendererCom.SetPosition(0, startMousePos);
+                if (drawGradient.colorKeys.Length > 0) insLineRendererCom.colorGradient = drawGradient;
+            }
+        }
+
+        if (mouseTrailPrefab != null && Camera.main != null && Mouse.current != null)
+        {
+            insMouseTrail = Instantiate(mouseTrailPrefab, startMousePos, Quaternion.identity);
+        }
+
+        ShowMeterBar();
+
+        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+        activeMeterCoroutine = StartCoroutine(MeterDegeneration(1f, 0.005f));
+    }
+
+    private void ExitChainSlashMode()
+    {
+        IsInMode = false;
+
+        if (targetGroup != null && targetGroup.Targets.Count > 1)
+        {
+            targetGroup.Targets[1].Object = null;
+        }
+
+        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+
+        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+
+        if (insLineRendererObj != null)
+        {
+            LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
+            if (lineRendererManager != null && insLineRendererCom != null)
+            {
+                lineRendererManager.activeCoroutine = StartCoroutine(AnimateKillLine(insLineRendererCom));
+            }
+        }
+
+        if (insMouseTrail != null)
+        {
+            if (insMouseTrail.TryGetComponent<TrailRenderer>(out TrailRenderer trail))
+            {
+                trail.emitting = false;
+                Destroy(insMouseTrail, trail.time);
+            }
+            else
+            {
+                Destroy(insMouseTrail);
+            }
+            insMouseTrail = null;
+        }
+
+        attackAction.Disable();
+        attackAction.Enable();
+
+        insLineRendererCom = null;
+        insLineRendererObj = null;
+
+        Time.timeScale = 1.0f;
+        Time.fixedDeltaTime = defaultFixedDeltaTime;
+    }
+
+    private void RecordDrawnLinePoints()
+    {
+        if (!IsInMode || insLineRendererCom == null) return;
+
+        Vector3 currentMousePos = GetMouseWorldPosition();
+
+        if (drawnLinePoints.Count == 0 || Vector3.Distance(drawnLinePoints[drawnLinePoints.Count - 1], currentMousePos) >= minPointDistance)
+        {
+            drawnLinePoints.Add(currentMousePos);
+            insLineRendererCom.positionCount = drawnLinePoints.Count;
+            insLineRendererCom.SetPositions(drawnLinePoints.ToArray());
+        }
+    }
+
+    private void UpdateMouseTrail()
+    {
+        if (IsInMode && insMouseTrail != null)
+        {
+            insMouseTrail.transform.position = GetMouseWorldPosition();
+        }
+    }
+
+    private Vector3 GetMouseWorldPosition()
+    {
+        if (Camera.main == null || Mouse.current == null) return Vector3.zero;
+
+        Vector3 mouseScreenPos = Mouse.current.position.ReadValue();
+        mouseScreenPos.z = -Camera.main.transform.position.z;
+        Vector3 worldPos = Camera.main.ScreenToWorldPoint(mouseScreenPos);
+        worldPos.z = 0f;
+        return worldPos;
+    }
+
+    public void TargetSetup(Transform enemyPos)
+    {
+        if (insLineRendererObj == null) return;
+
+        if (targetGroup != null && targetGroup.Targets.Count > 1)
+        {
+            targetGroup.Targets[1].Object = enemyPos;
+        }
+
+        LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
+        if (lineRendererManager == null) return;
+
+        if (!lineRendererManager.targets.Contains(enemyPos.gameObject))
+        {
+            lineRendererManager.targets.Add(enemyPos.gameObject);
+            currentMeter = Mathf.Clamp(currentMeter - (maxMeter / 40f), 0f, maxMeter);
+            if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
+
+            int comboIndex = lineRendererManager.targets.Count - 1;
+            PlayJuicyTargetSelectSFX(comboIndex);
+            StartCoroutine(PunchTargetScaleRoutine(enemyPos));
+        }
+    }
+
+    private IEnumerator PunchTargetScaleRoutine(Transform targetTransform)
+    {
+        if (targetTransform == null) yield break;
+
+        Vector3 baseScale = targetTransform.localScale;
+        float duration = 0.08f;
+        float elapsed = 0f;
+
+        while (elapsed < duration && targetTransform != null)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = elapsed / duration;
+            float scaleFactor = Mathf.Lerp(1f, 1.25f, Mathf.Sin(t * Mathf.PI));
+            targetTransform.localScale = baseScale * scaleFactor;
+            yield return null;
+        }
+
+        if (targetTransform != null)
+        {
+            targetTransform.localScale = baseScale;
+        }
+    }
+
+    public IEnumerator AnimateKillLine(LineRenderer lineRenderer)
+    {
+        if (lineRenderer == null) yield break;
+
+        LineRendererManager lineRendererManager = lineRenderer.GetComponent<LineRendererManager>();
+        if (lineRendererManager == null || lineRendererManager.targets.Count == 0)
+        {
+            Destroy(lineRenderer.gameObject);
+            yield break;
+        }
+
+        int pointCount = lineRenderer.positionCount;
+        if (pointCount < 2)
+        {
+            Destroy(lineRendererManager.gameObject);
+            yield break;
+        }
+
+        Vector3[] origPoints = new Vector3[pointCount];
+        lineRenderer.GetPositions(origPoints);
+
+        float totalLength = 0f;
+        float[] segmentLengths = new float[pointCount - 1];
+        for (int i = 0; i < pointCount - 1; i++)
+        {
+            segmentLengths[i] = Vector3.Distance(origPoints[i], origPoints[i + 1]);
+            totalLength += segmentLengths[i];
+        }
+
+        lineRenderer.enabled = true;
+
+        if (drawGradient.colorKeys.Length > 0) lineRenderer.colorGradient = drawGradient;
+
+        float drawTimer = 0f;
+        List<Vector3> drawPoints = new List<Vector3>();
+
+        while (drawTimer < slashDrawDuration)
+        {
+            drawTimer += Time.deltaTime;
+            float linearT = Mathf.Clamp01(drawTimer / slashDrawDuration);
+
+            float progress = linearT == 1f ? 1f : 1f - Mathf.Pow(2f, -10f * linearT);
+            float currentDrawDist = progress * totalLength;
+
+            drawPoints.Clear();
+            drawPoints.Add(origPoints[0]);
+
+            float accumulated = 0f;
+            for (int i = 0; i < pointCount - 1; i++)
+            {
+                float segLen = segmentLengths[i];
+                if (accumulated + segLen <= currentDrawDist)
+                {
+                    drawPoints.Add(origPoints[i + 1]);
+                    accumulated += segLen;
+                }
+                else
+                {
+                    float segProgress = segLen > 0f ? (currentDrawDist - accumulated) / segLen : 0f;
+                    Vector3 endPt = Vector3.Lerp(origPoints[i], origPoints[i + 1], segProgress);
+                    drawPoints.Add(endPt);
+
+                    if (slashPathParticlePrefab != null && Random.value > 0.5f)
+                    {
+                        Instantiate(slashPathParticlePrefab, endPt, Quaternion.identity);
+                    }
+                    break;
+                }
+            }
+
+            if (drawPoints.Count >= 2)
+            {
+                lineRenderer.positionCount = drawPoints.Count;
+                lineRenderer.SetPositions(drawPoints.ToArray());
+            }
+
+            yield return null;
+        }
+
+        lineRenderer.positionCount = pointCount;
+        lineRenderer.SetPositions(origPoints);
+
+        if (hitstopDuration > 0f)
+        {
+            Time.timeScale = 0f;
+            yield return new WaitForSecondsRealtime(hitstopDuration);
+            Time.timeScale = 1f;
+        }
+
+        Vector2 slashVector = (origPoints[origPoints.Length - 1] - origPoints[0]).normalized;
+
+        for (int i = 0; i < lineRendererManager.targets.Count; i++)
+        {
+            GameObject targetObj = lineRendererManager.targets[i];
+            if (targetObj == null) continue;
+
+            if (slashImpactPrefab != null)
+            {
+                Instantiate(slashImpactPrefab, targetObj.transform.position, Quaternion.identity);
+            }
+
+            ChainEnemy chainEnemy = targetObj.GetComponentInParent<ChainEnemy>();
+            if (chainEnemy != null)
+            {
+                if (!chainEnemy.IsDead)
+                {
+                    chainEnemy.OnDeath(slashVector);
+                }
+                continue;
+            }
+
+            EnemyBase enemy = targetObj.GetComponentInParent<EnemyBase>();
+            if (enemy != null)
+            {
+                if (!enemy.IsDead)
+                {
+                    enemy.OnDeath(slashVector);
+                }
+            }
+        }
+
+        PlaySFX(postSlashSFX);
+
+        if (flashGradient.colorKeys.Length > 0) lineRenderer.colorGradient = flashGradient;
+
+        float orgWidth = lineRenderer.widthMultiplier;
+        float flashDuration = 0.18f;
+        float timer = 0f;
+        Vector3[] jitteredPoints = new Vector3[pointCount];
+
+        while (timer < flashDuration)
+        {
+            timer += Time.deltaTime;
+            float t = timer / flashDuration;
+            float pulseFactor = Mathf.Sin(t * Mathf.PI);
+
+            lineRenderer.widthMultiplier = Mathf.Lerp(orgWidth, orgWidth * 3f, pulseFactor);
+
+            for (int j = 0; j < pointCount; j++)
+            {
+                Vector3 jitter = (Vector3)Random.insideUnitCircle * jitterStrength * pulseFactor;
+                jitteredPoints[j] = origPoints[j] + jitter;
+            }
+            lineRenderer.SetPositions(jitteredPoints);
+
+            yield return null;
+        }
+
+        lineRenderer.SetPositions(origPoints);
+        lineRenderer.widthMultiplier = orgWidth;
+
+        if (dissolveGradient.colorKeys.Length > 0) lineRenderer.colorGradient = dissolveGradient;
+
+        float disappearTimer = 0f;
+        List<Vector3> currentPoints = new List<Vector3>();
+
+        while (disappearTimer < slashDisappearDuration)
+        {
+            disappearTimer += Time.deltaTime;
+            float linearT = Mathf.Clamp01(disappearTimer / slashDisappearDuration);
+
+            float progress = linearT * linearT;
+            float trimDistance = progress * totalLength;
+
+            currentPoints.Clear();
+            float accumulated = 0f;
+            bool startFound = false;
+
+            for (int i = 0; i < pointCount - 1; i++)
+            {
+                float segLen = segmentLengths[i];
+
+                if (!startFound)
+                {
+                    if (accumulated + segLen >= trimDistance)
+                    {
+                        float segProgress = segLen > 0f ? (trimDistance - accumulated) / segLen : 0f;
+                        Vector3 newStartPoint = Vector3.Lerp(origPoints[i], origPoints[i + 1], segProgress);
+                        currentPoints.Add(newStartPoint);
+                        startFound = true;
+                    }
+                }
+                else
+                {
+                    currentPoints.Add(origPoints[i]);
+                }
+
+                accumulated += segLen;
+            }
+
+            if (startFound)
+            {
+                currentPoints.Add(origPoints[pointCount - 1]);
+            }
+
+            if (currentPoints.Count >= 2)
+            {
+                lineRenderer.positionCount = currentPoints.Count;
+                lineRenderer.SetPositions(currentPoints.ToArray());
+            }
+            else
+            {
+                lineRenderer.positionCount = 0;
+            }
+
+            yield return null;
+        }
+
+        lineRenderer.enabled = false;
+        Destroy(lineRendererManager.gameObject);
+    }
+
+    #endregion
+
+    #region Dynamic Grappling Hook System
+
+    private void SetupGrappleIndicator()
+    {
+        if (grappleTargetIndicatorPrefab != null)
+        {
+            insGrappleTargetIndicator = Instantiate(grappleTargetIndicatorPrefab, transform.position, Quaternion.identity);
+        }
+        else
+        {
+            insGrappleTargetIndicator = new GameObject("GrappleTargetIndicator");
+            SpriteRenderer sr = insGrappleTargetIndicator.AddComponent<SpriteRenderer>();
+
+            Texture2D tex = new Texture2D(32, 32);
+            Color[] colors = new Color[32 * 32];
+            Vector2 center = new Vector2(15.5f, 15.5f);
+            for (int x = 0; x < 32; x++)
+            {
+                for (int y = 0; y < 32; y++)
+                {
+                    float dist = Vector2.Distance(new Vector2(x, y), center);
+                    if ((dist >= 12f && dist <= 15f) || (dist <= 3f) || (Mathf.Abs(x - 15.5f) < 1f && dist <= 14f) || (Mathf.Abs(y - 15.5f) < 1f && dist <= 14f))
+                    {
+                        colors[y * 32 + x] = new Color(0f, 0.9f, 1f, 0.9f);
+                    }
+                    else
+                    {
+                        colors[y * 32 + x] = Color.clear;
+                    }
+                }
+            }
+            tex.SetPixels(colors);
+            tex.Apply();
+            sr.sprite = Sprite.Create(tex, new Rect(0, 0, 32, 32), new Vector2(0.5f, 0.5f), 16f);
+            sr.sortingOrder = 10;
+        }
+
+        insGrappleTargetIndicator.SetActive(false);
+    }
+
+    private void UpdateGrappleIndicator()
+    {
+        if (insGrappleTargetIndicator == null) return;
+
+        if (isFocusing)
+        {
+            if (!insGrappleTargetIndicator.activeSelf)
+            {
+                insGrappleTargetIndicator.SetActive(true);
+            }
+
+            Vector3 mouseWorldPos = GetMouseWorldPosition();
+            Vector3 dirToMouse = (mouseWorldPos - transform.position).normalized;
+            if (dirToMouse == Vector3.zero) dirToMouse = Vector3.right;
+
+            // Position indicator orbiting outside player at set radius
+            Vector3 targetPos = transform.position + dirToMouse * grappleIndicatorOrbitRadius;
+            insGrappleTargetIndicator.transform.position = targetPos;
+
+            // Align rotation with -90 degree offset for Upward-facing target graphics
+            float angle = (Mathf.Atan2(dirToMouse.y, dirToMouse.x) * Mathf.Rad2Deg) - 90f;
+            insGrappleTargetIndicator.transform.rotation = Quaternion.Euler(0f, 0f, angle);
+        }
+        else
+        {
+            if (insGrappleTargetIndicator.activeSelf)
+            {
+                insGrappleTargetIndicator.SetActive(false);
+            }
+        }
+    }
+
+    private void HandleGrappleInput()
+    {
+        if (grappleAction == null) return;
+
+        if (isFocusing && currentMeter <= 0)
+        {
+            GrapplingHook();
+            return;
+        }
+
+        if (grappleAction.IsPressed())
+        {
+            if (IsInMode) return;
+            if (!IsGrappling && !isThrowingHook && !isFocusing && currentMeter > 0f) GrapplingFocus();
+        }
+        else
+        {
+            if (!IsGrappling && !isThrowingHook && isFocusing) GrapplingHook();
+        }
+    }
+
+    private void GrapplingHook()
+    {
+        if (activeGrapplingCoroutine != null) StopCoroutine(activeGrapplingCoroutine);
+        activeGrapplingCoroutine = StartCoroutine(AttachGrappleRoutine());
+    }
+
+    private IEnumerator AttachGrappleRoutine()
+    {
+        isThrowingHook = true;
+        IsGrappling = false;
+        isFocusing = false;
+        isWallSliding = false;
+        grappleTargetTransform = null;
+
+        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+
+        Time.timeScale = 1.0f;
+        Time.fixedDeltaTime = defaultFixedDeltaTime;
+
+        if (Mouse.current == null || Camera.main == null || grappleLine == null)
+        {
+            isThrowingHook = false;
+            yield break;
+        }
+
+        Vector2 mouseWorldPos = GetMouseWorldPosition();
+        Vector2 fireOrigin = transform.position;
+        Vector2 dir = (mouseWorldPos - fireOrigin).normalized;
+        if (dir == Vector2.zero) dir = Vector2.right;
+
+        RaycastHit2D rayHit = FindGrappleHit(fireOrigin, dir, out EnemyBase hitEnemy);
+        grappleAnchorPoint = rayHit.collider != null ? rayHit.point : fireOrigin + (dir * maxGrappleRange);
+
+        grappleLine.positionCount = ropeSegments;
+        grappleLine.enabled = true;
+
+        PlaySFX(grappleReleaseSFX);
+
+        float distance = Vector2.Distance(fireOrigin, grappleAnchorPoint);
+        float duration = Mathf.Max(0.02f, distance / grappleSpeed);
+        float timer = 0f;
+
+        while (timer < duration)
+        {
+            timer += Time.deltaTime;
+            float progress = Mathf.Clamp01(timer / duration);
+            if (hitEnemy != null && !hitEnemy.IsDead)
+            {
+                grappleAnchorPoint = GetEnemyGrapplePoint(hitEnemy);
+            }
+            currentHookTip = Vector2.Lerp(fireOrigin, grappleAnchorPoint, progress);
+
+            RenderProceduralRope(transform.position, currentHookTip, progress, true);
+            yield return null;
+        }
+
+        isThrowingHook = false;
+
+        if (rayHit.collider != null)
+        {
+            IsGrappling = true;
+            PlaySFX(grappleHitSFX);
+
+            if (hitEnemy == null)
+            {
+                hitEnemy = rayHit.collider.GetComponentInParent<EnemyBase>();
+            }
+
+            if (grappleImpactPrefab != null)
+            {
+                Instantiate(grappleImpactPrefab, grappleAnchorPoint, Quaternion.identity);
+            }
+
+            if (hitEnemy != null && !hitEnemy.IsHeavyEnemy)
+            {
+                // Pause meter regeneration while reeling the enemy in for the kick
+                if (activeMeterCoroutine != null)
+                {
+                    StopCoroutine(activeMeterCoroutine);
+                    activeMeterCoroutine = null;
+                }
+
+                // 1. Pull the enemy rapidly toward the player along the grapple rope
+                hitEnemy.OnGrappled(Vector2.zero);
+                doubleJump = true;
+                canDash = true;
+
+                Rigidbody2D enemyRb = hitEnemy.GetComponent<Rigidbody2D>();
+                float maxReelDuration = 0.65f;
+                float reelTimer = 0f;
+                float kickDistance = 1.55f;
+
+                while (IsGrappling && reelTimer < maxReelDuration && hitEnemy != null && !hitEnemy.IsDead)
+                {
+                    reelTimer += Time.deltaTime;
+                    Vector2 enemyCenter = GetEnemyGrapplePoint(hitEnemy);
+                    Vector2 toPlayer = (Vector2)transform.position - enemyCenter;
+                    float distToPlayer = toPlayer.magnitude;
+
+                    // 2. Once the enemy is pulled right up close to the player, kick them off far!
+                    if (distToPlayer <= kickDistance)
+                    {
+                        ForceExecuteGrappleKick(hitEnemy, dir);
+                        yield break;
+                    }
+
+                    if (enemyRb != null)
+                    {
+                        Vector2 reelDir = toPlayer.normalized;
+                        enemyRb.linearVelocity = reelDir * pullForce;
+                    }
+
+                    RenderProceduralRope(transform.position, enemyCenter, 1f, false);
+                    yield return null;
+                }
+
+                if (IsGrappling && hitEnemy != null && !hitEnemy.IsDead)
+                {
+                    ForceExecuteGrappleKick(hitEnemy, dir);
+                }
+                else
+                {
+                    DetachGrappling();
+                    if (!IsInMode && !isFocusing)
+                    {
+                        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+                        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+                    }
+                }
+                yield break;
+            }
+
+            if (hitEnemy != null)
+            {
+                grappleTargetTransform = hitEnemy.transform;
+            }
+
+            if (springJoint != null)
+            {
+                springJoint.enabled = true;
+                springJoint.connectedAnchor = grappleAnchorPoint;
+                springJoint.distance = Vector2.Distance(transform.position, grappleAnchorPoint);
+            }
+
+            while (IsGrappling && springJoint != null && springJoint.enabled)
+            {
+                if (grappleTargetTransform != null)
+                {
+                    if (hitEnemy != null && hitEnemy.IsDead)
+                    {
+                        DetachGrappling();
+                        yield break;
+                    }
+                    grappleAnchorPoint = hitEnemy != null ? GetEnemyGrapplePoint(hitEnemy) : (Vector2)grappleTargetTransform.position;
+                    springJoint.connectedAnchor = grappleAnchorPoint;
+                }
+
+                if (springJoint.distance > minDistance)
+                {
+                    springJoint.distance -= pullForce * Time.deltaTime;
+                }
+
+                RenderProceduralRope(transform.position, grappleAnchorPoint, 1f, false);
+                yield return null;
+            }
+        }
+        else
+        {
+            DetachGrappling();
+        }
+    }
+
+    private Vector2 GetEnemyGrapplePoint(EnemyBase enemy)
+    {
+        if (enemy == null) return Vector2.zero;
+        Collider2D col = enemy.GetComponent<Collider2D>();
+        return col != null ? (Vector2)col.bounds.center : (Vector2)enemy.transform.position;
+    }
+
+    /// <summary>
+    /// Finds the closest valid grapple target along the aim direction, detecting both grappleLayer walls and any EnemyBase colliders.
+    /// </summary>
+    private RaycastHit2D FindGrappleHit(Vector2 origin, Vector2 dir, out EnemyBase hitEnemy)
+    {
+        hitEnemy = null;
+
+        // 1. Check environment on grappleLayer
+        RaycastHit2D wallHit = Physics2D.Raycast(origin, dir, maxGrappleRange, grappleLayer);
+        float maxCheckDist = wallHit.collider != null ? wallHit.distance : maxGrappleRange;
+
+        // 2. Check for enemies along the ray
+        RaycastHit2D[] allHits = Physics2D.CircleCastAll(origin, 0.25f, dir, maxCheckDist);
+        float closestEnemyDist = float.MaxValue;
+        RaycastHit2D bestEnemyHit = default;
+
+        foreach (RaycastHit2D candidate in allHits)
+        {
+            if (candidate.collider == null || candidate.collider.isTrigger) continue;
+            if (candidate.collider.gameObject == gameObject || candidate.collider.transform.IsChildOf(transform)) continue;
+
+            EnemyBase enemy = candidate.collider.GetComponentInParent<EnemyBase>();
+            if (enemy != null && !enemy.IsDead)
+            {
+                Vector2 toEnemy = ((Vector2)candidate.collider.bounds.center - origin).normalized;
+                if (Vector2.Dot(toEnemy, dir) < 0.25f) continue;
+
+                if (candidate.distance < closestEnemyDist)
+                {
+                    closestEnemyDist = candidate.distance;
+                    bestEnemyHit = candidate;
+                    hitEnemy = enemy;
+                }
+            }
+        }
+
+        if (hitEnemy != null)
+        {
+            return bestEnemyHit;
+        }
+
+        return wallHit;
+    }
+
+    /// <summary>
+    /// Checks if the player is actively swinging/reeling on the grapple hook (or reeling in a grappled enemy) to kick the enemy on contact.
+    /// </summary>
+    public bool TryExecuteGrappleKick(EnemyBase enemy)
+    {
+        if (enemy == null || enemy.IsDead) return false;
+        if (Time.time < lastGrappleKickTime + 0.15f) return true; // Prevent multi-frame collision re-triggers
+
+        // Allow kick if actively grappling at speed, OR if this enemy is currently being reeled in by the grapple
+        bool isBeingReeledIn = IsGrappling && enemy.IsGrappleStunned;
+        bool isSwingingFast = IsGrappling && rb.linearVelocity.magnitude >= grappleKickSpeedThreshold;
+
+        if (!isBeingReeledIn && !isSwingingFast) return false;
+
+        Vector2 fallbackDir = ((Vector2)(enemy.transform.position - transform.position)).normalized;
+        ForceExecuteGrappleKick(enemy, fallbackDir);
+        return true;
+    }
+
+    private void ForceExecuteGrappleKick(EnemyBase enemy, Vector2 preferredDir)
+    {
+        if (enemy == null || enemy.IsDead) return;
+        lastGrappleKickTime = Time.time;
+
+        if (IsGrappling)
+        {
+            DetachGrappling();
+        }
+
+        // Determine launch direction: use held movement direction if steering, otherwise launch away along preferredDir
+        Vector2 kickDir;
+        if (Mathf.Abs(inputValue.x) > 0.1f)
+        {
+            kickDir = new Vector2(Mathf.Sign(inputValue.x), 0.35f).normalized;
+        }
+        else if (preferredDir.sqrMagnitude > 0.01f)
+        {
+            kickDir = (preferredDir.normalized + Vector2.up * 0.3f).normalized;
+        }
+        else
+        {
+            float facingDir = spriteRenderer != null && spriteRenderer.flipX ? -1f : 1f;
+            kickDir = new Vector2(facingDir, 0.35f).normalized;
+        }
+
+        enemy.OnGrappleKicked(kickDir * grappleKickKnockback);
+
+        // Visual & audio impact feedback
+        if (grappleImpactPrefab != null)
+        {
+            Instantiate(grappleImpactPrefab, enemy.transform.position, Quaternion.identity);
+        }
+        else if (slashImpactPrefab != null)
+        {
+            Instantiate(slashImpactPrefab, enemy.transform.position, Quaternion.identity);
+        }
+
+        PlaySFX(grappleHitSFX != null ? grappleHitSFX : postSlashSFX);
+        StartCoroutine(GrappleKickHitstopAndShakeRoutine());
+
+        // Bounce player into an aerial vault, refresh mobility, and reduce mode meter by 1 target's cost
+        float recoilX = -Mathf.Sign(kickDir.x) * moveSpeed * 0.45f;
+        rb.linearVelocity = new Vector2(recoilX, grappleKickBounceForce);
+        doubleJump = true;
+        canDash = true;
+
+        ConsumeMeter(maxMeter / 10f);
+    }
+
+    private IEnumerator GrappleKickHitstopAndShakeRoutine()
+    {
+        if (hitstopDuration > 0f && !IsInMode && !isFocusing)
+        {
+            Time.timeScale = 0f;
+            yield return new WaitForSecondsRealtime(hitstopDuration * 0.8f);
+            if (!IsInMode && !isFocusing)
+            {
+                Time.timeScale = 1f;
+            }
+        }
+
+        TriggerCameraShake(0.15f);
+    }
+
+    public void ConsumeMeter(float amount)
+    {
+        if (amount <= 0f) return;
+
+        currentMeter = Mathf.Clamp(currentMeter - amount, 0f, maxMeter);
+        if (modeMeterImage != null)
+        {
+            modeMeterImage.fillAmount = currentMeter / maxMeter;
+        }
+
+        ShowMeterBar();
+        if (!IsInMode && !isFocusing)
+        {
+            if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+            activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+        }
+    }
+
+    private void RenderProceduralRope(Vector2 startPos, Vector2 endPos, float launchProgress, bool isThrowing)
+    {
+        if (grappleLine == null || ropeSegments < 2) return;
+
+        grappleLine.positionCount = ropeSegments;
+        Vector2 dir = (endPos - startPos);
+        Vector2 perpendicular = new Vector2(-dir.y, dir.x).normalized;
+
+        for (int i = 0; i < ropeSegments; i++)
+        {
+            float t = (float)i / (ropeSegments - 1);
+            Vector2 basePos = Vector2.Lerp(startPos, endPos, t);
+
+            if (isThrowing)
+            {
+                float wave = Mathf.Sin(t * Mathf.PI * waveFrequency) * waveAmplitude * (1f - launchProgress);
+                basePos += perpendicular * wave;
+            }
+            else
+            {
+                float sag = Mathf.Sin(t * Mathf.PI) * 0.15f;
+                basePos -= Vector2.up * sag;
+            }
+
+            grappleLine.SetPosition(i, basePos);
+        }
+    }
+
+    private void GrapplingFocus()
+    {
+        ShowMeterBar();
+
+        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
+        activeMeterCoroutine = StartCoroutine(MeterDegeneration(1f, 0.005f));
+
+        isFocusing = true;
+        Time.timeScale = timeSpeed;
+        Time.fixedDeltaTime = defaultFixedDeltaTime * Time.timeScale;
+    }
+
+    public void DetachGrappling()
+    {
+        IsGrappling = false;
+        isThrowingHook = false;
+        grappleTargetTransform = null;
+        if (grappleLine != null) grappleLine.enabled = false;
+        if (springJoint != null) springJoint.enabled = false;
+    }
+
+    #endregion
+
+    #region Dynamic UI Auto-Hide & Visuals
+
+    private void SetupMeterUI()
+    {
+        meterCanvasGroups.Clear();
+
+        if (modeMeterBarObject != null)
+        {
+            CanvasGroup cg = modeMeterBarObject.GetComponent<CanvasGroup>();
+            if (cg == null) cg = modeMeterBarObject.AddComponent<CanvasGroup>();
+            if (!meterCanvasGroups.Contains(cg)) meterCanvasGroups.Add(cg);
+        }
+
+        if (modeMeterImage != null)
+        {
+            CanvasGroup cg = modeMeterImage.GetComponent<CanvasGroup>();
+            if (cg == null) cg = modeMeterImage.gameObject.AddComponent<CanvasGroup>();
+            if (!meterCanvasGroups.Contains(cg)) meterCanvasGroups.Add(cg);
+
+            modeMeterImage.fillAmount = currentMeter / maxMeter;
+        }
+
+        SetMeterAlpha(0f);
+    }
+
+    private void SetMeterAlpha(float alpha)
+    {
+        foreach (CanvasGroup cg in meterCanvasGroups)
+        {
+            if (cg != null) cg.alpha = alpha;
+        }
+    }
+
+    private void ShowMeterBar()
+    {
+        if (activeMeterFadeCoroutine != null) StopCoroutine(activeMeterFadeCoroutine);
+        activeMeterFadeCoroutine = StartCoroutine(FadeMeterBar(1f, false));
+    }
+
+    private void HideMeterBarWithPulse()
+    {
+        if (activeMeterFadeCoroutine != null) StopCoroutine(activeMeterFadeCoroutine);
+        activeMeterFadeCoroutine = StartCoroutine(FadeMeterBar(0f, true));
+    }
+
+    private IEnumerator FadeMeterBar(float targetAlpha, bool pulseOnFull)
+    {
+        if (meterCanvasGroups.Count == 0) yield break;
+
+        if (pulseOnFull)
+        {
+            float pulseTimer = 0f;
+            float pulseDuration = 0.15f;
+            while (pulseTimer < pulseDuration)
+            {
+                pulseTimer += Time.deltaTime;
+                float scale = Mathf.Lerp(1f, 1.15f, Mathf.Sin((pulseTimer / pulseDuration) * Mathf.PI));
+
+                foreach (CanvasGroup cg in meterCanvasGroups)
+                {
+                    if (cg != null) cg.transform.localScale = Vector3.one * scale;
+                }
+                yield return null;
+            }
+
+            foreach (CanvasGroup cg in meterCanvasGroups)
+            {
+                if (cg != null) cg.transform.localScale = Vector3.one;
+            }
+        }
+
+        float startAlpha = meterCanvasGroups.Count > 0 && meterCanvasGroups[0] != null ? meterCanvasGroups[0].alpha : 0f;
+        float timer = 0f;
+
+        while (timer < meterFadeDuration)
+        {
+            timer += Time.deltaTime;
+            float currentAlpha = Mathf.Lerp(startAlpha, targetAlpha, timer / meterFadeDuration);
+            SetMeterAlpha(currentAlpha);
+            yield return null;
+        }
+
+        SetMeterAlpha(targetAlpha);
+    }
+
+    private IEnumerator MeterRegenerate()
+    {
+        yield return new WaitForSeconds(currentMeter == 0 ? 1f : 0.5f);
+
+        while (currentMeter < maxMeter)
+        {
+            currentMeter = Mathf.Clamp(currentMeter + 1f, 0f, maxMeter);
+            if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
+            yield return new WaitForSeconds(0.03f);
+        }
+
+        HideMeterBarWithPulse();
+        activeMeterCoroutine = null;
+    }
+
+    private IEnumerator MeterDegeneration(float amount, float interval)
+    {
+        while (currentMeter > 0f)
+        {
+            currentMeter = Mathf.Clamp(currentMeter - amount, 0f, maxMeter);
+            if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
+            yield return new WaitForSeconds(interval);
+        }
+
+        activeMeterCoroutine = null;
+    }
+
+    public void TriggerCameraShake(float duration)
+    {
+        shakeRemainingTime = Mathf.Max(shakeRemainingTime, duration);
+        if (activeShakeCoroutine == null)
+        {
+            activeShakeCoroutine = StartCoroutine(ShakingTrigger(duration));
+        }
+    }
+
+    public IEnumerator ShakingTrigger(float duration)
+    {
+        shakeRemainingTime = Mathf.Max(shakeRemainingTime, duration);
+
+        if (perlin == null && cinemachineCamera != null)
+        {
+            perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
+        }
+
+        if (perlin != null)
+        {
+            if (noiseSettings != null)
+            {
+                perlin.NoiseProfile = noiseSettings;
+            }
+            perlin.AmplitudeGain = 10f;
+            if (perlin.FrequencyGain <= 0.01f)
+            {
+                perlin.FrequencyGain = 2f;
+            }
+
+            while (shakeRemainingTime > 0f)
+            {
+                shakeRemainingTime -= Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            perlin.NoiseProfile = orgNoiseSettings;
+            perlin.AmplitudeGain = orgAmplitudeGain;
+            perlin.FrequencyGain = orgFrequencyGain;
+        }
+
+        shakeRemainingTime = 0f;
+        activeShakeCoroutine = null;
+    }
+
     public void PlaySFX(AudioClip audioClip)
     {
-        audioSource.clip = audioClip;
-        audioSource.Play();
+        if (audioClip != null && audioSource != null && soundPlaying < maxSoundPlaying)
+        {
+            audioSource.PlayOneShot(audioClip);
+            soundPlaying++;
+        }
     }
+
+    public void PlayPitchedSFX(AudioClip audioClip, float pitch = 1f, float volumeScale = 1f)
+    {
+        if (audioClip == null || soundPlaying >= maxSoundPlaying) return;
+
+        AudioSource src = pitchedAudioSource != null ? pitchedAudioSource : audioSource;
+        if (src != null)
+        {
+            src.pitch = pitch;
+            src.PlayOneShot(audioClip, volumeScale);
+            soundPlaying++;
+        }
+    }
+
+    private void PlayJuicyTargetSelectSFX(int comboIndex)
+    {
+        if (targetSelectSFX == null) return;
+
+        float comboPitch = Mathf.Clamp(
+            targetSelectBasePitch + (comboIndex * targetSelectPitchStep),
+            0.5f,
+            targetSelectMaxPitch
+        );
+
+        // Primary lock-on hit with ascending combo pitch and slight volume boost per chain
+        float primaryVolume = Mathf.Clamp(0.9f + (comboIndex * 0.05f), 0.9f, 1.2f);
+        AudioSource primarySrc = pitchedAudioSource != null ? pitchedAudioSource : audioSource;
+        if (primarySrc != null)
+        {
+            primarySrc.pitch = comboPitch;
+            primarySrc.PlayOneShot(targetSelectSFX, primaryVolume);
+        }
+
+        // Harmonic metallic shimmer overtone (a musical fifth higher) slightly delayed in real-time
+        if (shimmerAudioSource != null)
+        {
+            StartCoroutine(TargetShimmerEchoRoutine(comboPitch * 1.5f));
+        }
+    }
+
+    private IEnumerator TargetShimmerEchoRoutine(float shimmerPitch)
+    {
+        yield return new WaitForSecondsRealtime(0.022f);
+        if (shimmerAudioSource != null && targetSelectSFX != null)
+        {
+            shimmerAudioSource.pitch = Mathf.Min(shimmerPitch, 2.4f);
+            shimmerAudioSource.PlayOneShot(targetSelectSFX, 0.35f);
+        }
+    }
+
+    #endregion
 }

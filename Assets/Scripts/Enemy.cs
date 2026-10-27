@@ -1,71 +1,56 @@
 using UnityEngine;
-using UnityEngine.EventSystems;
 
-public class Enemy : MonoBehaviour, IPointerEnterHandler
+public class Enemy : EnemyBase
 {
-    [Header("Enemy Settings")]
-    [SerializeField] private float moveSpeed = 2.5f;
-    [SerializeField] private GameObject targetIndicator;
+    [Header("Flanking / Dodge Settings")]
+    [SerializeField] private float dodgeTriggerDistance = 3.5f;
+    [SerializeField] private float dodgeForce = 9f;
+    [SerializeField] private float dodgeCooldown = 3f;
 
-    private bool isTarget = false;
-    private bool isDead = false;
-    private Rigidbody2D rb;
-    private SpriteRenderer spriteRenderer;
-    private PlayerController playerController;
+    private float nextDodgeTime;
 
-    private void Awake()
+    protected override void Update()
     {
-        spriteRenderer = GetComponent<SpriteRenderer>();
-        playerController = FindFirstObjectByType<PlayerController>();
-        rb = GetComponent<Rigidbody2D>();
-    }
+        base.Update();
 
-    void Update()
-    {
-        if (PlayerCombat.Instance.isInMode && !isTarget)
+        if (!IsDead && currentState == State.Normal)
         {
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(true);
-            }
-        }
-        else
-        {
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(false);
-            }
-        }
-
-        Movement();
-    }
-
-    public void OnPointerEnter(PointerEventData eventData)
-    {
-        if (PlayerCombat.Instance.isInMode && !isTarget)
-        {
-            spriteRenderer.color = Color.purple;
-            PlayerCombat.Instance.TargetSetup(transform);
-            isTarget = true;
-
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(false);
-            }
+            CheckPlayerProximityDodge();
         }
     }
-    public void OnDeath()
+
+    private void CheckPlayerProximityDodge()
     {
-        if (isDead) return;
-        isDead = true;
-        
+        if (playerController == null || Time.time < nextDodgeTime) return;
+
+        float distToPlayer = Vector2.Distance(transform.position, playerController.transform.position);
+
+        if (distToPlayer <= dodgeTriggerDistance)
+        {
+            nextDodgeTime = Time.time + dodgeCooldown;
+            Vector2 awayDir = (transform.position - playerController.transform.position).normalized;
+            awayDir.y = 0.5f;
+
+            currentState = State.Dodging;
+            rb.linearVelocity = awayDir.normalized * dodgeForce;
+        }
+    }
+
+    public override void OnDeath(Vector2 deathImpulse = default)
+    {
+        if (IsDead) return;
+        IsDead = true;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.UnregisterEnemy(gameObject);
+        }
+
+        if (deathImpulse != default)
+        {
+            rb.AddForce(deathImpulse * 15f, ForceMode2D.Impulse);
+        }
+
         Destroy(gameObject);
-    }
-
-    void Movement()
-    {
-        // Here
-        Vector2 dir = (playerController.gameObject.transform.position - gameObject.transform.position).normalized;
-        rb.AddForce(dir * moveSpeed);
     }
 }
