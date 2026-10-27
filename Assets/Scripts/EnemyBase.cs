@@ -44,6 +44,9 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     [Header("UI & Visual Indicators")]
     [SerializeField] protected GameObject targetIndicator;
+    [SerializeField] protected Color targetableOutlineColor = new Color(1f, 0.95f, 0.35f, 1f);
+    [SerializeField] protected float targetableOutlineThickness = 0.055f;
+    [SerializeField] protected float targetJitterStrength = 0.03f;
 
     public bool IsDead { get; protected set; }
     public bool IsHeavyEnemy => isHeavyEnemy;
@@ -64,6 +67,23 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     protected SpriteRenderer spriteRenderer;
     protected PlayerController playerController;
     protected Color originalColor = Color.white;
+    private Material originalSpriteMaterial;
+    private Vector3 originalSpriteLocalPos;
+
+    private GameObject outlineContainer;
+    private SpriteRenderer[] outlineRenderers;
+    private static Material sharedOutlineMaterial;
+    private static readonly Vector2[] OutlineDirections = new Vector2[]
+    {
+        new Vector2( 1f,  0f),
+        new Vector2(-1f,  0f),
+        new Vector2( 0f,  1f),
+        new Vector2( 0f, -1f),
+        new Vector2( 0.707f,  0.707f),
+        new Vector2(-0.707f,  0.707f),
+        new Vector2( 0.707f, -0.707f),
+        new Vector2(-0.707f, -0.707f)
+    };
 
     protected virtual float CurrentMoveSpeed => moveSpeed;
 
@@ -71,16 +91,88 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     {
         rb = GetComponent<Rigidbody2D>();
         col = GetComponent<Collider2D>();
-        spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+
+        if (targetIndicator != null)
+        {
+            if (targetIndicator.TryGetComponent<SpriteRenderer>(out SpriteRenderer indicatorSR))
+            {
+                targetableOutlineColor = indicatorSR.color;
+            }
+            targetIndicator.SetActive(false);
+        }
+
+        // Find the main enemy SpriteRenderer (excluding any legacy targetIndicator object)
+        SpriteRenderer[] allRenderers = GetComponentsInChildren<SpriteRenderer>(true);
+        foreach (SpriteRenderer sr in allRenderers)
+        {
+            if (targetIndicator != null && (sr.gameObject == targetIndicator || sr.transform.IsChildOf(targetIndicator.transform)))
+            {
+                continue;
+            }
+            spriteRenderer = sr;
+            break;
+        }
+
         if (spriteRenderer != null)
         {
             originalColor = spriteRenderer.color;
+            originalSpriteMaterial = spriteRenderer.sharedMaterial;
+            originalSpriteLocalPos = spriteRenderer.transform.localPosition;
+            CreateSpriteOutlineIndicator();
         }
 
         if (telegraphColor.a <= 0f)
         {
             telegraphColor = Color.red;
         }
+    }
+
+    private void CreateSpriteOutlineIndicator()
+    {
+        if (spriteRenderer == null) return;
+
+        if (sharedOutlineMaterial == null)
+        {
+            Shader solidShader = Shader.Find("GUI/Text Shader");
+            if (solidShader != null)
+            {
+                sharedOutlineMaterial = new Material(solidShader);
+            }
+        }
+
+        outlineContainer = new GameObject("SpriteOutlineIndicator");
+        outlineContainer.transform.SetParent(spriteRenderer.transform, false);
+        outlineContainer.transform.localPosition = Vector3.zero;
+        outlineContainer.transform.localRotation = Quaternion.identity;
+        outlineContainer.transform.localScale = Vector3.one;
+
+        outlineRenderers = new SpriteRenderer[OutlineDirections.Length];
+        for (int i = 0; i < OutlineDirections.Length; i++)
+        {
+            GameObject partObj = new GameObject($"Outline_{i}");
+            partObj.transform.SetParent(outlineContainer.transform, false);
+            partObj.transform.localPosition = (Vector3)(OutlineDirections[i] * targetableOutlineThickness);
+            partObj.transform.localRotation = Quaternion.identity;
+            partObj.transform.localScale = Vector3.one;
+
+            SpriteRenderer sr = partObj.AddComponent<SpriteRenderer>();
+            if (sharedOutlineMaterial != null)
+            {
+                sr.sharedMaterial = sharedOutlineMaterial;
+            }
+            else
+            {
+                sr.sharedMaterial = spriteRenderer.sharedMaterial;
+            }
+
+            sr.sprite = spriteRenderer.sprite;
+            sr.color = targetableOutlineColor;
+            sr.sortingLayerID = spriteRenderer.sortingLayerID;
+            sr.sortingOrder = spriteRenderer.sortingOrder - 1;
+            outlineRenderers[i] = sr;
+        }
+
+        outlineContainer.SetActive(false);
     }
 
     protected virtual void Start()
@@ -226,17 +318,21 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
         if (PlayerController.Instance != null && PlayerController.Instance.IsInMode)
         {
-            if (spriteRenderer != null)
-            {
-                spriteRenderer.color = Color.purple;
-            }
-
             PlayerController.Instance.TargetSetup(transform);
             isTarget = true;
 
-            if (targetIndicator != null)
+            if (spriteRenderer != null)
             {
-                targetIndicator.SetActive(false);
+                if (sharedOutlineMaterial != null)
+                {
+                    spriteRenderer.sharedMaterial = sharedOutlineMaterial;
+                }
+                spriteRenderer.color = targetableOutlineColor;
+            }
+
+            if (outlineContainer != null)
+            {
+                outlineContainer.SetActive(false);
             }
         }
     }
@@ -341,7 +437,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     {
         currentState = State.Telegraphing;
 
-        if (spriteRenderer != null)
+        if (spriteRenderer != null && !isTarget)
         {
             spriteRenderer.color = telegraphColor;
         }
@@ -367,6 +463,28 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         lastJumpTime = Time.time;
     }
 
+    protected virtual void LateUpdate()
+    {
+        if (IsDead || outlineContainer == null || !outlineContainer.activeSelf || spriteRenderer == null || outlineRenderers == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < outlineRenderers.Length; i++)
+        {
+            SpriteRenderer sr = outlineRenderers[i];
+            if (sr == null) continue;
+
+            sr.sprite = spriteRenderer.sprite;
+            sr.flipX = spriteRenderer.flipX;
+            sr.flipY = spriteRenderer.flipY;
+            sr.color = targetableOutlineColor;
+            sr.sortingLayerID = spriteRenderer.sortingLayerID;
+            sr.sortingOrder = spriteRenderer.sortingOrder - 1;
+            sr.transform.localPosition = (Vector3)(OutlineDirections[i] * targetableOutlineThickness);
+        }
+    }
+
     protected virtual void UpdateTargetIndicator()
     {
         bool inCombatMode = PlayerController.Instance != null && PlayerController.Instance.IsInMode;
@@ -376,13 +494,31 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             isTarget = false;
             if (spriteRenderer != null)
             {
+                if (originalSpriteMaterial != null)
+                {
+                    spriteRenderer.sharedMaterial = originalSpriteMaterial;
+                }
                 spriteRenderer.color = originalColor;
+                spriteRenderer.transform.localPosition = originalSpriteLocalPos;
             }
         }
-
-        if (targetIndicator != null)
+        else if (inCombatMode && isTarget && spriteRenderer != null)
         {
-            targetIndicator.SetActive(inCombatMode && !isTarget);
+            // Keep locked-on enemies as a full-body glowing silhouette in their targetIndicator color + micro-jitter
+            if (sharedOutlineMaterial != null && spriteRenderer.sharedMaterial != sharedOutlineMaterial)
+            {
+                spriteRenderer.sharedMaterial = sharedOutlineMaterial;
+            }
+            spriteRenderer.color = targetableOutlineColor;
+
+            Vector2 jitterOffset = Random.insideUnitCircle * targetJitterStrength;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos + new Vector3(jitterOffset.x, jitterOffset.y, 0f);
+        }
+
+        bool showOutline = inCombatMode && !isTarget;
+        if (outlineContainer != null && outlineContainer.activeSelf != showOutline)
+        {
+            outlineContainer.SetActive(showOutline);
         }
     }
 

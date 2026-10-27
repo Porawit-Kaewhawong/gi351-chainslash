@@ -37,6 +37,8 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float coyoteTime = 0.12f;
     [SerializeField] private float jumpBufferTime = 0.12f;
     [SerializeField] private float airMomentumDecay = 8f;
+    [SerializeField] private float idleBobInterval = 0.5f;
+    [SerializeField] private float idleSquashScaleY = 0.93f;
     [SerializeField] private List<AudioClip> walkSFXList = new List<AudioClip>();
     [SerializeField] private float walkStepInterval = 0.28f;
     [SerializeField] private AudioClip jumpSFX;
@@ -58,6 +60,8 @@ public class PlayerController : MonoBehaviour
     [Header("Chain Slash Mode Settings")]
     [SerializeField] private float maxMeter = 100f;
     [SerializeField] private float timeSpeed = 0.25f;
+    [SerializeField] private float modeDimAlpha = 0.55f;
+    [SerializeField] private float modeDimFadeDuration = 0.15f;
     [SerializeField] private float minPointDistance = 0.1f;
     [SerializeField] private float slashDrawDuration = 0.18f;
     [SerializeField] private float slashDisappearDuration = 0.3f;
@@ -125,6 +129,10 @@ public class PlayerController : MonoBehaviour
     private float lastGrappleKickTime;
     private float walkStepTimer;
     private int lastWalkSFXIndex = -1;
+    private float idleBobTimer;
+    private bool isIdleSquashed;
+    private Vector3 originalSpriteScale = Vector3.one;
+    private Vector3 originalSpriteLocalPos = Vector3.zero;
 
     // Health state
     public float CurrentHealth { get; private set; }
@@ -160,10 +168,13 @@ public class PlayerController : MonoBehaviour
     private Coroutine activeGrapplingCoroutine;
     private Coroutine activeShakeCoroutine;
     private Coroutine activeDamageFlashCoroutine;
+    private Coroutine activeModeDimCoroutine;
 
     // Damage visual caching
     private Color originalSpriteColor = Color.white;
     private Color originalHealthBarColor = Color.white;
+    private SpriteRenderer modeDimRenderer;
+    private static Sprite cachedSolidWhiteSprite;
 
     // Instantiated Objects
     private GameObject insLineRendererObj;
@@ -230,6 +241,8 @@ public class PlayerController : MonoBehaviour
         if (spriteRenderer != null)
         {
             originalSpriteColor = spriteRenderer.color;
+            originalSpriteScale = spriteRenderer.transform.localScale;
+            originalSpriteLocalPos = spriteRenderer.transform.localPosition;
         }
         animator = GetComponentInChildren<Animator>();
         springJoint = GetComponent<SpringJoint2D>();
@@ -268,6 +281,7 @@ public class PlayerController : MonoBehaviour
         SetupMeterUI();
         SetupHealthUI();
         SetupGrappleIndicator();
+        SetupModeDimOverlay();
     }
 
     private void Update()
@@ -317,6 +331,7 @@ public class PlayerController : MonoBehaviour
         HandleCombatInput();
         HandleGrappleInput();
         Flip();
+        HandleIdleSquashBob(grounded);
     }
 
     private void FixedUpdate()
@@ -734,6 +749,7 @@ public class PlayerController : MonoBehaviour
         canDash = false;
         isDashing = true;
         isWallSliding = false;
+        ResetIdleSquashBob();
 
         if (IsGrappling)
         {
@@ -784,6 +800,61 @@ public class PlayerController : MonoBehaviour
         else if (inputValue.x > 0f) spriteRenderer.flipX = false;
     }
 
+    private void HandleIdleSquashBob(bool grounded)
+    {
+        if (spriteRenderer == null) return;
+
+        bool isStandingIdle = grounded
+            && Mathf.Abs(inputValue.x) <= 0.05f
+            && Mathf.Abs(rb.linearVelocityX) <= 0.1f
+            && !isDashing
+            && !IsGrappling
+            && !IsInMode;
+
+        if (!isStandingIdle)
+        {
+            ResetIdleSquashBob();
+            return;
+        }
+
+        idleBobTimer += Time.deltaTime;
+        if (idleBobTimer >= idleBobInterval)
+        {
+            idleBobTimer -= idleBobInterval;
+            isIdleSquashed = !isIdleSquashed;
+
+            if (isIdleSquashed)
+            {
+                float newScaleY = originalSpriteScale.y * idleSquashScaleY;
+                float deltaScaleY = newScaleY - originalSpriteScale.y;
+                float offsetY = spriteRenderer.sprite != null ? (-spriteRenderer.sprite.bounds.min.y * deltaScaleY) : 0f;
+
+                spriteRenderer.transform.localScale = new Vector3(originalSpriteScale.x, newScaleY, originalSpriteScale.z);
+                spriteRenderer.transform.localPosition = new Vector3(
+                    originalSpriteLocalPos.x,
+                    originalSpriteLocalPos.y + offsetY,
+                    originalSpriteLocalPos.z
+                );
+            }
+            else
+            {
+                spriteRenderer.transform.localScale = originalSpriteScale;
+                spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+            }
+        }
+    }
+
+    private void ResetIdleSquashBob()
+    {
+        idleBobTimer = 0f;
+        if (isIdleSquashed && spriteRenderer != null)
+        {
+            isIdleSquashed = false;
+            spriteRenderer.transform.localScale = originalSpriteScale;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+        }
+    }
+
     #endregion
 
     #region Chain Slash Mode Logic
@@ -813,6 +884,7 @@ public class PlayerController : MonoBehaviour
     {
         IsInMode = true;
         if (animator != null) animator.SetBool("isInMode", true);
+        FadeModeDimOverlay(modeDimAlpha);
 
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = defaultFixedDeltaTime * Time.timeScale;
@@ -848,6 +920,7 @@ public class PlayerController : MonoBehaviour
     {
         IsInMode = false;
         if (animator != null) animator.SetBool("isInMode", false);
+        FadeModeDimOverlay(0f);
 
         if (targetGroup != null && targetGroup.Targets.Count > 1)
         {
@@ -889,6 +962,67 @@ public class PlayerController : MonoBehaviour
 
         Time.timeScale = 1.0f;
         Time.fixedDeltaTime = defaultFixedDeltaTime;
+    }
+
+    private void SetupModeDimOverlay()
+    {
+        if (cachedSolidWhiteSprite == null)
+        {
+            Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            Color[] pixels = new Color[] { Color.white, Color.white, Color.white, Color.white };
+            tex.SetPixels(pixels);
+            tex.Apply();
+            cachedSolidWhiteSprite = Sprite.Create(tex, new Rect(0, 0, 2, 2), new Vector2(0.5f, 0.5f), 2f);
+        }
+
+        GameObject dimObj = new GameObject("ChainSlashDimOverlay");
+        if (Camera.main != null)
+        {
+            dimObj.transform.SetParent(Camera.main.transform, false);
+            dimObj.transform.localPosition = new Vector3(0f, 0f, 10f);
+        }
+        else
+        {
+            dimObj.transform.SetParent(transform, false);
+            dimObj.transform.localPosition = Vector3.zero;
+        }
+        dimObj.transform.localScale = new Vector3(250f, 250f, 1f);
+
+        modeDimRenderer = dimObj.AddComponent<SpriteRenderer>();
+        modeDimRenderer.sprite = cachedSolidWhiteSprite;
+        modeDimRenderer.color = new Color(0f, 0f, 0f, 0f);
+        // SortingOrder 1 sits above all backgrounds/tilemaps (<= 0) and below enemy outlines (2), enemies (3), and player (5)
+        modeDimRenderer.sortingLayerID = spriteRenderer != null ? spriteRenderer.sortingLayerID : 0;
+        modeDimRenderer.sortingOrder = 1;
+    }
+
+    private void FadeModeDimOverlay(float targetAlpha)
+    {
+        if (modeDimRenderer == null) return;
+        if (activeModeDimCoroutine != null) StopCoroutine(activeModeDimCoroutine);
+        activeModeDimCoroutine = StartCoroutine(ModeDimFadeRoutine(targetAlpha));
+    }
+
+    private IEnumerator ModeDimFadeRoutine(float targetAlpha)
+    {
+        float startAlpha = modeDimRenderer.color.a;
+        float duration = Mathf.Max(0.01f, modeDimFadeDuration);
+        float elapsed = 0f;
+
+        while (elapsed < duration && modeDimRenderer != null)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float alpha = Mathf.Lerp(startAlpha, targetAlpha, elapsed / duration);
+            modeDimRenderer.color = new Color(0f, 0f, 0f, alpha);
+            yield return null;
+        }
+
+        if (modeDimRenderer != null)
+        {
+            modeDimRenderer.color = new Color(0f, 0f, 0f, targetAlpha);
+        }
+
+        activeModeDimCoroutine = null;
     }
 
     private void RecordDrawnLinePoints()

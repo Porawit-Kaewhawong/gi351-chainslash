@@ -116,12 +116,6 @@ public class ChainEnemy : EnemyBase
         while (timer < targetFuseDuration)
         {
             timer += Time.deltaTime;
-
-            if (spriteRenderer != null)
-            {
-                spriteRenderer.color = (Mathf.Sin(timer * 20f) > 0) ? Color.red : Color.purple;
-            }
-
             yield return null;
         }
 

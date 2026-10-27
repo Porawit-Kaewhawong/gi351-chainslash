@@ -1097,9 +1097,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 87052087cfc494040826341059701ed5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MainMenu
-  gameSceneName: LevelScene
+  gameSceneName: Level1Scene
   transitionCanvasGroup: {fileID: 0}
   fadeDuration: 0.5
+  zoomScaleOnEnter: 1.22
+  slashFlashColor: {r: 0.55, g: 0.95, b: 1, a: 1}
+  startTransitionSFX: {fileID: 8300000, guid: 59c56bd0f1abfda499f80bb7181429e1, type: 3}
   parallaxBackground: {fileID: 2007456631}
   parallaxAmount: 20
   parallaxSmoothSpeed: 5

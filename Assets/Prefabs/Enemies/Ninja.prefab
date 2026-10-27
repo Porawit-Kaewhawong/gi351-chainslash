@@ -183,7 +183,13 @@ MonoBehaviour:
   contactDamage: 15
   attackCooldown: 1
   knockbackForce: 8
+  isHeavyEnemy: 0
+  grappleStunDuration: 0.45
+  dieOnHighSpeedWallSlam: 1
+  wallSlamSpeedThreshold: 11
   targetIndicator: {fileID: 4618780478795535015}
+  targetableOutlineColor: {r: 1, g: 1, b: 1, a: 1}
+  targetableOutlineThickness: 0.055
   dodgeTriggerDistance: 3.5
   dodgeForce: 9
   dodgeCooldown: 3
@@ -269,7 +275,7 @@ SpriteRenderer:
   m_SortingOrder: 4
   m_MaskInteraction: 0
   m_Sprite: {fileID: 3625043607559282579, guid: 19fb86013d8c24d6cb8410c0aadf30fa, type: 3}
-  m_Color: {r: 0.9880041, g: 1, b: 0.6179246, a: 1}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0
