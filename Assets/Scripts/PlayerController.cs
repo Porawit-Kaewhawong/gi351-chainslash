@@ -1404,7 +1404,7 @@ public class PlayerController : MonoBehaviour
         if (grappleAction.IsPressed())
         {
             if (IsInMode) return;
-            if (!IsGrappling && !isThrowingHook && !isFocusing && currentMeter > 0f) GrapplingFocus();
+            if (!IsGrappling && !isThrowingHook && !isFocusing && currentMeter >= maxMeter / 10f) GrapplingFocus();
         }
         else
         {
@@ -1426,8 +1426,7 @@ public class PlayerController : MonoBehaviour
         isWallSliding = false;
         grappleTargetTransform = null;
 
-        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
-        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+        ConsumeMeter(maxMeter / 10f);
 
         Time.timeScale = 1.0f;
         Time.fixedDeltaTime = defaultFixedDeltaTime;
