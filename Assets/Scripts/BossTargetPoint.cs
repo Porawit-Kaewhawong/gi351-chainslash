@@ -105,6 +105,8 @@ public class BossTargetPoint : EnemyBase
             col.enabled = false;
         }
 
+        gameObject.SetActive(false);
+
         if (boss != null)
         {
             boss.OnTargetPointSlashed(this, deathImpulse);

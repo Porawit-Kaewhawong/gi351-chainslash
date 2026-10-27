@@ -57,6 +57,10 @@ public class LegendarySamurai : EnemyBase
     [SerializeField] private AudioClip barrierBreakSFX;
     [SerializeField] private AudioClip barrierReflectSFX;
     [SerializeField] private GameObject shieldBarrierVFX;
+    [Tooltip("How many full rounds of slashing all target points the player must complete before the boss takes damage. E.g. 10 means the player must slash all 5 points 10 times.")]
+    [SerializeField] private int requiredSlashRounds = 1;
+    [SerializeField] private float roundResetDelay = 0.35f;
+    [SerializeField] private AudioClip roundCompleteSFX;
 
     [Header("Pattern 4: 360 Shuriken Settings")]
     [SerializeField] private GameObject shurikenPrefab;
@@ -78,6 +82,7 @@ public class LegendarySamurai : EnemyBase
     private BossActionState bossState = BossActionState.Idle;
     private bool isMultipleTargetActive;
     private int slashedPointsInCurrentPhase;
+    private int completedSlashRounds;
     private float currentOrbitAngle;
     private bool isDashingSlash;
 
@@ -93,6 +98,7 @@ public class LegendarySamurai : EnemyBase
         // The Legendary Samurai is a heavy, immovable boss
         isHeavyEnemy = true;
         moveSpeed = bossPatrolSpeed;
+        bossMaxHealth = Mathf.Max(1, bossMaxHealth);
         currentHealth = bossMaxHealth;
     }
 
@@ -155,9 +161,16 @@ public class LegendarySamurai : EnemyBase
 
     protected override void Update()
     {
-        base.Update();
-
         if (IsDead) return;
+
+        // If health reaches zero at any point, defeat the boss and trigger death immediately!
+        if (currentHealth <= 0)
+        {
+            Die();
+            return;
+        }
+
+        base.Update();
 
         // Smoothly orbit active target points around the boss
         if (isMultipleTargetActive && targetPoints.Count > 0)
@@ -190,19 +203,19 @@ public class LegendarySamurai : EnemyBase
 
         int attackPatternIndex = 0;
 
-        while (!IsDead)
+        while (!IsDead && currentHealth > 0)
         {
             // Patrol / Chase towards player between attacks
             bossState = BossActionState.Moving;
             float idleTimer = 0f;
 
-            while (idleTimer < timeBetweenAttacks && !IsDead)
+            while (idleTimer < timeBetweenAttacks && !IsDead && currentHealth > 0)
             {
                 idleTimer += Time.deltaTime;
                 yield return null;
             }
 
-            if (IsDead) yield break;
+            if (IsDead || currentHealth <= 0) yield break;
 
             // Cycle through the 4 attack patterns:
             // 0: Slash-Dash
@@ -259,7 +272,7 @@ public class LegendarySamurai : EnemyBase
         yield return new WaitForSeconds(slashDashWindup);
 
         if (spriteRenderer != null && !isTarget) spriteRenderer.color = originalColor;
-        if (IsDead) yield break;
+        if (IsDead || currentHealth <= 0) yield break;
 
         // Dash toward player
         Vector2 dashDir = playerController != null
@@ -279,7 +292,7 @@ public class LegendarySamurai : EnemyBase
         isDashingSlash = true;
         float dashTimer = 0f;
 
-        while (dashTimer < slashDashDuration && !IsDead)
+        while (dashTimer < slashDashDuration && !IsDead && currentHealth > 0)
         {
             dashTimer += Time.deltaTime;
             rb.linearVelocity = dashDir * slashDashSpeed;
@@ -290,7 +303,7 @@ public class LegendarySamurai : EnemyBase
         rb.linearVelocity = Vector2.zero;
 
         yield return new WaitForSeconds(slashDashRecovery);
-        bossState = BossActionState.Idle;
+        if (!IsDead && currentHealth > 0) bossState = BossActionState.Idle;
     }
 
     #endregion
@@ -306,7 +319,7 @@ public class LegendarySamurai : EnemyBase
         rb.linearVelocity = new Vector2(0f, stompJumpForce);
 
         float ascendTimer = 0f;
-        while (ascendTimer < 0.55f && !IsDead)
+        while (ascendTimer < 0.55f && !IsDead && currentHealth > 0)
         {
             ascendTimer += Time.deltaTime;
             // Track towards player X position while ascending
@@ -329,7 +342,7 @@ public class LegendarySamurai : EnemyBase
         yield return new WaitForSeconds(stompAirHangDuration);
 
         if (spriteRenderer != null && !isTarget) spriteRenderer.color = originalColor;
-        if (IsDead) { rb.gravityScale = origGrav; yield break; }
+        if (IsDead || currentHealth <= 0) { rb.gravityScale = origGrav; yield break; }
 
         // 3. Slam straight down
         rb.gravityScale = origGrav;
@@ -339,7 +352,7 @@ public class LegendarySamurai : EnemyBase
         float timeout = 2.0f;
         float elapsed = 0f;
 
-        while (!hasHitGround && elapsed < timeout && !IsDead)
+        while (!hasHitGround && elapsed < timeout && !IsDead && currentHealth > 0)
         {
             elapsed += Time.deltaTime;
             Bounds bounds = col.bounds;
@@ -353,11 +366,14 @@ public class LegendarySamurai : EnemyBase
         }
 
         // 4. Ground impact & area shockwave
-        ExecuteStompImpact();
+        if (!IsDead && currentHealth > 0)
+        {
+            ExecuteStompImpact();
+        }
 
         // 5. Recovery on ground
         yield return new WaitForSeconds(stompRecovery);
-        bossState = BossActionState.Idle;
+        if (!IsDead && currentHealth > 0) bossState = BossActionState.Idle;
     }
 
     private void ExecuteStompImpact()
@@ -409,6 +425,7 @@ public class LegendarySamurai : EnemyBase
         bossState = BossActionState.MultipleTarget;
         isMultipleTargetActive = true;
         slashedPointsInCurrentPhase = 0;
+        completedSlashRounds = 0;
         rb.linearVelocity = Vector2.zero;
 
         if (shieldBarrierVFX != null) shieldBarrierVFX.SetActive(true);
@@ -416,15 +433,18 @@ public class LegendarySamurai : EnemyBase
 
         ActivateAllTargetPoints();
 
+        // Compute a generous timeout: base timeout * number of rounds required
+        float totalTimeout = multipleTargetTimeout * Mathf.Max(1, requiredSlashRounds);
+
         float phaseTimer = 0f;
-        while (phaseTimer < multipleTargetTimeout && isMultipleTargetActive && !IsDead)
+        while (phaseTimer < totalTimeout && isMultipleTargetActive && !IsDead && currentHealth > 0)
         {
             phaseTimer += Time.deltaTime;
             yield return null;
         }
 
-        // If time expired without slashing all 5 points
-        if (isMultipleTargetActive)
+        // If time expired without completing all required slash rounds
+        if (isMultipleTargetActive && !IsDead && currentHealth > 0)
         {
             isMultipleTargetActive = false;
             DeactivateAllTargetPoints();
@@ -437,7 +457,7 @@ public class LegendarySamurai : EnemyBase
         }
 
         yield return new WaitForSeconds(1.0f);
-        bossState = BossActionState.Idle;
+        if (!IsDead && currentHealth > 0) bossState = BossActionState.Idle;
     }
 
     private void ActivateAllTargetPoints()
@@ -469,26 +489,71 @@ public class LegendarySamurai : EnemyBase
 
     public void OnTargetPointSlashed(BossTargetPoint point, Vector2 slashImpulse)
     {
-        if (!isMultipleTargetActive) return;
+        if (!isMultipleTargetActive || IsDead) return;
 
         slashedPointsInCurrentPhase++;
 
-        // When all 5 target points are slashed by the player's sword
+        // When all 5 target points in this round are slashed by the player's sword
         if (slashedPointsInCurrentPhase >= targetPointCount)
         {
-            isMultipleTargetActive = false;
-            DeactivateAllTargetPoints();
-            if (shieldBarrierVFX != null) shieldBarrierVFX.SetActive(false);
+            completedSlashRounds++;
 
-            // Boss barrier shatters & boss takes damage!
-            TakeBossDamage(1);
-
-            if (currentHealth > 0)
+            // Check if the player has completed all required rounds
+            if (completedSlashRounds >= requiredSlashRounds)
             {
-                if (currentActionCoroutine != null) StopCoroutine(currentActionCoroutine);
-                currentActionCoroutine = StartCoroutine(StaggeredRoutine());
+                // All rounds completed - boss barrier shatters & boss takes damage!
+                isMultipleTargetActive = false;
+                DeactivateAllTargetPoints();
+                if (shieldBarrierVFX != null) shieldBarrierVFX.SetActive(false);
+
+                TakeBossDamage(1, slashImpulse);
+
+                if (currentHealth > 0 && !IsDead)
+                {
+                    if (currentActionCoroutine != null) StopCoroutine(currentActionCoroutine);
+                    currentActionCoroutine = StartCoroutine(StaggeredRoutine());
+                }
+            }
+            else
+            {
+                // Round completed but more rounds needed - reactivate all target points for the next round
+                slashedPointsInCurrentPhase = 0;
+
+                // Play round-complete feedback
+                if (roundCompleteSFX != null && playerController != null)
+                {
+                    playerController.PlaySFX(roundCompleteSFX);
+                }
+                if (playerController != null)
+                {
+                    playerController.TriggerCameraShake(0.15f);
+                }
+
+                // Brief flash to indicate progress, then reactivate points
+                StartCoroutine(ReactivatePointsAfterDelay());
             }
         }
+    }
+
+    private IEnumerator ReactivatePointsAfterDelay()
+    {
+        // Quick visual pulse on the boss to show a round was completed
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = Color.white;
+        }
+
+        yield return new WaitForSeconds(roundResetDelay);
+
+        if (IsDead || !isMultipleTargetActive) yield break;
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = new Color(0.7f, 0.4f, 1f, 1f);
+        }
+
+        // Reactivate all target points for the next round
+        ActivateAllTargetPoints();
     }
 
     private IEnumerator StaggeredRoutine()
@@ -507,7 +572,7 @@ public class LegendarySamurai : EnemyBase
         }
 
         float staggerTimer = 0f;
-        while (staggerTimer < staggeredDuration && !IsDead)
+        while (staggerTimer < staggeredDuration && !IsDead && currentHealth > 0)
         {
             staggerTimer += Time.deltaTime;
             if (spriteRenderer != null)
@@ -522,7 +587,7 @@ public class LegendarySamurai : EnemyBase
             spriteRenderer.color = originalColor;
         }
 
-        bossState = BossActionState.Idle;
+        if (!IsDead && currentHealth > 0) bossState = BossActionState.Idle;
     }
 
     #endregion
@@ -538,7 +603,7 @@ public class LegendarySamurai : EnemyBase
         if (spriteRenderer != null) spriteRenderer.color = Color.yellow;
         yield return new WaitForSeconds(shurikenWindup);
         if (spriteRenderer != null && !isTarget) spriteRenderer.color = originalColor;
-        if (IsDead) yield break;
+        if (IsDead || currentHealth <= 0) yield break;
 
         // Fire 1st burst of 360 shurikens
         if (shurikenBurstSFX != null && playerController != null)
@@ -550,13 +615,13 @@ public class LegendarySamurai : EnemyBase
 
         // Fire 2nd spiral wave offset by angle
         yield return new WaitForSeconds(0.22f);
-        if (!IsDead)
+        if (!IsDead && currentHealth > 0)
         {
             Fire360Burst(shurikenCount360, (360f / shurikenCount360) * 0.5f);
         }
 
         yield return new WaitForSeconds(0.75f);
-        bossState = BossActionState.Idle;
+        if (!IsDead && currentHealth > 0) bossState = BossActionState.Idle;
     }
 
     private void Fire360Burst(int count, float angleOffset)
@@ -591,16 +656,27 @@ public class LegendarySamurai : EnemyBase
 
     #region Boss Damage & Defeat
 
-    public void TakeBossDamage(int amount)
+    public void TakeDamage(float amount)
+    {
+        TakeBossDamage(Mathf.Max(1, Mathf.RoundToInt(amount)));
+    }
+
+    public void TakeDamage(int amount)
+    {
+        TakeBossDamage(Mathf.Max(1, amount));
+    }
+
+    public void TakeBossDamage(int amount, Vector2 deathImpulse = default)
     {
         if (IsDead) return;
 
         currentHealth = Mathf.Max(0, currentHealth - amount);
         onBossHealthChanged?.Invoke(currentHealth, bossMaxHealth);
 
+        // Immediately trigger boss defeat and death when health reaches zero!
         if (currentHealth <= 0)
         {
-            StartCoroutine(BossDefeatSequence());
+            Die(deathImpulse);
         }
     }
 
@@ -608,15 +684,21 @@ public class LegendarySamurai : EnemyBase
     {
         if (IsDead) return;
 
-        // If player slashes the boss during Staggered state, deal bonus damage
-        if (bossState == BossActionState.Staggered)
+        // If health has already reached zero, defeat the boss immediately!
+        if (currentHealth <= 0)
         {
-            TakeBossDamage(1);
+            Die(deathImpulse);
             return;
         }
 
-        // Direct slashes to the boss body are deflected by the Samurai's armor/barrier
-        // The player must slash the 5 target points during Multiple Target to damage the boss!
+        // If the player slashes the boss during Staggered state or while barrier is down, deal damage
+        if (bossState == BossActionState.Staggered || !isMultipleTargetActive)
+        {
+            TakeBossDamage(1, deathImpulse);
+            return;
+        }
+
+        // Direct slashes to the boss body while Multiple Target barrier is active deflect off the barrier
         if (barrierReflectSFX != null && playerController != null)
         {
             playerController.PlaySFX(barrierReflectSFX);
@@ -639,39 +721,65 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
-    private IEnumerator BossDefeatSequence()
+    public void Die(Vector2 deathImpulse = default)
     {
+        if (IsDead) return;
         IsDead = true;
+        currentHealth = 0;
         bossState = BossActionState.Defeated;
-        rb.linearVelocity = Vector2.zero;
 
-        if (currentActionCoroutine != null) StopCoroutine(currentActionCoroutine);
-        if (aiLoopCoroutine != null) StopCoroutine(aiLoopCoroutine);
+        // Stop all active AI, movement, and attack routines immediately so they cannot override death
+        StopAllCoroutines();
 
-        DeactivateAllTargetPoints();
+        // Disable all colliders so boss cannot hurt player or receive further hits
+        Collider2D[] allColliders = GetComponentsInChildren<Collider2D>();
+        foreach (var c in allColliders)
+        {
+            if (c != null) c.enabled = false;
+        }
 
+        // Immediately destroy all target point GameObjects so GameManager does not count them
+        DestroyAllTargetPoints();
+
+        // Unregister from GameManager so wave/boss clear registers immediately
         if (GameManager.Instance != null)
         {
             GameManager.Instance.UnregisterEnemy(gameObject);
         }
 
         onBossDefeated?.Invoke();
+        onBossHealthChanged?.Invoke(0, bossMaxHealth);
 
-        if (bossDefeatSFX != null && playerController != null)
+        StartCoroutine(DefeatVisualSequence(deathImpulse));
+    }
+
+    private IEnumerator DefeatVisualSequence(Vector2 deathImpulse)
+    {
+        if (rb != null)
         {
-            playerController.PlaySFX(bossDefeatSFX);
+            rb.linearVelocity = Vector2.zero;
+            if (deathImpulse != default)
+            {
+                rb.AddForce(deathImpulse * 12f, ForceMode2D.Impulse);
+            }
         }
 
-        if (playerController != null)
+        PlayerController targetPlayer = playerController != null ? playerController : PlayerController.Instance;
+        if (targetPlayer != null)
         {
-            playerController.TriggerCameraShake(0.8f);
+            if (bossDefeatSFX != null)
+            {
+                targetPlayer.PlaySFX(bossDefeatSFX);
+            }
+            targetPlayer.TriggerCameraShake(0.8f);
         }
 
-        // Dramatic flashing defeat sequence
+        // Dramatic flashing defeat sequence using unscaledDeltaTime so slow-motion/hitstop never freezes it
         float elapsed = 0f;
-        while (elapsed < 1.2f)
+        float duration = 1.0f;
+        while (elapsed < duration)
         {
-            elapsed += Time.deltaTime;
+            elapsed += Time.unscaledDeltaTime;
             if (spriteRenderer != null)
             {
                 spriteRenderer.color = (Mathf.Sin(elapsed * 25f) > 0) ? Color.red : Color.white;
@@ -687,9 +795,8 @@ public class LegendarySamurai : EnemyBase
         Destroy(gameObject);
     }
 
-    private void OnDestroy()
+    private void DestroyAllTargetPoints()
     {
-        // Clean up spawned target points if boss is removed
         for (int i = 0; i < targetPoints.Count; i++)
         {
             if (targetPoints[i] != null && targetPoints[i].gameObject != null)
@@ -697,6 +804,12 @@ public class LegendarySamurai : EnemyBase
                 Destroy(targetPoints[i].gameObject);
             }
         }
+        targetPoints.Clear();
+    }
+
+    private void OnDestroy()
+    {
+        DestroyAllTargetPoints();
     }
 
     #endregion
@@ -705,15 +818,15 @@ public class LegendarySamurai : EnemyBase
 
     protected override void Movement()
     {
-        // Only run base ground movement when in Moving state
-        if (bossState != BossActionState.Moving) return;
+        // Only run base ground movement when in Moving state and alive
+        if (IsDead || currentHealth <= 0 || bossState != BossActionState.Moving) return;
 
         base.Movement();
     }
 
     protected override void HandlePlayerContact(Collision2D collision)
     {
-        if (IsDead) return;
+        if (IsDead || currentHealth <= 0) return;
 
         // If dashing in SlashDash mode, deal slash dash damage
         if (isDashingSlash)
