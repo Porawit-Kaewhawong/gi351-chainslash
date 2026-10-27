@@ -1,104 +1,153 @@
 using System.Collections;
-using System.Collections.Generic;
-using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.EventSystems;
-using UnityEngine.Rendering;
 
-public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
+public class ChainEnemy : EnemyBase
 {
     public static bool isExploding = false;
 
-    [Header("Chain Enemy Settings")]
-    [SerializeField] private float moveSpeed = 2.5f;
+    [Header("Suicide Aggression Settings")]
+    [SerializeField] private float aggroDistance = 4.5f;
+    [SerializeField] private float aggroSpeedMultiplier = 1.8f;
 
-    [Header("Jump Settings")]
-    [SerializeField] private LayerMask groundLayer;
-    [SerializeField] private float jumpForce = 7f;
-    [SerializeField] private int maxJumps = 2;
-    [SerializeField] private float jumpCooldown = 1f;
-    [SerializeField] private float doubleJumpDelay = 0.25f;
-    [SerializeField] private float heightThreshold = 1.2f;
-    [SerializeField] private float wallCheckDistance = 0.6f;
-    [SerializeField] private float groundCheckDistance = 0.6f;
+    [Header("Target Fuse Settings")]
+    [SerializeField] private float targetFuseDuration = 2.0f;
 
-    private int jumpsLeft;
-    private float lastJumpTime;
-    private float nextJumpTime;
-
-
-    [SerializeField] private GameObject targetIndicator;
+    [Header("Explosion Settings")]
+    [SerializeField] private float explosionDamage = 35f;
     [SerializeField] private AudioClip explosionSound;
+    [SerializeField] private GameObject explosionPrefab;
     [SerializeField] private GameObject explosionRadiusPrefab;
     [SerializeField] private float explosionRadius = 5f;
+    [SerializeField] private float explosionShakeDuration = 0.25f;
 
+    private GameObject insExplosionRadius;
+    private Coroutine fuseCoroutine;
+    private bool isAggro;
+    private bool ownsExplodingLock;
 
-    public bool IsDead { get; private set; }
-    private bool isTarget = false;
-    private Rigidbody2D rb;
-    private GameObject insExplosion;
-    private SpriteRenderer spriteRenderer;
-    private PlayerController playerController;
+    protected override float CurrentMoveSpeed => isAggro ? moveSpeed * aggroSpeedMultiplier : moveSpeed;
 
-    private void Awake()
+    protected override void Start()
     {
-        explosionRadius = explosionRadius / 2;
-        spriteRenderer = GetComponent<SpriteRenderer>();
-        playerController = FindFirstObjectByType<PlayerController>();
-        insExplosion = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
-        insExplosion.SetActive(false);
-        rb = GetComponent<Rigidbody2D>();
+        base.Start();
+
+        if (explosionRadiusPrefab != null)
+        {
+            insExplosionRadius = Instantiate(explosionRadiusPrefab, transform.position, Quaternion.identity);
+            insExplosionRadius.SetActive(false);
+        }
     }
 
-    void Update()
+    protected override void Update()
     {
-        insExplosion.transform.position = transform.position;
-
-        Movement();
+        base.Update();
 
         if (IsDead) return;
 
-        if (PlayerCombat.Instance.IsInMode && !isTarget)
+        if (insExplosionRadius != null && insExplosionRadius.activeSelf)
         {
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(true);
-            }
+            insExplosionRadius.transform.position = transform.position;
         }
-        else if (!PlayerCombat.Instance.IsInMode && !isTarget)
+
+        if (playerController != null)
         {
-            if (targetIndicator != null)
-            {
-                targetIndicator.SetActive(false);
-            }
-            insExplosion.SetActive(false);
-        }
-        else if (!PlayerCombat.Instance.IsInMode && isTarget)
-        {
-            insExplosion.SetActive(false);
+            isAggro = Vector2.Distance(transform.position, playerController.transform.position) <= aggroDistance;
         }
     }
 
-    public void OnPointerEnter(PointerEventData eventData)
+    protected override void OnCollisionEnter2D(Collision2D collision)
     {
-        if (PlayerCombat.Instance.IsInMode && !isTarget)
-        {
-            spriteRenderer.color = Color.purple;
-            PlayerCombat.Instance.TargetSetup(transform);
-            isTarget = true;
+        if (IsDead) return;
 
-            if (targetIndicator != null)
+        // If punted into a wall or another enemy after a Grapple Kick, detonate on impact!
+        if (HandleThrownImpact(collision))
+        {
+            return;
+        }
+
+        // Detonate immediately if Suicide Ninja collides with the Player (unless kicked away at high speed)
+        if (collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
+        {
+            if (player.TryExecuteGrappleKick(this))
             {
-                targetIndicator.SetActive(false);
+                if (fuseCoroutine == null)
+                {
+                    fuseCoroutine = StartCoroutine(TargetFuseCountdown());
+                }
+                return;
             }
-            insExplosion.SetActive(true);
+
+            OnDeath();
+            return;
+        }
+
+        base.OnCollisionEnter2D(collision);
+    }
+
+    private void OnDestroy()
+    {
+        if (ownsExplodingLock)
+        {
+            isExploding = false;
+            ownsExplodingLock = false;
+        }
+
+        if (insExplosionRadius != null)
+        {
+            Destroy(insExplosionRadius);
         }
     }
 
-    public IEnumerator OnDeath()
+    public override void TrySelectTarget()
     {
-        if (IsDead) yield break;
+        bool wasTarget = isTarget;
+        base.TrySelectTarget();
+
+        if (!wasTarget && isTarget && fuseCoroutine == null)
+        {
+            fuseCoroutine = StartCoroutine(TargetFuseCountdown());
+        }
+    }
+
+    private IEnumerator TargetFuseCountdown()
+    {
+        float timer = 0f;
+
+        while (timer < targetFuseDuration)
+        {
+            timer += Time.deltaTime;
+
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.color = (Mathf.Sin(timer * 20f) > 0) ? Color.red : Color.purple;
+            }
+
+            yield return null;
+        }
+
+        OnDeath();
+    }
+
+    public override void OnDeath(Vector2 deathImpulse = default)
+    {
+        if (IsDead) return;
+
+        if (fuseCoroutine != null)
+        {
+            StopCoroutine(fuseCoroutine);
+        }
+
+        StartCoroutine(ExplosionSequence());
+    }
+
+    private IEnumerator ExplosionSequence()
+    {
         IsDead = true;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.UnregisterEnemy(gameObject);
+        }
 
         while (isExploding)
         {
@@ -106,183 +155,76 @@ public class ChainEnemy : MonoBehaviour, IPointerEnterHandler
         }
 
         isExploding = true;
+        ownsExplodingLock = true;
 
-        yield return new WaitForSeconds(0.25f);
+        Vector3 origScale = transform.localScale;
+        float buildUpTime = 0.25f;
+        float elapsed = 0f;
 
-        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, explosionRadius);
+        while (elapsed < buildUpTime)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / buildUpTime;
+
+            transform.localScale = Vector3.Lerp(origScale, origScale * 1.35f, t);
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.color = (Mathf.Sin(elapsed * 35f) > 0) ? Color.red : Color.white;
+            }
+            yield return null;
+        }
+
+        // Trigger explosion SFX and camera shake before chain-reacting neighboring enemies
+        PlayerController targetPlayer = playerController != null ? playerController : PlayerController.Instance;
+        if (targetPlayer != null)
+        {
+            if (explosionSound != null)
+            {
+                targetPlayer.PlaySFX(explosionSound);
+            }
+
+            targetPlayer.TriggerCameraShake(explosionShakeDuration);
+        }
+
+        if (explosionPrefab != null)
+        {
+            GameObject fx = Instantiate(explosionPrefab, transform.position, Quaternion.identity);
+            Destroy(fx, 0.5f);
+        }
+
+        // Release lock before triggering chain-reaction deaths so chained ChainEnemies can immediately sequence
+        isExploding = false;
+        ownsExplodingLock = false;
+
+        // Execute Explosion Damage on both Player and neighboring Enemies
+        float effectiveRadius = explosionRadius * 0.5f;
+        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, effectiveRadius);
 
         foreach (Collider2D collider in withinRange)
         {
             if (collider == null || collider.gameObject == gameObject) continue;
 
-            if (collider.TryGetComponent<Enemy>(out Enemy enemy))
+            if (collider.TryGetComponent<PlayerController>(out PlayerController player))
             {
-                if (enemy != null && enemy.IsDead == false)
+                player.TakeDamage(explosionDamage);
+
+                if (collider.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
+                {
+                    Vector2 pushDir = (player.transform.position - transform.position).normalized;
+                    if (pushDir == Vector2.zero) pushDir = Vector2.up;
+                    playerRb.AddForce(pushDir * 12f, ForceMode2D.Impulse);
+                }
+            }
+            else if (collider.TryGetComponent<EnemyBase>(out EnemyBase enemy))
+            {
+                if (!enemy.IsDead)
                 {
                     enemy.OnDeath();
                 }
             }
         }
 
-        foreach (Collider2D collider in withinRange)
-        {
-            if (collider == null || collider.gameObject == gameObject) continue;
-
-            if (collider.TryGetComponent<ChainEnemy>(out ChainEnemy chainEnemy))
-            {
-                if (chainEnemy != null && chainEnemy.IsDead == false)
-                {
-                    chainEnemy.StartCoroutine(chainEnemy.OnDeath());
-                }
-            }
-        }
-
-        insExplosion.SetActive(true);
-
-        playerController.PlaySFX(explosionSound);
-
-        isExploding = false;
-
-        PlayerCombat.Instance.StartCoroutine(PlayerCombat.Instance.ShakingTrigger(0.25f));
-
-        Destroy(insExplosion, 0.5f);
+        Destroy(insExplosionRadius);
         Destroy(gameObject);
-    }
-
-    private void Movement()
-    {
-        if (playerController == null || rb == null) return;
-
-        Vector2 dir = (playerController.transform.position - transform.position).normalized;
-
-        // Hello Dev Water! I'm Bob, Mr.T's assistant.
-        // We are using 'jumpsLeft' as a State Machine to avoid adding any new variables outside these functions.
-        // jumpsLeft > 0 : Normal State (Ground movement & Jumping)
-        // jumpsLeft == -1 : Wall Sticking State (Freezes on the wall for 2 seconds)
-        // jumpsLeft == -2 : Diving Attack State (Swooping down to kill the player)
-
-        if (jumpsLeft == -1)
-        {
-            // STATE: Wall Sticking -> Freeze all velocity to stick to the wall
-            rb.linearVelocity = Vector2.zero;
-        }
-        else if (jumpsLeft == -2)
-        {
-            // STATE: Diving Attack -> Aggressively add force towards the player for a homing effect
-            rb.AddForce(dir * moveSpeed * 2f);
-        }
-        else
-        {
-            // STATE: Normal Movement -> Move horizontally only
-            rb.AddForce(new Vector2(dir.x * moveSpeed, 0f));
-
-            // Clamp horizontal speed for normal movement
-            Vector2 velocity = rb.linearVelocity;
-            velocity.x = Mathf.Clamp(velocity.x, -moveSpeed, moveSpeed);
-            rb.linearVelocity = velocity;
-        }
-
-        HandleJump(dir);
-    }
-
-    private void HandleJump(Vector2 dir)
-    {
-        Collider2D col = GetComponent<Collider2D>();
-        if (col == null) return;
-
-        Bounds bounds = col.bounds;
-
-        bool grounded = Physics2D.BoxCast(
-            bounds.center,
-            new Vector2(bounds.size.x * 0.8f, 0.05f),
-            0f,
-            Vector2.down,
-            groundCheckDistance,
-            groundLayer
-        );
-
-        // Reset all states and restore jumps when touching the ground
-        if (grounded && Time.time > lastJumpTime + 0.1f)
-        {
-            jumpsLeft = maxJumps;
-        }
-
-        Vector2 faceDirection = new Vector2(Mathf.Sign(dir.x), 0);
-        bool isTouchingWall = Physics2D.Raycast(
-            bounds.center,
-            faceDirection,
-            bounds.extents.x + wallCheckDistance,
-            groundLayer
-        );
-
-        // =================================================================
-        // --- STATE MACHINE HANDLING ---
-        // =================================================================
-
-        // 1. STICKING STATE (Waiting for 2 seconds)
-        if (jumpsLeft == -1)
-        {
-            // Check if 2 seconds have passed (we stored the release time in nextJumpTime)
-            if (Time.time >= nextJumpTime)
-            {
-                // Transition to DIVING STATE
-                jumpsLeft = -2;
-
-                // Swoop down towards the player with high velocity!
-                Vector2 diveDir = (playerController.transform.position - transform.position).normalized;
-                rb.linearVelocity = diveDir * jumpForce * 1.5f;
-            }
-            return; // Skip normal jump logic while sticking
-        }
-
-        // 2. DIVING STATE
-        if (jumpsLeft == -2)
-        {
-            // Continue falling and homing in on the player until hitting the ground
-            return;
-        }
-
-        // =================================================================
-        // --- NORMAL BEHAVIORS ---
-        // =================================================================
-
-        // TRIGGER WALL STICK
-        // If mid-air, touching a wall, and has jumps left, attach to the wall!
-        if (!grounded && isTouchingWall && jumpsLeft > 0)
-        {
-            // Add a small delay (0.3s) to prevent instant sticking immediately after a ground jump
-            if (Time.time >= lastJumpTime + 0.3f)
-            {
-                jumpsLeft = -1; // Set State to Sticking
-                nextJumpTime = Time.time + 2f; // Store the 2-second delay target in nextJumpTime
-                return;
-            }
-        }
-
-        // NORMAL GROUND JUMP
-        if (grounded && Time.time >= nextJumpTime && jumpsLeft > 0)
-        {
-            Jump();
-            nextJumpTime = Time.time + jumpCooldown;
-            return;
-        }
-
-        // NORMAL DOUBLE JUMP
-        if (!grounded && jumpsLeft > 0 && Time.time >= lastJumpTime + doubleJumpDelay)
-        {
-            // Only double jump if not touching a wall (prioritizes wall sticking)
-            if (!isTouchingWall)
-            {
-                Jump();
-            }
-        }
-    }
-
-    private void Jump()
-    {
-        rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
-
-        jumpsLeft--;
-        lastJumpTime = Time.time;
     }
 }
