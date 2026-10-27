@@ -27,15 +27,15 @@ RectTransform:
   m_GameObject: {fileID: 235063646020210112}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
+  m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
+  m_ConstrainProportionsScale: 1
   m_Children:
   - {fileID: 2798580846162158953}
   m_Father: {fileID: 7891137421646894961}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0.05, y: -1.2}
+  m_AnchoredPosition: {x: 0, y: -1.2}
   m_SizeDelta: {x: 2, y: 0.1}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &2401096596432104389
@@ -66,7 +66,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 0}
+  m_Sprite: {fileID: 3737897332693287829, guid: 14566d9dae8f3ce4795e398fd887bc01, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -432,7 +432,7 @@ LineRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 10306, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2100000, guid: b45ada307771c7c4d879605fe239a7e1, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -536,7 +536,7 @@ SpringJoint2D:
   m_AutoConfigureDistance: 0
   m_Distance: 1
   m_DampingRatio: 0.5
-  m_Frequency: 2
+  m_Frequency: 1
 --- !u!114 &2866775813892729429
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -549,29 +549,56 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d6b7af531c6b9724786b37113eba5a60, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerController
-  cursorTexture: {fileID: 0}
+  cursorTexture: {fileID: 2800000, guid: 0586d77c574fbea468abf654bac6bac7, type: 3}
   cursorMode: 0
   maxHealth: 100
-  healthRegenDelay: 5
+  healthRegenDelay: 4
   healthRegenTickInterval: 0.05
   healthBarImage: {fileID: 3635520213015844214}
   healthBackgroundObject: {fileID: 7036572509465447907}
   healthFadeDuration: 0.25
+  immunityDuration: 0.8
+  damageFlashColor: {r: 1, g: 0.2, b: 0.2, a: 1}
+  damageFlashDuration: 0.25
+  damageShakeDuration: 0.15
+  takeDamageSFX: {fileID: 8300000, guid: 2798b64468f0d584db80c98752956f1c, type: 3}
   moveSpeed: 7.5
   jumpHeight: 15
   groundCheck: {fileID: 5666370576736019074}
   groundLayer:
     serializedVersion: 2
     m_Bits: 64
+  coyoteTime: 0.12
+  jumpBufferTime: 0.12
+  airMomentumDecay: 8
+  idleBobInterval: 0.5
+  idleSquashScaleY: 0.93
+  walkSFXList:
+  - {fileID: 8300000, guid: 02e18e2cfa16e1745aa942240e64d3d7, type: 3}
+  - {fileID: 8300000, guid: 679cdbb513b2b0f489b171a2fdbcd881, type: 3}
+  walkStepInterval: 0.28
+  jumpSFX: {fileID: 8300000, guid: 97e557b9d70d37546965d073148fb27c, type: 3}
+  doubleJumpSFX: {fileID: 8300000, guid: e946c38b2de418c4a84a9125eaedf31a, type: 3}
+  enableWallMechanics: 1
+  wallCheckDistance: 0.15
+  wallSlideSpeed: 2.5
+  wallJumpForce: {x: 11, y: 14.5}
+  wallJumpInputLockTime: 0.15
   dashingPower: 15
   dashingTime: 0.2
   dashingCooldown: 1
+  dashSFX: {fileID: 8300000, guid: 1786b9d7ce153d544a5abfd970d1c66f, type: 3}
   maxMeter: 100
   timeSpeed: 0.25
+  modeDimAlpha: 0.55
+  modeDimFadeDuration: 0.15
   minPointDistance: 0.1
   slashDrawDuration: 0.18
   slashDisappearDuration: 0.3
   targetSelectSFX: {fileID: 8300000, guid: 2467f5b27df4f6c4fb18b9adf6a63544, type: 3}
+  targetSelectBasePitch: 0.95
+  targetSelectPitchStep: 0.1
+  targetSelectMaxPitch: 1.85
   postSlashSFX: {fileID: 8300000, guid: bb46c0b74c1a7fe4a8e27bfa8f5296ce, type: 3}
   lineRendererObject: {fileID: 6958384551686248183, guid: 1e7127fa0ca9ca84eb93332146a27831, type: 3}
   mouseTrailPrefab: {fileID: 6290594118032658528, guid: dd9dcca80b0462349af071310a5ccc65, type: 3}
@@ -683,11 +710,17 @@ MonoBehaviour:
   grappleLayer:
     serializedVersion: 2
     m_Bits: 64
+  grappleKickSpeedThreshold: 11
+  grappleKickKnockback: 22
+  grappleKickBounceForce: 12.5
   ropeSegments: 20
   waveFrequency: 12
   waveAmplitude: 0.6
-  grappleHitSFX: {fileID: 0}
+  grappleReleaseSFX: {fileID: 8300000, guid: ff39b2f4b1e29204da4be693bbe6b7ac, type: 3}
+  grappleHitSFX: {fileID: 8300000, guid: af8269b9d5ed14b46bbf79d1c7b10fef, type: 3}
   grappleImpactPrefab: {fileID: 0}
+  grappleTargetIndicatorPrefab: {fileID: 6395415726420353949, guid: 7934020378fda6e4ab229d810da02b6d, type: 3}
+  grappleIndicatorOrbitRadius: 1.8
   maxSoundPlaying: 3
 --- !u!1 &3817734176033913203
 GameObject:
@@ -723,7 +756,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -0.05, y: 0.1}
+  m_AnchoredPosition: {x: 0, y: 0.05}
   m_SizeDelta: {x: 2, y: 0.1}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &4794137263013994099
@@ -747,14 +780,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0.75905716, g: 1, b: 0.3915094, a: 1}
+  m_Color: {r: 0.76424223, g: 1, b: 0.4009434, a: 1}
   m_RaycastTarget: 0
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 21300000, guid: 127279d577f25ac4ea17dae3782e5074, type: 3}
+  m_Sprite: {fileID: 1399725893816511699, guid: 18429e255be26b349960a6dc638a3faf, type: 3}
   m_Type: 3
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -822,15 +855,15 @@ RectTransform:
   m_GameObject: {fileID: 7036572509465447907}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
+  m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
+  m_ConstrainProportionsScale: 1
   m_Children:
   - {fileID: 8349365853079539130}
   m_Father: {fileID: 7891137421646894961}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0.05, y: -1}
+  m_AnchoredPosition: {x: 0, y: -1}
   m_SizeDelta: {x: 2, y: 0.1}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &6088410923236882051
@@ -861,7 +894,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 0}
+  m_Sprite: {fileID: 3737897332693287829, guid: 14566d9dae8f3ce4795e398fd887bc01, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -909,7 +942,7 @@ RectTransform:
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
   m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 20, y: 10}
+  m_SizeDelta: {x: 22.2, y: 12.6}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!223 &3601550599560893932
 Canvas:
@@ -1008,7 +1041,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -0.05, y: 0.1}
+  m_AnchoredPosition: {x: 0, y: 0.05}
   m_SizeDelta: {x: 2, y: 0.1}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &4600087980707596815
@@ -1039,7 +1072,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 21300000, guid: 127279d577f25ac4ea17dae3782e5074, type: 3}
+  m_Sprite: {fileID: 1399725893816511699, guid: 18429e255be26b349960a6dc638a3faf, type: 3}
   m_Type: 3
   m_PreserveAspect: 0
   m_FillCenter: 1
