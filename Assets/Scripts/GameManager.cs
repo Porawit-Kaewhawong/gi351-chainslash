@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Events;
 
 public class GameManager : MonoBehaviour
 {
@@ -57,12 +56,6 @@ public class GameManager : MonoBehaviour
 
     public Transform PlayerSpawnPoint => playerSpawnPoint;
 
-    [Header("Wave UI & Events (Optional)")]
-    [SerializeField] private GameObject victoryUIObject;
-    public UnityEvent<int, int> onWaveStarted;
-    public UnityEvent<int> onWaveCleared;
-    public UnityEvent onAllWavesCompleted;
-
     [Header("Ground & Raycast Settings")]
     [SerializeField] private LayerMask groundLayer;
     [SerializeField] private float minSpawnDistance = 6f;
@@ -97,11 +90,6 @@ public class GameManager : MonoBehaviour
 
         waitForSpawnInterval = new WaitForSeconds(timeBetweenSpawns);
         waitForWaveInterval = new WaitForSeconds(timeBetweenWaves);
-
-        if (victoryUIObject != null)
-        {
-            victoryUIObject.SetActive(false);
-        }
 
         if (portalSceneObject != null)
         {
@@ -159,7 +147,6 @@ public class GameManager : MonoBehaviour
         while (totalWaves <= 0 || CurrentWave < totalWaves)
         {
             CurrentWave++;
-            onWaveStarted?.Invoke(CurrentWave, totalWaves);
 
             // Clean up destroyed enemy references
             activeEnemies.RemoveAll(enemy => enemy == null);
@@ -192,8 +179,6 @@ public class GameManager : MonoBehaviour
                 }
             }
 
-            onWaveCleared?.Invoke(CurrentWave);
-
             // Wait between waves if there are more waves coming
             if (!isFinalWave)
             {
@@ -212,13 +197,6 @@ public class GameManager : MonoBehaviour
         Debug.Log($"All {totalWaves} waves completed!");
 
         SpawnNextLevelPortal();
-
-        if (victoryUIObject != null)
-        {
-            victoryUIObject.SetActive(true);
-        }
-
-        onAllWavesCompleted?.Invoke();
     }
 
     /// <summary>
@@ -621,6 +599,14 @@ public class GameManager : MonoBehaviour
         {
             colliderOffset = Vector2.Scale(capsule.offset, scale);
             colliderSize = Vector2.Scale(capsule.size, scale);
+        }
+    }
+
+    public void RegisterEnemy(GameObject enemy)
+    {
+        if (enemy != null && !activeEnemies.Contains(enemy))
+        {
+            activeEnemies.Add(enemy);
         }
     }
 

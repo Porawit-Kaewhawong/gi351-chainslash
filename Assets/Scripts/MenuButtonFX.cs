@@ -16,12 +16,19 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
     private Vector3 originalScale;
     private Vector3 targetScale;
     private MainMenu mainMenu;
+    private GameOverPanel gameOverPanel;
 
     private void Awake()
     {
         originalScale = transform.localScale;
         targetScale = originalScale;
         mainMenu = FindFirstObjectByType<MainMenu>();
+        gameOverPanel = FindFirstObjectByType<GameOverPanel>();
+    }
+
+    public void SetGameOverPanel(GameOverPanel panel)
+    {
+        gameOverPanel = panel;
     }
 
     private void OnEnable()
@@ -42,6 +49,10 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
         {
             mainMenu.PlayButtonHoverSFX(hoverSFX);
         }
+        else if (gameOverPanel != null)
+        {
+            gameOverPanel.PlayButtonHoverSFX(hoverSFX);
+        }
     }
 
     public void OnPointerExit(PointerEventData eventData)
@@ -55,6 +66,10 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
         if (mainMenu != null)
         {
             mainMenu.PlayButtonClickSFX(clickSFX);
+        }
+        else if (gameOverPanel != null)
+        {
+            gameOverPanel.PlayButtonClickSFX(clickSFX);
         }
     }
 }

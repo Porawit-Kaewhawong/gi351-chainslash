@@ -29,7 +29,7 @@ Transform:
   m_GameObject: {fileID: 3260056029298322424}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 1.375, y: -3.625, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -169,6 +169,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ThrowerNinja
   moveSpeed: 2.5
+  maxStepHeight: 0.6
+  stepCheckDistance: 0.22
   groundLayer:
     serializedVersion: 2
     m_Bits: 64
@@ -179,6 +181,7 @@ MonoBehaviour:
   wallCheckDistance: 0.6
   groundCheckDistance: 0.6
   windUpDuration: 0.4
+  showTelegraphColor: 0
   telegraphColor: {r: 1, g: 0, b: 0, a: 1}
   contactDamage: 15
   attackCooldown: 1
@@ -191,9 +194,6 @@ MonoBehaviour:
   targetableOutlineColor: {r: 1, g: 0.9681574, b: 0.5330188, a: 1}
   targetableOutlineThickness: 0.055
   targetJitterStrength: 0.03
-  dodgeTriggerDistance: 3.5
-  dodgeForce: 9
-  dodgeCooldown: 3
   shurikenPrefab: {fileID: 9179823344550816202, guid: b07dbac2f40f83843adf16a59089582d, type: 3}
   throwInterval: 3
   throwRange: 13
@@ -204,6 +204,8 @@ MonoBehaviour:
   throwTelegraphColor: {r: 1, g: 0.55, b: 0.1, a: 1}
   throwPoint: {fileID: 0}
   throwSFX: {fileID: 0}
+  deathProjectileCount: 2
+  deathProjectileSpeed: 13.5
 --- !u!1 &4618780478795535015
 GameObject:
   m_ObjectHideFlags: 0
@@ -220,7 +222,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1534673693254457762
 Transform:
   m_ObjectHideFlags: 0
@@ -378,7 +380,7 @@ SpriteRenderer:
   m_SortingOrder: 3
   m_MaskInteraction: 0
   m_Sprite: {fileID: -4860707273128907883, guid: 488f347ddd36d2a4bae9c7e9cff984b4, type: 3}
-  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_Color: {r: 1, g: 0.9618751, b: 0, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0

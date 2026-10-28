@@ -17,6 +17,10 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     [Header("Base Movement Settings")]
     [SerializeField] protected float moveSpeed = 2.5f;
+    [Tooltip("Maximum vertical height of a step or stair that can be walked up automatically without jumping.")]
+    [SerializeField] protected float maxStepHeight = 0.6f;
+    [Tooltip("Forward distance to check ahead for upcoming stair steps.")]
+    [SerializeField] protected float stepCheckDistance = 0.22f;
 
     [Header("Jump Settings")]
     [SerializeField] protected LayerMask groundLayer;
@@ -99,7 +103,16 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         {
             defaultGravityScale = rb.gravityScale;
         }
-        col = GetComponent<Collider2D>();
+        Collider2D[] colliders = GetComponents<Collider2D>();
+        foreach (var c in colliders)
+        {
+            if (c != null && !c.isTrigger)
+            {
+                col = c;
+                break;
+            }
+        }
+        if (col == null) col = GetComponent<Collider2D>();
         jumpsLeft = maxJumps;
 
         if (targetIndicator != null)
@@ -395,6 +408,11 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
                     Vector2 velocity = rb.linearVelocity;
                     velocity.x = Mathf.Clamp(velocity.x, -speed * 1.5f, speed * 1.5f);
                     rb.linearVelocity = velocity;
+
+                    if (Mathf.Abs(dir.x) > 0.05f)
+                    {
+                        HandleStepClimb(dir.x);
+                    }
                 }
                 break;
         }
@@ -473,6 +491,17 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             {
                 currentState = State.Normal;
             }
+
+            // If player is on a lower floor and we are on a drop-through platform, drop down!
+            Transform playerTarget = playerController != null ? playerController.transform : (PlayerController.Instance != null ? PlayerController.Instance.transform : null);
+            if (playerTarget != null && playerTarget.position.y < transform.position.y - 1.2f && Time.time > lastJumpTime + 0.35f)
+            {
+                if (TryDropThroughPlatform())
+                {
+                    lastJumpTime = Time.time;
+                    return;
+                }
+            }
         }
 
         // Start wall-running when contacting a wall in the direction of the player
@@ -504,6 +533,24 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         }
     }
 
+    public virtual bool TryDropThroughPlatform()
+    {
+        if (col == null) return false;
+        Vector2 checkPos = new Vector2(col.bounds.center.x, col.bounds.min.y - 0.05f);
+        Collider2D[] hits = Physics2D.OverlapCircleAll(checkPos, 0.25f, groundLayer);
+        foreach (Collider2D hit in hits)
+        {
+            if (hit == null || hit.isTrigger) continue;
+            Platformer platform = hit.GetComponentInParent<Platformer>();
+            if (platform != null)
+            {
+                platform.DropThrough(gameObject);
+                return true;
+            }
+        }
+        return false;
+    }
+
     protected bool IsTouchingWall(Bounds bounds, int horizontalDir)
     {
         if (horizontalDir == 0) horizontalDir = 1;
@@ -512,6 +559,95 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         float castDist = bounds.extents.x + Mathf.Max(0.15f, wallCheckDistance * 0.5f);
 
         return Physics2D.BoxCast(bounds.center, castSize, 0f, castDir, castDist, groundLayer);
+    }
+
+    /// <summary>
+    /// Smoothly steps up low obstacles, curbs, and stairs without requiring the enemy to jump.
+    /// Also handles downward stair snapping when descending stairs so pursuit remains continuous.
+    /// </summary>
+    protected virtual void HandleStepClimb(float moveDirX)
+    {
+        if (col == null || rb == null) return;
+        if (Mathf.Abs(moveDirX) < 0.05f) return;
+        if (rb.linearVelocityY > 0.25f) return; // Don't step-climb during upward jumps/dives
+
+        Bounds bounds = col.bounds;
+        float halfWidth = bounds.extents.x;
+        float currentFootY = bounds.min.y;
+        float dirX = Mathf.Sign(moveDirX);
+
+        // 1. Check for a low vertical step / obstacle at foot level
+        float checkDist = halfWidth + stepCheckDistance;
+        Vector2 footOrigin = new Vector2(bounds.center.x, currentFootY + 0.05f);
+        RaycastHit2D footHit = Physics2D.Raycast(footOrigin, Vector2.right * dirX, checkDist, groundLayer);
+
+        if (footHit.collider != null && !footHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(col, footHit.collider))
+        {
+            if (footHit.normal.y < 0.7f)
+            {
+                float distFromFront = Mathf.Abs(footHit.point.x - (bounds.center.x + dirX * halfWidth));
+                if (distFromFront <= 0.14f)
+                {
+                    // 2. Check if the space above maxStepHeight is clear (ensures it's a step/stair, not a full wall)
+                    Vector2 waistOrigin = new Vector2(bounds.center.x, currentFootY + maxStepHeight + 0.06f);
+                    RaycastHit2D waistHit = Physics2D.Raycast(waistOrigin, Vector2.right * dirX, checkDist, groundLayer);
+
+                    if (waistHit.collider == null || waistHit.collider.isTrigger || Physics2D.GetIgnoreCollision(col, waistHit.collider))
+                    {
+                        // 3. Probe downward onto the step to find its walkable surface height
+                        float probeX = footHit.point.x + (dirX * 0.15f);
+                        Vector2 probeOrigin = new Vector2(probeX, currentFootY + maxStepHeight + 0.08f);
+                        RaycastHit2D surfaceHit = Physics2D.Raycast(probeOrigin, Vector2.down, maxStepHeight + 0.12f, groundLayer);
+
+                        if (surfaceHit.collider != null && !surfaceHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(col, surfaceHit.collider))
+                        {
+                            if (surfaceHit.normal.y >= 0.55f)
+                            {
+                                float stepHeight = surfaceHit.point.y - currentFootY;
+                                if (stepHeight > 0.01f && stepHeight <= maxStepHeight)
+                                {
+                                    // 4. Verify clearance for the enemy's body above the step
+                                    Vector2 targetCenter = (Vector2)bounds.center + new Vector2(dirX * 0.04f, stepHeight + 0.02f);
+                                    Vector2 bodySize = new Vector2(bounds.size.x * 0.85f, bounds.size.y * 0.85f);
+                                    Collider2D overlap = Physics2D.OverlapBox(targetCenter, bodySize, 0f, groundLayer);
+
+                                    if (overlap == null || overlap == col || overlap.isTrigger || Physics2D.GetIgnoreCollision(col, overlap))
+                                    {
+                                        // 5. Smoothly step up onto the stair!
+                                        rb.position += new Vector2(dirX * 0.04f, stepHeight + 0.02f);
+                                        if (rb.linearVelocityY < 0f)
+                                        {
+                                            rb.linearVelocity = new Vector2(rb.linearVelocityX, 0f);
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6. Step Down Snapping
+        if (rb.linearVelocityY <= 0.05f)
+        {
+            Vector2 downProbeOrigin = new Vector2(bounds.center.x + (dirX * 0.12f), currentFootY + 0.08f);
+            RaycastHit2D downHit = Physics2D.Raycast(downProbeOrigin, Vector2.down, maxStepHeight + 0.15f, groundLayer);
+
+            if (downHit.collider != null && !downHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(col, downHit.collider))
+            {
+                if (downHit.normal.y >= 0.55f)
+                {
+                    float dropDist = currentFootY - downHit.point.y;
+                    if (dropDist > 0.04f && dropDist <= maxStepHeight)
+                    {
+                        rb.position -= new Vector2(0f, dropDist - 0.01f);
+                        rb.linearVelocity = new Vector2(rb.linearVelocityX, 0f);
+                    }
+                }
+            }
+        }
     }
 
     protected virtual IEnumerator TelegraphAndDive()
@@ -549,6 +685,11 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             Vector2 diveDir = (playerController.transform.position - transform.position).normalized;
             if (diveDir.sqrMagnitude < 0.01f) diveDir = new Vector2(-wallRunDirection, 0.5f).normalized;
             rb.linearVelocity = diveDir * jumpForce * 1.5f;
+
+            if (diveDir.y < -0.2f)
+            {
+                TryDropThroughPlatform();
+            }
         }
     }
 

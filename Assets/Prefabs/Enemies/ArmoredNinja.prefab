@@ -29,7 +29,7 @@ Transform:
   m_GameObject: {fileID: 3260056029298322424}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: -4, y: -8, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -169,6 +169,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ArmoredNinja
   moveSpeed: 1.35
+  maxStepHeight: 0.6
+  stepCheckDistance: 0.22
   groundLayer:
     serializedVersion: 2
     m_Bits: 64
@@ -378,7 +380,7 @@ SpriteRenderer:
   m_SortingOrder: 3
   m_MaskInteraction: 0
   m_Sprite: {fileID: -4860707273128907883, guid: 488f347ddd36d2a4bae9c7e9cff984b4, type: 3}
-  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_Color: {r: 0.15566039, g: 0.75932467, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0

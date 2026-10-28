@@ -112990,6 +112990,63 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1001 &1704865046
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 885.21826
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 489.66977
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2226162202844115517, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+      propertyPath: m_Name
+      value: Player
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
 --- !u!1 &1745446495
 GameObject:
   m_ObjectHideFlags: 0
@@ -113054,13 +113111,17 @@ MonoBehaviour:
   enemyConfigs:
   - label: Ninja
     prefab: {fileID: 3260056029298322424, guid: c25d1c4c38a87f044b98c595233a0ff5, type: 3}
-    spawnCount: 3
-    spawnWeight: 9
+    spawnCount: 5
+    spawnWeight: 5
   - label: Suicide Ninja
     prefab: {fileID: 2944547956908393011, guid: 530c120d452e89a49bfc1d7691ea81e2, type: 3}
-    spawnCount: 1
-    spawnWeight: 3
-  totalWaves: 3
+    spawnCount: 2
+    spawnWeight: 2
+  - label: Thrower Ninja
+    prefab: {fileID: 3260056029298322424, guid: 7afcea2bb7c84d12a1bbf5703eec3dd7, type: 3}
+    spawnCount: 2
+    spawnWeight: 2
+  totalWaves: 5
   waitForWaveClear: 1
   enemiesPerWave: 10
   bonusEnemiesPerWave: 2
@@ -113071,16 +113132,6 @@ MonoBehaviour:
   portalPrefab: {fileID: 4555465085832614072, guid: a51636e3642ceb740bffb01ddcfd2278, type: 3}
   portalSceneObject: {fileID: 0}
   portalSpawnPoint: {fileID: 525190924}
-  victoryUIObject: {fileID: 0}
-  onWaveStarted:
-    m_PersistentCalls:
-      m_Calls: []
-  onWaveCleared:
-    m_PersistentCalls:
-      m_Calls: []
-  onAllWavesCompleted:
-    m_PersistentCalls:
-      m_Calls: []
   groundLayer:
     serializedVersion: 2
     m_Bits: 64
@@ -113593,3 +113644,4 @@ SceneRoots:
   - {fileID: 1071599664}
   - {fileID: 1827570841}
   - {fileID: 1398566478}
+  - {fileID: 1704865046}

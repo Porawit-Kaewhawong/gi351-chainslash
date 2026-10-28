@@ -1106,8 +1106,19 @@ MonoBehaviour:
   parallaxBackground: {fileID: 2007456631}
   parallaxAmount: 20
   parallaxSmoothSpeed: 5
+  backgroundSlideshow:
+  - {fileID: -6695950386315148514, guid: 0a6e07dc224ac0f46bee29dce2992ae5, type: 3}
+  - {fileID: 8053356100939522090, guid: c96c51fe142ce62449503bc5e99aa213, type: 3}
+  - {fileID: 9130931656606948373, guid: ba22ad31c5903a445903f786d427fe7e, type: 3}
+  slideDuration: 6
+  crossfadeDuration: 1.2
+  autoCycleSlideshow: 1
+  randomizeOrder: 0
   bgmAudioSource: {fileID: 0}
   sfxAudioSource: {fileID: 0}
+  buttonClickSFX: {fileID: 0}
+  buttonHoverSFX: {fileID: 0}
+  sfxVolume: 1
 --- !u!1 &679749269
 GameObject:
   m_ObjectHideFlags: 0

@@ -13,8 +13,8 @@ public class ArmoredNinja : EnemyBase
     [SerializeField] private GameObject armorShatterVFX;
 
     [Header("Immunity Settings")]
-    [SerializeField] private bool immuneToShurikens = true;
-    [SerializeField] private bool immuneToExplosions = true;
+    [SerializeField] private bool immuneToShurikens = false;
+    [SerializeField] private bool immuneToExplosions = false;
 
     [Header("Target Circles Settings")]
     [SerializeField] private int requiredWeakPointCount = 3;
@@ -247,10 +247,43 @@ public class ArmoredNinja : EnemyBase
 
     public bool IsImmuneToShurikens => immuneToShurikens;
     public bool IsImmuneToExplosions => immuneToExplosions;
+    public bool IsDefeated => isDefeated;
+
+    /// <summary>
+    /// Damages and shatters the armored ninja when hit by an explosion (e.g. from ChainEnemy).
+    /// </summary>
+    public void TakeExplosionDamage(Vector3 explosionPos)
+    {
+        if (IsDead || isDefeated) return;
+        PlayClangSFX();
+        TriggerFlash();
+
+        Vector2 impulse = (transform.position - explosionPos).normalized * 10f;
+        DefeatArmoredNinja(impulse);
+    }
+
+    /// <summary>
+    /// Damages and pierces the armored ninja when hit by a projectile (e.g. reflected shuriken).
+    /// </summary>
+    public void TakeShurikenDamage(Vector2 moveDirection)
+    {
+        if (IsDead || isDefeated) return;
+        PlayClangSFX();
+        TriggerFlash();
+
+        Vector2 impulse = moveDirection != Vector2.zero ? moveDirection * 8f : Vector2.up * 4f;
+        DefeatArmoredNinja(impulse);
+    }
 
     public void DeflectProjectile(Vector2 hitPoint)
     {
         if (IsDead || isDefeated) return;
+        if (!immuneToShurikens)
+        {
+            TakeShurikenDamage(Vector2.zero);
+            return;
+        }
+
         PlayClangSFX();
         TriggerFlash();
     }
@@ -258,6 +291,12 @@ public class ArmoredNinja : EnemyBase
     public void OnExplosionHit(Vector3 explosionPos)
     {
         if (IsDead || isDefeated) return;
+        if (!immuneToExplosions)
+        {
+            TakeExplosionDamage(explosionPos);
+            return;
+        }
+
         PlayClangSFX();
         TriggerFlash();
     }
@@ -364,6 +403,7 @@ public class ArmoredNinjaWeakPoint : EnemyBase
 
     public int PointIndex => pointIndex;
     public bool IsSlashed => isSlashed;
+    public ArmoredNinja OwnerNinja => ownerNinja;
 
     protected override void Awake()
     {

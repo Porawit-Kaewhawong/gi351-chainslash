@@ -427,22 +427,43 @@ public class Shuriken : MonoBehaviour
             return;
         }
 
-        // Armored Ninja and its weak points are completely immune to shurikens (deflects off armor)
+        // Check Armored Ninja hit
         ArmoredNinja armoredNinja = other.GetComponentInParent<ArmoredNinja>();
         if (armoredNinja != null || other.GetComponentInParent<ArmoredNinjaWeakPoint>() != null)
         {
             hasHit = true;
             if (armoredNinja != null)
             {
-                armoredNinja.DeflectProjectile(transform.position);
+                if (isReflected || canDamageEnemies)
+                {
+                    armoredNinja.TakeShurikenDamage(moveDirection);
+                }
+                else
+                {
+                    armoredNinja.DeflectProjectile(transform.position);
+                }
             }
             PlayHitFeedback(transform.position);
             Destroy(gameObject);
             return;
         }
 
+        // Check Legendary Samurai boss hit
+        LegendarySamurai samuraiBoss = other.GetComponentInParent<LegendarySamurai>();
+        if (samuraiBoss != null || other.GetComponentInParent<BossTargetPoint>() != null)
+        {
+            if (samuraiBoss != null && (isReflected || canDamageEnemies))
+            {
+                hasHit = true;
+                samuraiBoss.TakeShurikenHit(moveDirection);
+                PlayHitFeedback(transform.position);
+                Destroy(gameObject);
+                return;
+            }
+        }
+
         // Check if this projectile is configured to damage other enemies (e.g. ThrowerNinja death shurikens or reflected shurikens)
-        if (canDamageEnemies)
+        if (canDamageEnemies || isReflected)
         {
             // Ignore the source enemy that spawned it (unless reflected by player!)
             if (!isReflected && sourceEnemy != null && (other == sourceEnemy || other.transform.IsChildOf(sourceEnemy.transform)))
@@ -454,7 +475,14 @@ public class Shuriken : MonoBehaviour
             if (hitEnemy != null && !hitEnemy.IsDead && (!isReflected && sourceEnemy != null && hitEnemy.gameObject == sourceEnemy ? false : true))
             {
                 hasHit = true;
-                hitEnemy.OnDeath(moveDirection);
+                if (hitEnemy is LegendarySamurai bossTarget)
+                {
+                    bossTarget.TakeShurikenHit(moveDirection);
+                }
+                else
+                {
+                    hitEnemy.OnDeath(moveDirection);
+                }
                 PlayHitFeedback(transform.position);
                 Destroy(gameObject);
                 return;

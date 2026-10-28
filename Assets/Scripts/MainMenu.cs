@@ -20,6 +20,18 @@ public class MainMenu : MonoBehaviour
     [SerializeField] private float parallaxAmount = 20f;
     [SerializeField] private float parallaxSmoothSpeed = 5f;
 
+    [Header("Background Slideshow Settings")]
+    [Tooltip("List of background sprites to cycle through in the slideshow.")]
+    [SerializeField] private List<Sprite> backgroundSlideshow = new List<Sprite>();
+    [Tooltip("Display duration for each background slide in seconds.")]
+    [SerializeField] private float slideDuration = 6.0f;
+    [Tooltip("Crossfade blend transition time between background slides in seconds.")]
+    [SerializeField] private float crossfadeDuration = 1.2f;
+    [Tooltip("Whether the slideshow automatically cycles through the backgrounds.")]
+    [SerializeField] private bool autoCycleSlideshow = true;
+    [Tooltip("Whether to randomize the order of backgrounds instead of cycling sequentially.")]
+    [SerializeField] private bool randomizeOrder = false;
+
     [Header("Audio Settings")]
     [SerializeField] private AudioSource bgmAudioSource;
     [SerializeField] private AudioSource sfxAudioSource;
@@ -32,6 +44,14 @@ public class MainMenu : MonoBehaviour
     private AudioClip lastPlayedSFXClip;
     private Vector3 initialBackgroundPos;
     private Vector3 initialBackgroundScale = Vector3.one;
+
+    // Slideshow state
+    private Image mainBgImage;
+    private Image crossfadeBgImage;
+    private int currentSlideIndex = 0;
+    private Coroutine slideshowCoroutine;
+    private Coroutine crossfadeCoroutine;
+    private bool isCrossfading = false;
 
     private RectTransform topShutter;
     private RectTransform bottomShutter;
@@ -74,6 +94,7 @@ public class MainMenu : MonoBehaviour
         {
             initialBackgroundPos = parallaxBackground.anchoredPosition;
             initialBackgroundScale = parallaxBackground.localScale;
+            SetupBackgroundSlideshow();
         }
 
         // Auto-fade in from black on start
@@ -109,6 +130,192 @@ public class MainMenu : MonoBehaviour
         Vector3 targetPos = initialBackgroundPos + new Vector3(normalizedX * parallaxAmount, normalizedY * parallaxAmount, 0f);
         parallaxBackground.anchoredPosition = Vector3.Lerp(parallaxBackground.anchoredPosition, targetPos, Time.unscaledDeltaTime * parallaxSmoothSpeed);
     }
+
+    #region Background Slideshow System
+
+    private void SetupBackgroundSlideshow()
+    {
+        if (parallaxBackground == null) return;
+
+        mainBgImage = parallaxBackground.GetComponent<Image>();
+        if (mainBgImage == null)
+        {
+            mainBgImage = parallaxBackground.GetComponentInChildren<Image>();
+        }
+
+#if UNITY_EDITOR
+        if (backgroundSlideshow == null)
+        {
+            backgroundSlideshow = new List<Sprite>();
+        }
+
+        if (backgroundSlideshow.Count == 0)
+        {
+            if (mainBgImage != null && mainBgImage.sprite != null)
+            {
+                backgroundSlideshow.Add(mainBgImage.sprite);
+            }
+
+            string[] candidatePaths = new string[]
+            {
+                "Assets/Textures/BG.png",
+                "Assets/Textures/MapBG1.png",
+                "Assets/Textures/MAP2_2.png",
+                "Assets/FreeAssets/RockyWorld/background1.png",
+                "Assets/FreeAssets/RockyWorld/background2.png",
+                "Assets/FreeAssets/RockyWorld/background3.png"
+            };
+
+            foreach (string path in candidatePaths)
+            {
+                Sprite sp = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(path);
+                if (sp != null && !backgroundSlideshow.Contains(sp))
+                {
+                    backgroundSlideshow.Add(sp);
+                }
+            }
+        }
+#endif
+
+        if (mainBgImage != null && backgroundSlideshow.Count > 0 && mainBgImage.sprite == null)
+        {
+            mainBgImage.sprite = backgroundSlideshow[0];
+        }
+
+        EnsureCrossfadeOverlay();
+
+        if (autoCycleSlideshow && backgroundSlideshow.Count > 1)
+        {
+            if (slideshowCoroutine != null) StopCoroutine(slideshowCoroutine);
+            slideshowCoroutine = StartCoroutine(SlideshowRoutine());
+        }
+    }
+
+    private void EnsureCrossfadeOverlay()
+    {
+        if (parallaxBackground == null) return;
+
+        Transform existing = parallaxBackground.Find("BGCrossfadeOverlay");
+        if (existing != null)
+        {
+            crossfadeBgImage = existing.GetComponent<Image>();
+        }
+
+        if (crossfadeBgImage == null)
+        {
+            GameObject overlayObj = new GameObject("BGCrossfadeOverlay");
+            overlayObj.transform.SetParent(parallaxBackground, false);
+
+            RectTransform rt = overlayObj.AddComponent<RectTransform>();
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+
+            crossfadeBgImage = overlayObj.AddComponent<Image>();
+            crossfadeBgImage.raycastTarget = false;
+            crossfadeBgImage.color = new Color(1f, 1f, 1f, 0f);
+
+            // Keep overlay behind any foreground character/props children
+            overlayObj.transform.SetSiblingIndex(0);
+        }
+        else
+        {
+            crossfadeBgImage.color = new Color(1f, 1f, 1f, 0f);
+        }
+    }
+
+    private IEnumerator SlideshowRoutine()
+    {
+        while (autoCycleSlideshow && backgroundSlideshow.Count > 1)
+        {
+            yield return new WaitForSecondsRealtime(slideDuration);
+
+            if (isTransitioning) yield break;
+
+            int nextIndex;
+            if (randomizeOrder)
+            {
+                nextIndex = Random.Range(0, backgroundSlideshow.Count);
+                if (nextIndex == currentSlideIndex && backgroundSlideshow.Count > 1)
+                {
+                    nextIndex = (nextIndex + 1) % backgroundSlideshow.Count;
+                }
+            }
+            else
+            {
+                nextIndex = (currentSlideIndex + 1) % backgroundSlideshow.Count;
+            }
+
+            currentSlideIndex = nextIndex;
+            Sprite nextSprite = backgroundSlideshow[currentSlideIndex];
+
+            if (crossfadeCoroutine != null) StopCoroutine(crossfadeCoroutine);
+            yield return StartCoroutine(CrossfadeToSpriteRoutine(nextSprite));
+        }
+    }
+
+    private IEnumerator CrossfadeToSpriteRoutine(Sprite newSprite)
+    {
+        if (newSprite == null || mainBgImage == null || crossfadeBgImage == null) yield break;
+        if (mainBgImage.sprite == newSprite) yield break;
+
+        isCrossfading = true;
+
+        crossfadeBgImage.sprite = newSprite;
+        crossfadeBgImage.color = new Color(1f, 1f, 1f, 0f);
+        crossfadeBgImage.gameObject.SetActive(true);
+
+        float elapsed = 0f;
+        while (elapsed < crossfadeDuration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / crossfadeDuration);
+            float smoothT = Mathf.SmoothStep(0f, 1f, t);
+
+            crossfadeBgImage.color = new Color(1f, 1f, 1f, smoothT);
+            yield return null;
+        }
+
+        mainBgImage.sprite = newSprite;
+        crossfadeBgImage.color = new Color(1f, 1f, 1f, 0f);
+        isCrossfading = false;
+    }
+
+    /// <summary>
+    /// Manually switches to the next background slide in the list.
+    /// </summary>
+    public void NextSlide()
+    {
+        if (backgroundSlideshow.Count <= 1 || isCrossfading) return;
+        currentSlideIndex = (currentSlideIndex + 1) % backgroundSlideshow.Count;
+        if (crossfadeCoroutine != null) StopCoroutine(crossfadeCoroutine);
+        crossfadeCoroutine = StartCoroutine(CrossfadeToSpriteRoutine(backgroundSlideshow[currentSlideIndex]));
+    }
+
+    /// <summary>
+    /// Manually switches to the previous background slide in the list.
+    /// </summary>
+    public void PreviousSlide()
+    {
+        if (backgroundSlideshow.Count <= 1 || isCrossfading) return;
+        currentSlideIndex = (currentSlideIndex - 1 + backgroundSlideshow.Count) % backgroundSlideshow.Count;
+        if (crossfadeCoroutine != null) StopCoroutine(crossfadeCoroutine);
+        crossfadeCoroutine = StartCoroutine(CrossfadeToSpriteRoutine(backgroundSlideshow[currentSlideIndex]));
+    }
+
+    /// <summary>
+    /// Directly transitions to a specific background slide by index.
+    /// </summary>
+    public void SetSlide(int index)
+    {
+        if (backgroundSlideshow.Count == 0 || index < 0 || index >= backgroundSlideshow.Count || isCrossfading) return;
+        currentSlideIndex = index;
+        if (crossfadeCoroutine != null) StopCoroutine(crossfadeCoroutine);
+        crossfadeCoroutine = StartCoroutine(CrossfadeToSpriteRoutine(backgroundSlideshow[currentSlideIndex]));
+    }
+
+    #endregion
 
     public void StartGame()
     {
@@ -289,7 +496,7 @@ public class MainMenu : MonoBehaviour
 
         PlaySFX(startTransitionSFX);
 
-        Vector3 startBgPos = parallaxBackground != null ? parallaxBackground.anchoredPosition : Vector3.zero;
+        Vector3 startBgPos = parallaxBackground != null ? (Vector3)parallaxBackground.anchoredPosition : Vector3.zero;
         Vector3 startBgScale = parallaxBackground != null ? parallaxBackground.localScale : Vector3.one;
         float startBgmVol = bgmAudioSource != null ? bgmAudioSource.volume : 1f;
 

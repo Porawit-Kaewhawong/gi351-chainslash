@@ -179,6 +179,7 @@ MonoBehaviour:
   wallCheckDistance: 0.6
   groundCheckDistance: 0.65
   windUpDuration: 0.4
+  showTelegraphColor: 0
   telegraphColor: {r: 1, g: 0, b: 0, a: 1}
   contactDamage: 15
   attackCooldown: 1
@@ -190,6 +191,7 @@ MonoBehaviour:
   targetIndicator: {fileID: 9091602837837721924}
   targetableOutlineColor: {r: 1, g: 0.5235849, b: 0.57056165, a: 1}
   targetableOutlineThickness: 0.055
+  targetJitterStrength: 0.03
   aggroDistance: 4.5
   aggroSpeedMultiplier: 1.8
   targetFuseDuration: 2
@@ -329,7 +331,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &8750511637345490125
 Transform:
   m_ObjectHideFlags: 0

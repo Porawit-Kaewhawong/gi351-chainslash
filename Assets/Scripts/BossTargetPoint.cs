@@ -1,10 +1,12 @@
+using System.Collections;
 using UnityEngine;
 
 [RequireComponent(typeof(CircleCollider2D))]
 public class BossTargetPoint : EnemyBase
 {
     [Header("Target Point Visuals")]
-    [SerializeField] private Color targetNormalColor = new Color(0.95f, 0.25f, 0.9f, 1f); // Vibrant purple-pink
+    [SerializeField] private Color normalColor = new Color(1f, 0.6f, 0.15f, 1f);
+    [SerializeField] private Color selectedColor = new Color(0.2f, 0.95f, 1f, 1f);
     [SerializeField] private GameObject slashVFXPrefab;
     [SerializeField] private AudioClip slashSFX;
 
@@ -14,12 +16,22 @@ public class BossTargetPoint : EnemyBase
 
     public int PointIndex => pointIndex;
     public bool IsSlashed => isSlashed;
+    public LegendarySamurai OwnerBoss => boss;
 
     protected override void Awake()
     {
-        base.Awake();
+        col = GetComponent<Collider2D>();
+        if (col != null) col.isTrigger = true;
 
-        // Target points do not use physical gravity or dynamic physics pushing
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer != null)
+        {
+            if (spriteRenderer.color.a > 0f) normalColor = spriteRenderer.color;
+            originalColor = normalColor;
+            spriteRenderer.sortingOrder = 7;
+        }
+
+        rb = GetComponent<Rigidbody2D>();
         if (rb != null)
         {
             rb.bodyType = RigidbodyType2D.Kinematic;
@@ -27,24 +39,7 @@ public class BossTargetPoint : EnemyBase
             rb.linearVelocity = Vector2.zero;
         }
 
-        if (col != null)
-        {
-            col.isTrigger = true;
-        }
-
-        if (spriteRenderer == null)
-        {
-            spriteRenderer = gameObject.AddComponent<SpriteRenderer>();
-        }
-
-        if (spriteRenderer.sprite == null)
-        {
-            spriteRenderer.sprite = GetOrCreateTargetPointSprite();
-        }
-
-        originalColor = targetNormalColor;
-        spriteRenderer.color = originalColor;
-        spriteRenderer.sortingOrder = 6;
+        DeactivatePoint();
     }
 
     public void Initialize(LegendarySamurai ownerBoss, int index)
@@ -56,17 +51,19 @@ public class BossTargetPoint : EnemyBase
     public void ActivatePoint(Vector3 worldPos)
     {
         transform.position = worldPos;
-        gameObject.SetActive(true);
         isSlashed = false;
         IsDead = false;
         isTarget = false;
 
-        if (col != null) col.enabled = true;
         if (spriteRenderer != null)
         {
+            spriteRenderer.color = normalColor;
             spriteRenderer.enabled = true;
-            spriteRenderer.color = originalColor;
         }
+
+        if (col != null) col.enabled = true;
+
+        gameObject.SetActive(true);
     }
 
     public void DeactivatePoint()
@@ -79,31 +76,65 @@ public class BossTargetPoint : EnemyBase
         gameObject.SetActive(false);
     }
 
+    public override void TrySelectTarget()
+    {
+        if (IsDead || isSlashed || isTarget) return;
+
+        if (PlayerController.Instance != null && PlayerController.Instance.IsInMode)
+        {
+            isTarget = true;
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.color = selectedColor;
+            }
+
+            PlayerController.Instance.TargetSetup(transform);
+        }
+    }
+
+    protected override void Update()
+    {
+        if (IsDead || isSlashed || !gameObject.activeSelf) return;
+
+        if (!isTarget && PlayerController.Instance != null && PlayerController.Instance.IsInMode)
+        {
+            CheckMouseHover();
+        }
+    }
+
+    protected override void CheckMouseHover()
+    {
+        if (isTarget || col == null) return;
+
+        Camera cam = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (cam == null || UnityEngine.InputSystem.Mouse.current == null) return;
+
+        Vector3 screenPos = UnityEngine.InputSystem.Mouse.current.position.ReadValue();
+        screenPos.z = -cam.transform.position.z;
+        Vector2 mouseWorld = cam.ScreenToWorldPoint(screenPos);
+
+        if (col.OverlapPoint(mouseWorld) || Vector2.Distance(transform.position, mouseWorld) <= 0.6f)
+        {
+            TrySelectTarget();
+        }
+    }
+
+    public override void OnPointerEnter(UnityEngine.EventSystems.PointerEventData eventData)
+    {
+        TrySelectTarget();
+    }
+
     public override void OnDeath(Vector2 deathImpulse = default)
     {
-        if (isSlashed) return;
+        if (isSlashed || !isTarget) return;
         isSlashed = true;
         IsDead = true;
 
-        if (slashVFXPrefab != null)
-        {
-            Instantiate(slashVFXPrefab, transform.position, Quaternion.identity);
-        }
+        if (slashVFXPrefab != null) Instantiate(slashVFXPrefab, transform.position, Quaternion.identity);
+        if (slashSFX != null && PlayerController.Instance != null) PlayerController.Instance.PlaySFX(slashSFX);
 
-        if (slashSFX != null && playerController != null)
-        {
-            playerController.PlaySFX(slashSFX);
-        }
-
-        if (spriteRenderer != null)
-        {
-            spriteRenderer.enabled = false;
-        }
-
-        if (col != null)
-        {
-            col.enabled = false;
-        }
+        if (spriteRenderer != null) spriteRenderer.enabled = false;
+        if (col != null) col.enabled = false;
 
         gameObject.SetActive(false);
 
@@ -113,13 +144,14 @@ public class BossTargetPoint : EnemyBase
         }
     }
 
-    // Overrides to disable standard enemy pathfinding/jumping
+    // Lightweight stubs to prevent enemy pathfinding/jumping
     protected override void Movement() {}
     protected override void HandleJump(Vector2 dir) {}
     protected override void HandlePlayerContact(Collision2D collision) {}
     protected override void HandlePlayerTriggerContact(Collider2D other) {}
     protected override bool HandleThrownImpact(Collision2D collision) => false;
     protected override void FlipAndRotate() {}
+    protected override void UpdateTargetIndicator() {}
 
     private static Sprite cachedTargetSprite;
     public static Sprite GetOrCreateTargetPointSprite()
@@ -128,25 +160,27 @@ public class BossTargetPoint : EnemyBase
 
         int size = 24;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        tex.filterMode = FilterMode.Bilinear;
+        tex.filterMode = FilterMode.Point;
         Color clear = new Color(0, 0, 0, 0);
-        Color core = new Color(1f, 0.95f, 0.4f, 1f);
-        Color rim = new Color(0.95f, 0.2f, 0.85f, 1f);
+        Color core = new Color(1f, 0.95f, 0.8f, 1f);
+        Color border = new Color(0.95f, 0.25f, 0.9f, 1f);
 
         Vector2 center = new Vector2(size * 0.5f - 0.5f, size * 0.5f - 0.5f);
-        float maxRadius = size * 0.45f;
+        float radius = size * 0.45f;
+        float coreRadius = radius * 0.45f;
 
         for (int y = 0; y < size; y++)
         {
             for (int x = 0; x < size; x++)
             {
                 float dist = Vector2.Distance(new Vector2(x, y), center);
-                if (dist <= maxRadius)
+                if (dist <= coreRadius)
                 {
-                    float t = dist / maxRadius;
-                    Color pixelColor = Color.Lerp(core, rim, t);
-                    pixelColor.a = Mathf.Clamp01(1f - Mathf.Pow(t, 3f));
-                    tex.SetPixel(x, y, pixelColor);
+                    tex.SetPixel(x, y, core);
+                }
+                else if (dist <= radius)
+                {
+                    tex.SetPixel(x, y, border);
                 }
                 else
                 {
