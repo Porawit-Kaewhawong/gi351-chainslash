@@ -5,12 +5,31 @@ using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+using UnityEngine.Tilemaps;
 using UnityEngine.UI;
 
 [RequireComponent(typeof(Rigidbody2D), typeof(AudioSource))]
 public class PlayerController : MonoBehaviour
 {
-    public static PlayerController Instance { get; private set; }
+    public static PlayerController Instance { get; set; }
+
+    /// <summary>
+    /// Explicitly destroys the current persistent player instance (e.g. on death or returning to Main Menu)
+    /// so newly loaded scenes instantiate and bind their own fresh PlayerController and HUD UI.
+    /// </summary>
+    public static void DestroyCurrentInstance()
+    {
+        if (Instance != null)
+        {
+            GameObject go = Instance.gameObject;
+            Instance = null;
+            if (go != null)
+            {
+                go.SetActive(false);
+                Destroy(go);
+            }
+        }
+    }
 
     [Header("Mouse Cursor Settings")]
     [SerializeField] private Texture2D cursorTexture;
@@ -23,10 +42,27 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Image healthBarImage;                  // Fill Image for Health
     [SerializeField] private GameObject healthBackgroundObject;     // Background / Frame for Health UI
     [SerializeField] private float healthFadeDuration = 0.25f;
+    [SerializeField] private float immunityDuration = 0.8f;
     [SerializeField] private Color damageFlashColor = new Color(1f, 0.2f, 0.2f, 1f);
     [SerializeField] private float damageFlashDuration = 0.25f;
     [SerializeField] private float damageShakeDuration = 0.15f;
     [SerializeField] private AudioClip takeDamageSFX;
+
+    [Header("Player Healing Indicator Settings")]
+    [Tooltip("Optional custom UI healing indicator (e.g. green plus badge or icon). Automatically created if left empty.")]
+    [SerializeField] private GameObject healIndicatorObject;
+    [Tooltip("Whether to show the healing plus badge beside the health bar.")]
+    [SerializeField] private bool showBadgeOnBar = true;
+    [Tooltip("Scale multiplier for the healing badge indicator.")]
+    [SerializeField] private float healBadgeScale = 1.0f;
+    [Tooltip("Audio clip played when health regeneration begins.")]
+    [SerializeField] private AudioClip healStartSFX;
+    [Tooltip("Color glow for the health bar while actively healing.")]
+    [SerializeField] private Color healingGlowColor = new Color(0.25f, 1.0f, 0.55f, 1.0f);
+    [Tooltip("Whether to spawn floating pixel healing plus particles around the player while healing.")]
+    [SerializeField] private bool showFloatingHealSparks = true;
+    [Tooltip("Scale multiplier for floating healing spark particles.")]
+    [SerializeField] private float healSparkScale = 1.0f;
 
     [Header("Player Movement Settings")]
     [SerializeField] private float moveSpeed = 7.5f;
@@ -36,10 +72,18 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float coyoteTime = 0.12f;
     [SerializeField] private float jumpBufferTime = 0.12f;
     [SerializeField] private float airMomentumDecay = 8f;
+    [SerializeField] private float idleBobInterval = 0.5f;
+    [SerializeField] private float idleSquashScaleY = 0.93f;
     [SerializeField] private List<AudioClip> walkSFXList = new List<AudioClip>();
     [SerializeField] private float walkStepInterval = 0.28f;
     [SerializeField] private AudioClip jumpSFX;
     [SerializeField] private AudioClip doubleJumpSFX;
+
+    [Header("Stair & Step Handling")]
+    [Tooltip("Maximum vertical height of a step or stair that can be walked up automatically without jumping.")]
+    [SerializeField] private float maxStepHeight = 0.6f;
+    [Tooltip("Forward distance to check ahead for upcoming stair steps.")]
+    [SerializeField] private float stepCheckDistance = 0.22f;
 
     [Header("Wall Slide & Wall Jump Settings")]
     [SerializeField] private bool enableWallMechanics = true;
@@ -57,6 +101,8 @@ public class PlayerController : MonoBehaviour
     [Header("Chain Slash Mode Settings")]
     [SerializeField] private float maxMeter = 100f;
     [SerializeField] private float timeSpeed = 0.25f;
+    [SerializeField] private float modeDimAlpha = 0.55f;
+    [SerializeField] private float modeDimFadeDuration = 0.15f;
     [SerializeField] private float minPointDistance = 0.1f;
     [SerializeField] private float slashDrawDuration = 0.18f;
     [SerializeField] private float slashDisappearDuration = 0.3f;
@@ -124,13 +170,26 @@ public class PlayerController : MonoBehaviour
     private float lastGrappleKickTime;
     private float walkStepTimer;
     private int lastWalkSFXIndex = -1;
+    private float idleBobTimer;
+    private bool isIdleSquashed;
+    private Vector3 originalSpriteScale = Vector3.one;
+    private Vector3 originalSpriteLocalPos = Vector3.zero;
+    private Vector3 initialSpawnPosition;
+    private float defaultGravityScale = 2f;
+    private bool pendingSpawnReset;
+    private bool isDead;
+    public bool IsDead => isDead;
+    public void SetPendingSpawnReset(bool value) => pendingSpawnReset = value;
 
     // Health state
     public float CurrentHealth { get; private set; }
+    public bool IsImmune => Time.unscaledTime < immunityEndTime || isDashing;
+    private float immunityEndTime;
 
     // Combat state
     public bool IsInMode { get; private set; }
     public bool IsGrappling { get; private set; }
+    public Vector2 InputValue => inputValue;
     private bool isThrowingHook = false;
     private bool isFocusing = false;
     private float currentMeter;
@@ -157,10 +216,13 @@ public class PlayerController : MonoBehaviour
     private Coroutine activeGrapplingCoroutine;
     private Coroutine activeShakeCoroutine;
     private Coroutine activeDamageFlashCoroutine;
+    private Coroutine activeModeDimCoroutine;
 
     // Damage visual caching
     private Color originalSpriteColor = Color.white;
-    private Color originalHealthBarColor = Color.white;
+    private Color originalHealthBarColor = Color.lightGreen;
+    private SpriteRenderer modeDimRenderer;
+    private static Sprite cachedSolidWhiteSprite;
 
     // Instantiated Objects
     private GameObject insLineRendererObj;
@@ -185,24 +247,96 @@ public class PlayerController : MonoBehaviour
     private Animator animator;
     private SpringJoint2D springJoint;
     private LineRenderer grappleLine;
+    private Camera mainCamera;
     private CinemachineCamera cinemachineCamera;
     private CinemachineBasicMultiChannelPerlin perlin;
 
     private int soundPlaying;
+    private float originalAudioSourceVolume = 1f;
+    private float originalPitchedVolume = 1f;
+    private float originalShimmerVolume = 1f;
     private List<CanvasGroup> meterCanvasGroups = new List<CanvasGroup>();
     private List<CanvasGroup> healthCanvasGroups = new List<CanvasGroup>();
+
+    public static void EnforceSinglePlayerInstance()
+    {
+        PlayerController[] allPlayers = Object.FindObjectsByType<PlayerController>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        if (allPlayers.Length <= 1) return;
+
+        // Prefer an alive player over a dead one
+        PlayerController mainPlayer = (Instance != null && !Instance.isDead) ? Instance : null;
+        if (mainPlayer == null)
+        {
+            for (int i = 0; i < allPlayers.Length; i++)
+            {
+                if (allPlayers[i] != null && !allPlayers[i].isDead)
+                {
+                    mainPlayer = allPlayers[i];
+                    break;
+                }
+            }
+        }
+        if (mainPlayer == null && allPlayers.Length > 0)
+        {
+            mainPlayer = allPlayers[0];
+        }
+        Instance = mainPlayer;
+
+        for (int i = 0; i < allPlayers.Length; i++)
+        {
+            PlayerController p = allPlayers[i];
+            if (p != null && p != mainPlayer)
+            {
+                p.gameObject.SetActive(false);
+                Destroy(p.gameObject);
+            }
+        }
+    }
 
     private void Awake()
     {
         if (Instance != null && Instance != this)
         {
-            Destroy(gameObject);
-            return;
+            // If the old instance is dead, destroy it completely so this fresh alive player can bind UI
+            if (Instance.isDead)
+            {
+                GameObject oldGo = Instance.gameObject;
+                Instance = null;
+                if (oldGo != null)
+                {
+                    oldGo.SetActive(false);
+                    Destroy(oldGo);
+                }
+            }
+            else
+            {
+                Instance.SetSpawnPositionForNewScene(transform.position);
+                gameObject.SetActive(false);
+                Destroy(gameObject);
+                return;
+            }
         }
         Instance = this;
+        transform.SetParent(null);
+        initialSpawnPosition = transform.position;
+
+        EnforceSinglePlayerInstance();
 
         rb = GetComponent<Rigidbody2D>();
-        playerCollider = GetComponent<Collider2D>();
+        if (rb != null)
+        {
+            defaultGravityScale = rb.gravityScale;
+        }
+        Collider2D[] colliders = GetComponents<Collider2D>();
+        foreach (var c in colliders)
+        {
+            if (c != null && !c.isTrigger)
+            {
+                playerCollider = c;
+                break;
+            }
+        }
+        if (playerCollider == null) playerCollider = GetComponent<Collider2D>();
         if (playerCollider == null) playerCollider = GetComponentInChildren<Collider2D>();
         audioSource = GetComponent<AudioSource>();
 
@@ -211,14 +345,17 @@ public class PlayerController : MonoBehaviour
         shimmerAudioSource = gameObject.AddComponent<AudioSource>();
         if (audioSource != null)
         {
+            originalAudioSourceVolume = audioSource.volume > 0f ? audioSource.volume : 1f;
             pitchedAudioSource.outputAudioMixerGroup = audioSource.outputAudioMixerGroup;
             pitchedAudioSource.spatialBlend = audioSource.spatialBlend;
             pitchedAudioSource.volume = audioSource.volume;
+            originalPitchedVolume = pitchedAudioSource.volume;
             pitchedAudioSource.playOnAwake = false;
 
             shimmerAudioSource.outputAudioMixerGroup = audioSource.outputAudioMixerGroup;
             shimmerAudioSource.spatialBlend = audioSource.spatialBlend;
             shimmerAudioSource.volume = audioSource.volume;
+            originalShimmerVolume = shimmerAudioSource.volume;
             shimmerAudioSource.playOnAwake = false;
         }
 
@@ -227,14 +364,355 @@ public class PlayerController : MonoBehaviour
         if (spriteRenderer != null)
         {
             originalSpriteColor = spriteRenderer.color;
+            originalSpriteScale = spriteRenderer.transform.localScale;
+            originalSpriteLocalPos = spriteRenderer.transform.localPosition;
         }
         animator = GetComponentInChildren<Animator>();
         springJoint = GetComponent<SpringJoint2D>();
         grappleLine = GetComponent<LineRenderer>();
 
-        cinemachineCamera = FindAnyObjectByType<CinemachineCamera>();
+        BindSceneCameraAndTargets();
+
+        moveAction = InputSystem.actions.FindAction("Move");
+        jumpAction = InputSystem.actions.FindAction("Jump");
+        dashAction = InputSystem.actions.FindAction("Dash");
+        attackAction = InputSystem.actions.FindAction("Attack");
+        grappleAction = InputSystem.actions.FindAction("Grapple");
+    }
+
+    private void OnEnable()
+    {
+        SceneManager.sceneLoaded += OnSceneLoaded;
+    }
+
+    private void OnDisable()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+
+        if (insGrappleTargetIndicator != null)
+        {
+            Destroy(insGrappleTargetIndicator);
+        }
+    }
+
+    public void SetSpawnPositionForNewScene(Vector3 spawnPos)
+    {
+        initialSpawnPosition = spawnPos;
+        pendingSpawnReset = true;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (Instance != this)
+        {
+            gameObject.SetActive(false);
+            Destroy(gameObject);
+            return;
+        }
+
+        EnforceSinglePlayerInstance();
+
+        // If returning to the Main Menu scene (Build Index 0 or MainMenu component present), clean up persistent Player instance
+        if (scene.buildIndex == 0 || FindFirstObjectByType<MainMenu>() != null)
+        {
+            Time.timeScale = 1f;
+            if (defaultFixedDeltaTime > 0f)
+            {
+                Time.fixedDeltaTime = defaultFixedDeltaTime;
+            }
+            Destroy(gameObject);
+            return;
+        }
+
+        ResetStateForLoadedScene();
+    }
+
+    /// <summary>
+    /// Fully revives the player, restores full health & meter, enables colliders,
+    /// resets rigidbody physics & animator, restores visuals, and teleports to the safe spawn position.
+    /// </summary>
+    public void ReviveAndReset()
+    {
+        isDead = false;
+        CurrentHealth = maxHealth;
+        currentMeter = maxMeter;
+        pendingSpawnReset = true;
+
+        if (rb != null)
+        {
+            rb.simulated = true;
+            rb.bodyType = RigidbodyType2D.Dynamic;
+            rb.constraints = RigidbodyConstraints2D.FreezeRotation;
+            rb.gravityScale = defaultGravityScale;
+            rb.linearVelocity = Vector2.zero;
+        }
+
+        Collider2D[] colliders = GetComponentsInChildren<Collider2D>(true);
+        foreach (var c in colliders)
+        {
+            if (c != null) c.enabled = true;
+        }
+
+        SpriteRenderer[] renderers = GetComponentsInChildren<SpriteRenderer>(true);
+        foreach (var sr in renderers)
+        {
+            if (sr == null) continue;
+            sr.color = originalSpriteColor;
+            sr.sortingOrder = 5;
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+            spriteRenderer.transform.localScale = originalSpriteScale;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+            spriteRenderer.transform.localRotation = Quaternion.identity;
+            spriteRenderer.sortingOrder = 5;
+        }
+
+        if (animator != null)
+        {
+            animator.SetBool("isInMode", false);
+            animator.SetBool("isDash", false);
+            animator.SetBool("isJump", false);
+            animator.SetBool("isRunning", false);
+        }
+
+        DetachGrappling();
+        isFocusing = false;
+        IsInMode = false;
+        isDashing = false;
+        canDash = true;
+        isWallSliding = false;
+        ResetIdleSquashBob();
+
+        if (insMouseTrail != null)
+        {
+            Destroy(insMouseTrail);
+            insMouseTrail = null;
+        }
+
+        if (insLineRendererObj != null)
+        {
+            Destroy(insLineRendererObj);
+            insLineRendererObj = null;
+            insLineRendererCom = null;
+        }
+
+        if (trailRenderer != null)
+        {
+            trailRenderer.emitting = false;
+            trailRenderer.Clear();
+        }
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = originalHealthBarColor;
+            healthBarImage.fillAmount = 1f;
+        }
+        SetHealthAlpha(0f);
+
+        if (modeMeterImage != null)
+        {
+            modeMeterImage.fillAmount = 1f;
+        }
+        SetMeterAlpha(0f);
+        SetHealIndicatorActive(false);
+
+        // Restore AudioSource volumes so rapid restarts never decay audio
+        if (audioSource != null)
+        {
+            audioSource.volume = originalAudioSourceVolume;
+            audioSource.UnPause();
+        }
+        if (pitchedAudioSource != null)
+        {
+            pitchedAudioSource.volume = originalPitchedVolume;
+            pitchedAudioSource.UnPause();
+        }
+        if (shimmerAudioSource != null)
+        {
+            shimmerAudioSource.volume = originalShimmerVolume;
+            shimmerAudioSource.UnPause();
+        }
+
+        Vector3 targetSpawnPos = GetSceneSpawnPosition();
+        transform.position = ResolveSafePlayerPosition(targetSpawnPos);
+        Physics2D.SyncTransforms();
+        pendingSpawnReset = false;
+    }
+
+    private void ResetStateForLoadedScene()
+    {
+        ReviveAndReset();
+
+        if (defaultFixedDeltaTime > 0f)
+        {
+            Time.timeScale = 1f;
+            Time.fixedDeltaTime = defaultFixedDeltaTime;
+        }
+
+        BindSceneCameraAndTargets();
+        SetupGrappleIndicator();
+        SetupModeDimOverlay();
+    }
+
+    private Vector3 GetSceneSpawnPosition()
+    {
+        GameManager gm = GameManager.Instance != null ? GameManager.Instance : FindFirstObjectByType<GameManager>();
+        if (gm != null && gm.PlayerSpawnPoint != null)
+        {
+            return gm.PlayerSpawnPoint.position;
+        }
+
+        if (pendingSpawnReset)
+        {
+            return initialSpawnPosition;
+        }
+
+        GameObject namedSpawn = GameObject.Find("PlayerSpawnPoint");
+        if (namedSpawn == null)
+        {
+            namedSpawn = GameObject.Find("SpawnPoint");
+        }
+        if (namedSpawn != null)
+        {
+            return namedSpawn.transform.position;
+        }
+
+        return initialSpawnPosition;
+    }
+
+    private Vector3 ResolveSafePlayerPosition(Vector3 desiredPos)
+    {
+        Vector2 boxSize = new Vector2(0.9f, 1.4f);
+        float halfHeight = 0.75f;
+
+        if (playerCollider is BoxCollider2D boxCol)
+        {
+            boxSize = Vector2.Scale(boxCol.size, transform.localScale) * 0.92f;
+            halfHeight = (boxCol.size.y * Mathf.Abs(transform.localScale.y)) * 0.5f;
+        }
+        else if (playerCollider != null && playerCollider.bounds.size.sqrMagnitude > 0.01f)
+        {
+            boxSize = (Vector2)playerCollider.bounds.size * 0.92f;
+            halfHeight = playerCollider.bounds.extents.y;
+        }
+
+        // 1. If desiredPos is already free of ground/wall colliders and has ground beneath it, use it directly
+        if (Physics2D.OverlapBox(desiredPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(desiredPos))
+        {
+            return desiredPos;
+        }
+
+        // 2. Try stepping straight up out of any embedded floor at desiredPos.x
+        for (float upOffset = 0.25f; upOffset <= 8f; upOffset += 0.25f)
+        {
+            Vector3 liftedPos = desiredPos + Vector3.up * upOffset;
+            if (Physics2D.OverlapBox(liftedPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(liftedPos))
+            {
+                return liftedPos;
+            }
+        }
+
+        // 3. Scan horizontal offsets around desiredPos (and world origin) from open air to find a clean floor surface
+        float[] xOffsets = new float[] { 0f, 1.5f, -1.5f, 3f, -3f, 4.5f, -4.5f, 6f, -6f, 8f, -8f };
+        float[] yProbes = new float[] { 0.5f, 2f, -1f, 4f, 6.5f };
+        Vector3[] searchCenters = new Vector3[] { desiredPos, Vector3.zero };
+
+        foreach (Vector3 center in searchCenters)
+        {
+            foreach (float xOffset in xOffsets)
+            {
+                foreach (float yProbe in yProbes)
+                {
+                    Vector2 rayOrigin = new Vector2(center.x + xOffset, center.y + yProbe);
+                    if (Physics2D.OverlapPoint(rayOrigin, groundLayer) != null)
+                    {
+                        continue;
+                    }
+
+                    RaycastHit2D hit = Physics2D.Raycast(rayOrigin, Vector2.down, 25f, groundLayer);
+                    if (hit.collider != null && hit.distance > 0.02f && hit.normal.y >= 0.7f)
+                    {
+                        Vector2 candidatePos = hit.point + Vector2.up * (halfHeight + 0.1f);
+                        if (Physics2D.OverlapBox(candidatePos, boxSize, 0f, groundLayer) == null)
+                        {
+                            return new Vector3(candidatePos.x, candidatePos.y, desiredPos.z);
+                        }
+                    }
+                }
+            }
+        }
+
+        return desiredPos;
+    }
+
+    private bool HasGroundBelow(Vector3 checkPos)
+    {
+        RaycastHit2D hit = Physics2D.Raycast(checkPos + Vector3.up * 0.5f, Vector2.down, 25f, groundLayer);
+        return hit.collider != null;
+    }
+
+    private void BindSceneCameraAndTargets()
+    {
+        // 1. Automatically detect the Main Camera in the active scene
+        mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (mainCamera != null)
+        {
+            if (mainCamera.GetComponent<CinemachineBrain>() == null)
+            {
+                mainCamera.gameObject.AddComponent<CinemachineBrain>();
+            }
+
+            Canvas playerCanvas = GetComponentInChildren<Canvas>(true);
+            if (playerCanvas != null && playerCanvas.renderMode == RenderMode.WorldSpace)
+            {
+                playerCanvas.worldCamera = mainCamera;
+            }
+        }
+
+        // 2. Automatically detect the CinemachineTargetGroup in the active scene and bind the Player
+        if (targetGroup == null)
+        {
+            targetGroup = FindFirstObjectByType<CinemachineTargetGroup>();
+        }
+
+        if (targetGroup != null)
+        {
+            if (targetGroup.Targets.Count == 0)
+            {
+                targetGroup.AddMember(transform, 5f, 5f);
+            }
+            else
+            {
+                targetGroup.Targets[0].Object = transform;
+            }
+
+            if (targetGroup.Targets.Count < 2)
+            {
+                targetGroup.AddMember(null, 5f, 5f);
+            }
+            else
+            {
+                targetGroup.Targets[1].Object = null;
+            }
+        }
+
+        // 3. Automatically detect CinemachineCamera and assign Target Group as its Tracking Target
+        cinemachineCamera = FindFirstObjectByType<CinemachineCamera>();
         if (cinemachineCamera != null)
         {
+            cinemachineCamera.Target.TrackingTarget = targetGroup != null ? targetGroup.transform : transform;
+
             perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
             if (perlin != null)
             {
@@ -243,12 +721,15 @@ public class PlayerController : MonoBehaviour
                 orgFrequencyGain = perlin.FrequencyGain;
             }
         }
+    }
 
-        moveAction = InputSystem.actions.FindAction("Move");
-        jumpAction = InputSystem.actions.FindAction("Jump");
-        dashAction = InputSystem.actions.FindAction("Dash");
-        attackAction = InputSystem.actions.FindAction("Attack");
-        grappleAction = InputSystem.actions.FindAction("Grapple");
+    private Camera GetActiveCamera()
+    {
+        if (mainCamera == null)
+        {
+            mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        }
+        return mainCamera;
     }
 
     private void Start()
@@ -265,14 +746,15 @@ public class PlayerController : MonoBehaviour
         SetupMeterUI();
         SetupHealthUI();
         SetupGrappleIndicator();
+        SetupModeDimOverlay();
     }
 
     private void Update()
     {
-        if (Keyboard.current != null && Keyboard.current.rKey.isPressed)
+        if (isDead)
         {
-            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
-            ChainEnemy.isExploding = false;
+            if (rb != null) rb.linearVelocity = Vector2.zero;
+            return;
         }
 
         RecordDrawnLinePoints();
@@ -314,11 +796,12 @@ public class PlayerController : MonoBehaviour
         HandleCombatInput();
         HandleGrappleInput();
         Flip();
+        HandleIdleSquashBob(grounded);
     }
 
     private void FixedUpdate()
     {
-        if (isDashing) return;
+        if (isDead || isDashing) return;
 
         if (moveAction != null)
         {
@@ -364,6 +847,11 @@ public class PlayerController : MonoBehaviour
                 {
                     animator.SetBool("isRunning", Mathf.Abs(rb.linearVelocityX) > 0.05f);
                 }
+
+                if (Mathf.Abs(inputValue.x) > 0.05f && !isDashing && !IsGrappling)
+                {
+                    HandleStepClimb(inputValue.x);
+                }
             }
         }
     }
@@ -396,7 +884,55 @@ public class PlayerController : MonoBehaviour
             healthBarImage.fillAmount = CurrentHealth / maxHealth;
         }
 
+        // Automatic procedural healing badge indicator if none assigned
+        if (healIndicatorObject == null && healthBarImage != null && showBadgeOnBar)
+        {
+            Transform parent = healthBarImage.transform.parent;
+            Transform existing = parent.Find("HealIndicatorBadge");
+            if (existing != null)
+            {
+                healIndicatorObject = existing.gameObject;
+            }
+            else
+            {
+                GameObject badge = new GameObject("HealIndicatorBadge");
+                RectTransform rt = badge.AddComponent<RectTransform>();
+                rt.SetParent(parent, false);
+
+                // Auto-scale to match the health bar height accurately
+                float barHeight = healthBarImage.rectTransform.rect.height;
+                if (barHeight <= 0.001f) barHeight = healthBarImage.rectTransform.sizeDelta.y;
+                if (barHeight <= 0.001f) barHeight = 0.12f;
+
+                float badgeSize = Mathf.Clamp(barHeight * 1.25f * healBadgeScale, 0.06f, 24f);
+
+                rt.anchorMin = new Vector2(0f, 0.5f);
+                rt.anchorMax = new Vector2(0f, 0.5f);
+                rt.pivot = new Vector2(1f, 0.5f);
+                rt.sizeDelta = new Vector2(badgeSize, badgeSize);
+                rt.anchoredPosition = new Vector2(-badgeSize * 0.4f, 0f);
+
+                Image img = badge.AddComponent<Image>();
+                img.sprite = GetOrCreatePixelHealCrossSprite();
+                img.color = healingGlowColor;
+
+                CanvasGroup cg = badge.AddComponent<CanvasGroup>();
+                if (!healthCanvasGroups.Contains(cg)) healthCanvasGroups.Add(cg);
+
+                healIndicatorObject = badge;
+            }
+        }
+
+        SetHealIndicatorActive(false);
         SetHealthAlpha(0f); // Hidden when health is full
+    }
+
+    private void SetHealIndicatorActive(bool active)
+    {
+        if (healIndicatorObject != null)
+        {
+            healIndicatorObject.SetActive(active);
+        }
     }
 
     private void SetHealthAlpha(float alpha)
@@ -409,14 +945,23 @@ public class PlayerController : MonoBehaviour
 
     public void TakeDamage(float amount)
     {
-        if (CurrentHealth <= 0f) return;
+        if (isDead || CurrentHealth <= 0f || IsImmune) return;
 
+        immunityEndTime = Time.unscaledTime + immunityDuration;
         CurrentHealth = Mathf.Clamp(CurrentHealth - amount, 0f, maxHealth);
 
         if (healthBarImage != null)
         {
             healthBarImage.fillAmount = CurrentHealth / maxHealth;
+            healthBarImage.color = originalHealthBarColor;
         }
+
+        if (spriteRenderer != null && activeDamageFlashCoroutine == null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+        }
+
+        SetHealIndicatorActive(false);
 
         PlaySFX(takeDamageSFX);
         TriggerDamageFeedback();
@@ -471,6 +1016,19 @@ public class PlayerController : MonoBehaviour
     {
         yield return new WaitForSeconds(healthRegenDelay);
 
+        if (CurrentHealth <= 0f) yield break;
+
+        // Healing has started!
+        if (healStartSFX != null)
+        {
+            PlaySFX(healStartSFX);
+        }
+
+        SetHealIndicatorActive(true);
+
+        float sparkSpawnTimer = 0f;
+        float sparkInterval = 0.22f;
+
         while (CurrentHealth < maxHealth)
         {
             CurrentHealth = Mathf.Clamp(CurrentHealth + 1f, 0f, maxHealth);
@@ -478,13 +1036,113 @@ public class PlayerController : MonoBehaviour
             if (healthBarImage != null)
             {
                 healthBarImage.fillAmount = CurrentHealth / maxHealth;
+
+                // Pulsing emerald glow on health bar while healing
+                float pulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 8f);
+                healthBarImage.color = Color.Lerp(originalHealthBarColor, healingGlowColor, pulse);
+            }
+
+            // Subtle healing tint on player sprite
+            if (spriteRenderer != null && activeDamageFlashCoroutine == null)
+            {
+                float spritePulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 6f);
+                spriteRenderer.color = Color.Lerp(originalSpriteColor, new Color(0.65f, 1.0f, 0.78f, 1.0f), spritePulse * 0.35f);
+            }
+
+            // Floating pixel healing plus particles around player
+            if (showFloatingHealSparks)
+            {
+                sparkSpawnTimer += healthRegenTickInterval;
+                if (sparkSpawnTimer >= sparkInterval)
+                {
+                    sparkSpawnTimer = 0f;
+                    SpawnHealPixelParticle();
+                }
             }
 
             yield return new WaitForSeconds(healthRegenTickInterval);
         }
 
+        // Restore default colors
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = originalHealthBarColor;
+        }
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+        }
+
+        SetHealIndicatorActive(false);
+
         HideHealthBarWithPulse();
         activeHealthRegenCoroutine = null;
+    }
+
+    private static Sprite cachedPixelHealCrossSprite;
+    private static Sprite GetOrCreatePixelHealCrossSprite()
+    {
+        if (cachedPixelHealCrossSprite != null) return cachedPixelHealCrossSprite;
+
+        int size = 5;
+        Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Point;
+        Color clear = new Color(0, 0, 0, 0);
+        Color green = new Color(0.25f, 1.0f, 0.55f, 1.0f);
+
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                bool isCross = (x == 2) || (y == 2);
+                tex.SetPixel(x, y, isCross ? green : clear);
+            }
+        }
+        tex.Apply();
+        cachedPixelHealCrossSprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 48f);
+        return cachedPixelHealCrossSprite;
+    }
+
+    private void SpawnHealPixelParticle()
+    {
+        GameObject spark = new GameObject("HealPixelSpark");
+        Vector3 offset = new Vector3(Random.Range(-0.35f, 0.35f), Random.Range(-0.35f, 0.35f), 0f);
+        spark.transform.position = transform.position + offset;
+
+        SpriteRenderer sr = spark.AddComponent<SpriteRenderer>();
+        sr.sprite = GetOrCreatePixelHealCrossSprite();
+        sr.color = new Color(0.3f, 1.0f, 0.55f, 0.95f);
+        sr.sortingOrder = (spriteRenderer != null ? spriteRenderer.sortingOrder : 5) + 1;
+
+        StartCoroutine(HealSparkRoutine(spark, sr));
+    }
+
+    private IEnumerator HealSparkRoutine(GameObject spark, SpriteRenderer sr)
+    {
+        float timer = 0f;
+        float duration = 0.50f;
+        float floatSpeed = Random.Range(0.9f, 1.5f);
+        Vector3 startScale = Vector3.one * (0.65f * healSparkScale);
+
+        while (timer < duration && spark != null)
+        {
+            timer += Time.deltaTime;
+            float t = timer / duration;
+
+            spark.transform.position += Vector3.up * (floatSpeed * Time.deltaTime);
+            spark.transform.localScale = startScale * (1f - (t * 0.35f));
+
+            if (sr != null)
+            {
+                Color c = sr.color;
+                c.a = Mathf.Clamp01(1f - (t * t));
+                sr.color = c;
+            }
+
+            yield return null;
+        }
+
+        if (spark != null) Destroy(spark);
     }
 
     private void ShowHealthBar()
@@ -541,8 +1199,82 @@ public class PlayerController : MonoBehaviour
 
     private void Die()
     {
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
-        ChainEnemy.isExploding = false;
+        if (isDead) return;
+        isDead = true;
+
+        if (activeHealthRegenCoroutine != null)
+        {
+            StopCoroutine(activeHealthRegenCoroutine);
+            activeHealthRegenCoroutine = null;
+        }
+
+        if (activeDamageFlashCoroutine != null)
+        {
+            StopCoroutine(activeDamageFlashCoroutine);
+            activeDamageFlashCoroutine = null;
+        }
+
+        SetHealIndicatorActive(false);
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+        }
+
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector2.zero;
+            rb.gravityScale = 0f;
+            rb.bodyType = RigidbodyType2D.Kinematic;
+        }
+
+        if (animator != null)
+        {
+            animator.SetBool("isInMode", false);
+            animator.SetBool("isDash", false);
+            animator.SetBool("isJump", false);
+            animator.SetBool("isRunning", false);
+        }
+
+        DetachGrappling();
+
+        if (insMouseTrail != null)
+        {
+            insMouseTrail.SetActive(false);
+        }
+
+        if (insLineRendererObj != null)
+        {
+            insLineRendererObj.SetActive(false);
+        }
+
+        if (grappleLine != null)
+        {
+            grappleLine.enabled = false;
+        }
+
+        if (insGrappleTargetIndicator != null)
+        {
+            insGrappleTargetIndicator.SetActive(false);
+        }
+
+        if (IsInMode)
+        {
+            ExitChainSlashMode();
+        }
+
+        if (modeDimRenderer != null)
+        {
+            modeDimRenderer.color = new Color(0f, 0f, 0f, 0f);
+        }
+
+        SetHealthAlpha(0f);
+        SetMeterAlpha(0f);
+
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.None;
+
+        GameOverPanel.GetOrCreateInstance().ShowGameOver(transform, spriteRenderer);
     }
 
     #endregion
@@ -628,6 +1360,96 @@ public class PlayerController : MonoBehaviour
         return walkSFXList[index];
     }
 
+    /// <summary>
+    /// Smoothly steps up low obstacles, curbs, and stairs without requiring the player to jump.
+    /// Also handles downward stair snapping when descending stairs so running remains continuous.
+    /// </summary>
+    private void HandleStepClimb(float moveInputX)
+    {
+        if (playerCollider == null || rb == null) return;
+        if (Mathf.Abs(moveInputX) < 0.05f) return;
+        if (rb.linearVelocityY > 0.25f) return; // Don't step-climb while actively jumping upward
+
+        Bounds bounds = playerCollider.bounds;
+        float halfWidth = bounds.extents.x;
+        float currentFootY = bounds.min.y;
+        float dirX = Mathf.Sign(moveInputX);
+
+        // 1. Check for a low vertical step / obstacle at foot level
+        float checkDist = halfWidth + stepCheckDistance;
+        Vector2 footOrigin = new Vector2(bounds.center.x, currentFootY + 0.05f);
+        RaycastHit2D footHit = Physics2D.Raycast(footOrigin, Vector2.right * dirX, checkDist, groundLayer);
+
+        if (footHit.collider != null && !footHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(playerCollider, footHit.collider))
+        {
+            // Only climb if this is a vertical riser / step (not already a flat surface)
+            if (footHit.normal.y < 0.7f)
+            {
+                float distFromFront = Mathf.Abs(footHit.point.x - (bounds.center.x + dirX * halfWidth));
+                if (distFromFront <= 0.14f)
+                {
+                    // 2. Check if the space above maxStepHeight is clear (ensures it's a step/stair, not a full wall)
+                    Vector2 waistOrigin = new Vector2(bounds.center.x, currentFootY + maxStepHeight + 0.06f);
+                    RaycastHit2D waistHit = Physics2D.Raycast(waistOrigin, Vector2.right * dirX, checkDist, groundLayer);
+
+                    if (waistHit.collider == null || waistHit.collider.isTrigger || Physics2D.GetIgnoreCollision(playerCollider, waistHit.collider))
+                    {
+                        // 3. Probe downward onto the step to find its exact walkable surface height
+                        float probeX = footHit.point.x + (dirX * 0.15f);
+                        Vector2 probeOrigin = new Vector2(probeX, currentFootY + maxStepHeight + 0.08f);
+                        RaycastHit2D surfaceHit = Physics2D.Raycast(probeOrigin, Vector2.down, maxStepHeight + 0.12f, groundLayer);
+
+                        if (surfaceHit.collider != null && !surfaceHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(playerCollider, surfaceHit.collider))
+                        {
+                            if (surfaceHit.normal.y >= 0.55f) // Walkable floor on top of step
+                            {
+                                float stepHeight = surfaceHit.point.y - currentFootY;
+                                if (stepHeight > 0.01f && stepHeight <= maxStepHeight)
+                                {
+                                    // 4. Verify clearance for the player's full body above the step
+                                    Vector2 targetCenter = (Vector2)bounds.center + new Vector2(dirX * 0.04f, stepHeight + 0.02f);
+                                    Vector2 bodySize = new Vector2(bounds.size.x * 0.85f, bounds.size.y * 0.85f);
+                                    Collider2D overlap = Physics2D.OverlapBox(targetCenter, bodySize, 0f, groundLayer);
+
+                                    if (overlap == null || overlap == playerCollider || overlap.isTrigger || Physics2D.GetIgnoreCollision(playerCollider, overlap))
+                                    {
+                                        // 5. Smoothly step up onto the stair!
+                                        rb.position += new Vector2(dirX * 0.04f, stepHeight + 0.02f);
+                                        if (rb.linearVelocityY < 0f)
+                                        {
+                                            rb.linearVelocity = new Vector2(rb.linearVelocityX, 0f);
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6. Step Down Snapping: If grounded and walking down stairs, snap to lower step so movement remains smooth
+        if (inputValue.y >= -0.4f && rb.linearVelocityY <= 0.05f)
+        {
+            Vector2 downProbeOrigin = new Vector2(bounds.center.x + (dirX * 0.12f), currentFootY + 0.08f);
+            RaycastHit2D downHit = Physics2D.Raycast(downProbeOrigin, Vector2.down, maxStepHeight + 0.15f, groundLayer);
+
+            if (downHit.collider != null && !downHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(playerCollider, downHit.collider))
+            {
+                if (downHit.normal.y >= 0.55f)
+                {
+                    float dropDist = currentFootY - downHit.point.y;
+                    if (dropDist > 0.04f && dropDist <= maxStepHeight)
+                    {
+                        rb.position -= new Vector2(0f, dropDist - 0.01f);
+                        rb.linearVelocity = new Vector2(rb.linearVelocityX, 0f);
+                    }
+                }
+            }
+        }
+    }
+
     private void HandleJumpInput()
     {
         if (jumpAction == null) return;
@@ -673,6 +1495,14 @@ public class PlayerController : MonoBehaviour
 
             if (coyoteTimeCounter > 0f)
             {
+                // If holding Down on a one-way platform, drop through instead of jumping upward
+                if (inputValue.y < -0.4f && TryDropThroughPlatform())
+                {
+                    coyoteTimeCounter = 0f;
+                    jumpBufferCounter = 0f;
+                    return;
+                }
+
                 rb.linearVelocity = new Vector2(rb.linearVelocityX, jumpHeight);
                 coyoteTimeCounter = 0f;
                 jumpBufferCounter = 0f;
@@ -719,6 +1549,23 @@ public class PlayerController : MonoBehaviour
         }
     }
 
+    public bool TryDropThroughPlatform()
+    {
+        Vector2 checkPos = groundCheck != null ? (Vector2)groundCheck.position : (Vector2)transform.position;
+        Collider2D[] hits = Physics2D.OverlapCircleAll(checkPos, 0.35f, groundLayer);
+        foreach (Collider2D hit in hits)
+        {
+            if (hit == null || hit.isTrigger) continue;
+            Platformer platform = hit.GetComponentInParent<Platformer>();
+            if (platform != null)
+            {
+                platform.DropThrough(gameObject);
+                return true;
+            }
+        }
+        return false;
+    }
+
     private bool IsGrounded()
     {
         if (groundCheck == null) return false;
@@ -730,6 +1577,7 @@ public class PlayerController : MonoBehaviour
         canDash = false;
         isDashing = true;
         isWallSliding = false;
+        ResetIdleSquashBob();
 
         if (IsGrappling)
         {
@@ -780,6 +1628,61 @@ public class PlayerController : MonoBehaviour
         else if (inputValue.x > 0f) spriteRenderer.flipX = false;
     }
 
+    private void HandleIdleSquashBob(bool grounded)
+    {
+        if (spriteRenderer == null) return;
+
+        bool isStandingIdle = grounded
+            && Mathf.Abs(inputValue.x) <= 0.05f
+            && Mathf.Abs(rb.linearVelocityX) <= 0.1f
+            && !isDashing
+            && !IsGrappling
+            && !IsInMode;
+
+        if (!isStandingIdle)
+        {
+            ResetIdleSquashBob();
+            return;
+        }
+
+        idleBobTimer += Time.deltaTime;
+        if (idleBobTimer >= idleBobInterval)
+        {
+            idleBobTimer -= idleBobInterval;
+            isIdleSquashed = !isIdleSquashed;
+
+            if (isIdleSquashed)
+            {
+                float newScaleY = originalSpriteScale.y * idleSquashScaleY;
+                float deltaScaleY = newScaleY - originalSpriteScale.y;
+                float offsetY = spriteRenderer.sprite != null ? (-spriteRenderer.sprite.bounds.min.y * deltaScaleY) : 0f;
+
+                spriteRenderer.transform.localScale = new Vector3(originalSpriteScale.x, newScaleY, originalSpriteScale.z);
+                spriteRenderer.transform.localPosition = new Vector3(
+                    originalSpriteLocalPos.x,
+                    originalSpriteLocalPos.y + offsetY,
+                    originalSpriteLocalPos.z
+                );
+            }
+            else
+            {
+                spriteRenderer.transform.localScale = originalSpriteScale;
+                spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+            }
+        }
+    }
+
+    private void ResetIdleSquashBob()
+    {
+        idleBobTimer = 0f;
+        if (isIdleSquashed && spriteRenderer != null)
+        {
+            isIdleSquashed = false;
+            spriteRenderer.transform.localScale = originalSpriteScale;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+        }
+    }
+
     #endregion
 
     #region Chain Slash Mode Logic
@@ -808,6 +1711,8 @@ public class PlayerController : MonoBehaviour
     private void EnterChainSlashMode()
     {
         IsInMode = true;
+        if (animator != null) animator.SetBool("isInMode", true);
+        FadeModeDimOverlay(modeDimAlpha);
 
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = defaultFixedDeltaTime * Time.timeScale;
@@ -828,7 +1733,7 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        if (mouseTrailPrefab != null && Camera.main != null && Mouse.current != null)
+        if (mouseTrailPrefab != null && GetActiveCamera() != null && Mouse.current != null)
         {
             insMouseTrail = Instantiate(mouseTrailPrefab, startMousePos, Quaternion.identity);
         }
@@ -842,6 +1747,8 @@ public class PlayerController : MonoBehaviour
     private void ExitChainSlashMode()
     {
         IsInMode = false;
+        if (animator != null) animator.SetBool("isInMode", false);
+        FadeModeDimOverlay(0f);
 
         if (targetGroup != null && targetGroup.Targets.Count > 1)
         {
@@ -885,6 +1792,70 @@ public class PlayerController : MonoBehaviour
         Time.fixedDeltaTime = defaultFixedDeltaTime;
     }
 
+    private void SetupModeDimOverlay()
+    {
+        if (modeDimRenderer != null) return;
+
+        if (cachedSolidWhiteSprite == null)
+        {
+            Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            Color[] pixels = new Color[] { Color.white, Color.white, Color.white, Color.white };
+            tex.SetPixels(pixels);
+            tex.Apply();
+            cachedSolidWhiteSprite = Sprite.Create(tex, new Rect(0, 0, 2, 2), new Vector2(0.5f, 0.5f), 2f);
+        }
+
+        GameObject dimObj = new GameObject("ChainSlashDimOverlay");
+        Camera activeCam = GetActiveCamera();
+        if (activeCam != null)
+        {
+            dimObj.transform.SetParent(activeCam.transform, false);
+            dimObj.transform.localPosition = new Vector3(0f, 0f, 10f);
+        }
+        else
+        {
+            dimObj.transform.SetParent(transform, false);
+            dimObj.transform.localPosition = Vector3.zero;
+        }
+        dimObj.transform.localScale = new Vector3(250f, 250f, 1f);
+
+        modeDimRenderer = dimObj.AddComponent<SpriteRenderer>();
+        modeDimRenderer.sprite = cachedSolidWhiteSprite;
+        modeDimRenderer.color = new Color(0f, 0f, 0f, 0f);
+        // SortingOrder 1 sits above all backgrounds/tilemaps (<= 0) and below enemy outlines (2), enemies (3), and player (5)
+        modeDimRenderer.sortingLayerID = spriteRenderer != null ? spriteRenderer.sortingLayerID : 0;
+        modeDimRenderer.sortingOrder = 1;
+    }
+
+    private void FadeModeDimOverlay(float targetAlpha)
+    {
+        if (modeDimRenderer == null) return;
+        if (activeModeDimCoroutine != null) StopCoroutine(activeModeDimCoroutine);
+        activeModeDimCoroutine = StartCoroutine(ModeDimFadeRoutine(targetAlpha));
+    }
+
+    private IEnumerator ModeDimFadeRoutine(float targetAlpha)
+    {
+        float startAlpha = modeDimRenderer.color.a;
+        float duration = Mathf.Max(0.01f, modeDimFadeDuration);
+        float elapsed = 0f;
+
+        while (elapsed < duration && modeDimRenderer != null)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float alpha = Mathf.Lerp(startAlpha, targetAlpha, elapsed / duration);
+            modeDimRenderer.color = new Color(0f, 0f, 0f, alpha);
+            yield return null;
+        }
+
+        if (modeDimRenderer != null)
+        {
+            modeDimRenderer.color = new Color(0f, 0f, 0f, targetAlpha);
+        }
+
+        activeModeDimCoroutine = null;
+    }
+
     private void RecordDrawnLinePoints()
     {
         if (!IsInMode || insLineRendererCom == null) return;
@@ -909,11 +1880,12 @@ public class PlayerController : MonoBehaviour
 
     private Vector3 GetMouseWorldPosition()
     {
-        if (Camera.main == null || Mouse.current == null) return Vector3.zero;
+        Camera activeCam = GetActiveCamera();
+        if (activeCam == null || Mouse.current == null) return Vector3.zero;
 
         Vector3 mouseScreenPos = Mouse.current.position.ReadValue();
-        mouseScreenPos.z = -Camera.main.transform.position.z;
-        Vector3 worldPos = Camera.main.ScreenToWorldPoint(mouseScreenPos);
+        mouseScreenPos.z = -activeCam.transform.position.z;
+        Vector3 worldPos = activeCam.ScreenToWorldPoint(mouseScreenPos);
         worldPos.z = 0f;
         return worldPos;
     }
@@ -1055,11 +2027,57 @@ public class PlayerController : MonoBehaviour
         }
 
         Vector2 slashVector = (origPoints[origPoints.Length - 1] - origPoints[0]).normalized;
+        HashSet<EnemyBase> primaryEnemies = new HashSet<EnemyBase>();
+        HashSet<EnemyBase> aliveBeforeSlash = new HashSet<EnemyBase>();
 
         for (int i = 0; i < lineRendererManager.targets.Count; i++)
         {
             GameObject targetObj = lineRendererManager.targets[i];
             if (targetObj == null) continue;
+
+            // Resolve the primary enemy entity (distinguishing weak points from the main body)
+            EnemyBase primary = null;
+            if (targetObj.TryGetComponent<ArmoredNinjaWeakPoint>(out var anWp) && anWp.OwnerNinja != null)
+            {
+                primary = anWp.OwnerNinja;
+            }
+            else if (targetObj.TryGetComponent<BossTargetPoint>(out var bWp) && bWp.OwnerBoss != null)
+            {
+                primary = bWp.OwnerBoss;
+            }
+            else
+            {
+                ArmoredNinja an = targetObj.GetComponentInParent<ArmoredNinja>();
+                if (an != null)
+                {
+                    primary = an;
+                }
+                else
+                {
+                    LegendarySamurai ls = targetObj.GetComponentInParent<LegendarySamurai>();
+                    if (ls != null)
+                    {
+                        primary = ls;
+                    }
+                    else
+                    {
+                        EnemyBase eb = targetObj.GetComponentInParent<EnemyBase>();
+                        if (eb != null && !(eb is ArmoredNinjaWeakPoint) && !(eb is BossTargetPoint))
+                        {
+                            primary = eb;
+                        }
+                    }
+                }
+            }
+
+            if (primary != null)
+            {
+                primaryEnemies.Add(primary);
+                if (!primary.IsDead)
+                {
+                    aliveBeforeSlash.Add(primary);
+                }
+            }
 
             if (slashImpactPrefab != null)
             {
@@ -1086,7 +2104,47 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        PlaySFX(postSlashSFX);
+        // Check whether at least one primary enemy actually died or sustained damage
+        bool anyEnemyDiedOrHit = false;
+        foreach (EnemyBase primaryEnemy in primaryEnemies)
+        {
+            if (primaryEnemy == null)
+            {
+                anyEnemyDiedOrHit = true;
+                break;
+            }
+
+            if (primaryEnemy is ArmoredNinja armoredNinja)
+            {
+                if (armoredNinja.IsDead || armoredNinja.IsDefeated)
+                {
+                    anyEnemyDiedOrHit = true;
+                    break;
+                }
+            }
+            else if (primaryEnemy is LegendarySamurai boss)
+            {
+                if (boss.IsDead || boss.WasHitLandedInCurrentSlash)
+                {
+                    anyEnemyDiedOrHit = true;
+                    break;
+                }
+            }
+            else
+            {
+                // Normal enemy (Enemy, Ninja, ThrowerNinja, SuicideNinja, ChainEnemy)
+                if (primaryEnemy.IsDead && aliveBeforeSlash.Contains(primaryEnemy))
+                {
+                    anyEnemyDiedOrHit = true;
+                    break;
+                }
+            }
+        }
+
+        if (anyEnemyDiedOrHit)
+        {
+            PlaySFX(postSlashSFX);
+        }
 
         if (flashGradient.colorKeys.Length > 0) lineRenderer.colorGradient = flashGradient;
 
@@ -1183,6 +2241,12 @@ public class PlayerController : MonoBehaviour
 
     private void SetupGrappleIndicator()
     {
+        if (insGrappleTargetIndicator != null)
+        {
+            insGrappleTargetIndicator.SetActive(false);
+            return;
+        }
+
         if (grappleTargetIndicatorPrefab != null)
         {
             insGrappleTargetIndicator = Instantiate(grappleTargetIndicatorPrefab, transform.position, Quaternion.identity);
@@ -1264,7 +2328,7 @@ public class PlayerController : MonoBehaviour
         if (grappleAction.IsPressed())
         {
             if (IsInMode) return;
-            if (!IsGrappling && !isThrowingHook && !isFocusing && currentMeter > 0f) GrapplingFocus();
+            if (!IsGrappling && !isThrowingHook && !isFocusing && currentMeter >= maxMeter / 10f) GrapplingFocus();
         }
         else
         {
@@ -1286,13 +2350,12 @@ public class PlayerController : MonoBehaviour
         isWallSliding = false;
         grappleTargetTransform = null;
 
-        if (activeMeterCoroutine != null) StopCoroutine(activeMeterCoroutine);
-        activeMeterCoroutine = StartCoroutine(MeterRegenerate());
+        ConsumeMeter(maxMeter / 10f);
 
         Time.timeScale = 1.0f;
         Time.fixedDeltaTime = defaultFixedDeltaTime;
 
-        if (Mouse.current == null || Camera.main == null || grappleLine == null)
+        if (Mouse.current == null || GetActiveCamera() == null || grappleLine == null)
         {
             isThrowingHook = false;
             yield break;

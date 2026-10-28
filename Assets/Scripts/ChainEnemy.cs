@@ -116,12 +116,6 @@ public class ChainEnemy : EnemyBase
         while (timer < targetFuseDuration)
         {
             timer += Time.deltaTime;
-
-            if (spriteRenderer != null)
-            {
-                spriteRenderer.color = (Mathf.Sin(timer * 20f) > 0) ? Color.red : Color.purple;
-            }
-
             yield return null;
         }
 
@@ -219,6 +213,28 @@ public class ChainEnemy : EnemyBase
             {
                 if (!enemy.IsDead)
                 {
+                    // Legendary Samurai takes explosion damage
+                    LegendarySamurai boss = collider.GetComponentInParent<LegendarySamurai>();
+                    if (boss != null || enemy is LegendarySamurai || enemy is BossTargetPoint)
+                    {
+                        if (boss != null)
+                        {
+                            boss.TakeExplosionHit(transform.position, explosionDamage);
+                        }
+                        continue;
+                    }
+
+                    // Armored Ninja takes explosion damage and shatters
+                    ArmoredNinja armoredNinja = collider.GetComponentInParent<ArmoredNinja>();
+                    if (armoredNinja != null || enemy is ArmoredNinja || enemy is ArmoredNinjaWeakPoint || collider.GetComponentInParent<ArmoredNinjaWeakPoint>() != null)
+                    {
+                        if (armoredNinja != null)
+                        {
+                            armoredNinja.TakeExplosionDamage(transform.position);
+                        }
+                        continue;
+                    }
+
                     enemy.OnDeath();
                 }
             }
