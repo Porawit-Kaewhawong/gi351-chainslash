@@ -91712,7 +91712,7 @@ MonoBehaviour:
     prefab: {fileID: 3260056029298322424, guid: a87d269a28554f8bb151b7eccfeecf93, type: 3}
     spawnCount: 2
     spawnWeight: 2
-  totalWaves: 5
+  totalWaves: 4
   waitForWaveClear: 1
   enemiesPerWave: 10
   bonusEnemiesPerWave: 2

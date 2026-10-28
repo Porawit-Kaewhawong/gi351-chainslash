@@ -1123,7 +1123,7 @@ MonoBehaviour:
     prefab: {fileID: 3260056029298322424, guid: c25d1c4c38a87f044b98c595233a0ff5, type: 3}
     spawnCount: 3
     spawnWeight: 3
-  totalWaves: 5
+  totalWaves: 2
   waitForWaveClear: 1
   enemiesPerWave: 10
   bonusEnemiesPerWave: 2

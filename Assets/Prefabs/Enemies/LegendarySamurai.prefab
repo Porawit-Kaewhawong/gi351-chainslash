@@ -279,7 +279,7 @@ MonoBehaviour:
   - {fileID: 2944547956908393011, guid: 530c120d452e89a49bfc1d7691ea81e2, type: 3}
   - {fileID: 3260056029298322424, guid: a87d269a28554f8bb151b7eccfeecf93, type: 3}
   - {fileID: 3260056029298322424, guid: 7afcea2bb7c84d12a1bbf5703eec3dd7, type: 3}
-  minionsPerPhrase: 000000000300000006000000090000000c000000
+  minionsPerPhrase: 0000000003000000050000000700000009000000
   minionSummonSFX: {fileID: 8300000, guid: 98936b8a712d84748be947cc31bd8e4a, type: 3}
   idleSprites:
   - {fileID: 2638513562076461800, guid: 29ca9dfeb685b284ab0ef438c4db6712, type: 3}
