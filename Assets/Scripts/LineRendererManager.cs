@@ -1,7 +1,10 @@
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// Manages the visual LineRenderer and targeted enemies during Chain Slash mode.
+/// </summary>
+[DisallowMultipleComponent]
 [RequireComponent(typeof(LineRenderer))]
 public class LineRendererManager : MonoBehaviour
 {
@@ -9,7 +12,23 @@ public class LineRendererManager : MonoBehaviour
     public List<GameObject> targets = new List<GameObject>();
 
     public LineRenderer LineRendererCom { get; private set; }
-    public PlayerController Player { get; private set; }
+
+    private PlayerController cachedPlayer;
+    public PlayerController Player
+    {
+        get
+        {
+            if (PlayerController.Instance != null)
+            {
+                return PlayerController.Instance;
+            }
+            if (cachedPlayer == null)
+            {
+                cachedPlayer = Object.FindFirstObjectByType<PlayerController>();
+            }
+            return cachedPlayer;
+        }
+    }
 
     private void Awake()
     {
@@ -18,7 +37,7 @@ public class LineRendererManager : MonoBehaviour
 
     private void Start()
     {
-        Player = PlayerController.Instance != null ? PlayerController.Instance : FindFirstObjectByType<PlayerController>();
+        cachedPlayer = PlayerController.Instance != null ? PlayerController.Instance : Object.FindFirstObjectByType<PlayerController>();
     }
 
     /// <summary>
@@ -29,12 +48,45 @@ public class LineRendererManager : MonoBehaviour
         targets.RemoveAll(target => target == null);
     }
 
-    private void OnDestroy()
+    /// <summary>
+    /// Adds a valid target to the chain list if not already present.
+    /// </summary>
+    public bool AddTarget(GameObject target)
+    {
+        if (target != null && !targets.Contains(target))
+        {
+            targets.Add(target);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Clears all targets and resets the line renderer positions.
+    /// </summary>
+    public void ClearTargets()
+    {
+        targets.Clear();
+        if (LineRendererCom != null)
+        {
+            LineRendererCom.positionCount = 0;
+        }
+    }
+
+    /// <summary>
+    /// Safely stops any currently running animation routine on this line.
+    /// </summary>
+    public void StopActiveCoroutine()
     {
         if (activeCoroutine != null)
         {
             StopCoroutine(activeCoroutine);
             activeCoroutine = null;
         }
+    }
+
+    private void OnDestroy()
+    {
+        StopActiveCoroutine();
     }
 }

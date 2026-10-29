@@ -37,9 +37,9 @@ public class ThrowerNinja : EnemyBase
         // Do not throw shurikens while telegraphing a dive or diving
         if (currentState == State.Telegraphing || currentState == State.Diving) return;
 
-        float distToPlayer = Vector2.Distance(transform.position, playerController.transform.position);
+        float distSq = ((Vector2)transform.position - (Vector2)playerController.transform.position).sqrMagnitude;
 
-        if (distToPlayer >= minThrowDistance && distToPlayer <= throwRange)
+        if (distSq >= (minThrowDistance * minThrowDistance) && distSq <= (throwRange * throwRange))
         {
             if (Time.time >= nextThrowTime)
             {

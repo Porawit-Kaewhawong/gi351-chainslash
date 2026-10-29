@@ -1,5 +1,9 @@
 using UnityEngine;
 
+/// <summary>
+/// Basic Ninja enemy with proximity flanking and evasive dodge behavior.
+/// </summary>
+[DisallowMultipleComponent]
 public class Enemy : EnemyBase
 {
     [Header("Flanking / Dodge Settings")]
@@ -23,16 +27,20 @@ public class Enemy : EnemyBase
     {
         if (playerController == null || Time.time < nextDodgeTime) return;
 
-        float distToPlayer = Vector2.Distance(transform.position, playerController.transform.position);
+        Vector2 toPlayer = (Vector2)playerController.transform.position - (Vector2)transform.position;
+        float triggerDistSq = dodgeTriggerDistance * dodgeTriggerDistance;
 
-        if (distToPlayer <= dodgeTriggerDistance)
+        if (toPlayer.sqrMagnitude <= triggerDistSq && toPlayer.sqrMagnitude > 0.0001f)
         {
             nextDodgeTime = Time.time + dodgeCooldown;
-            Vector2 awayDir = (transform.position - playerController.transform.position).normalized;
+            Vector2 awayDir = -toPlayer.normalized;
             awayDir.y = 0.5f;
 
             currentState = State.Dodging;
-            rb.linearVelocity = awayDir.normalized * dodgeForce;
+            if (rb != null)
+            {
+                rb.linearVelocity = awayDir.normalized * dodgeForce;
+            }
         }
     }
 
@@ -46,7 +54,7 @@ public class Enemy : EnemyBase
             GameManager.Instance.UnregisterEnemy(gameObject);
         }
 
-        if (deathImpulse != default)
+        if (deathImpulse != default && rb != null)
         {
             rb.AddForce(deathImpulse * 15f, ForceMode2D.Impulse);
         }

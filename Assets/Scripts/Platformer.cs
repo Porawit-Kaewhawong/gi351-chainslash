@@ -38,6 +38,8 @@ public class Platformer : MonoBehaviour
     private bool isPlayerOnPlatform = false;
     private GameObject playerObject;
     private float playerHoldDownTimer = 0f;
+    private InputAction cachedMoveAction;
+    private InputAction cachedJumpAction;
 
     // Enemy contact tracking
     private readonly Dictionary<EnemyBase, float> enemyStayTimers = new Dictionary<EnemyBase, float>();
@@ -144,7 +146,8 @@ public class Platformer : MonoBehaviour
         }
 
         // Action map check
-        InputAction moveAction = InputSystem.actions?.FindAction("Move");
+        if (cachedMoveAction == null) cachedMoveAction = InputSystem.actions?.FindAction("Move");
+        InputAction moveAction = cachedMoveAction;
         if (moveAction != null && moveAction.ReadValue<Vector2>().y < -0.4f)
         {
             return true;
@@ -173,7 +176,8 @@ public class Platformer : MonoBehaviour
 
     private bool IsJumpInputPressed()
     {
-        InputAction jumpAction = InputSystem.actions?.FindAction("Jump");
+        if (cachedJumpAction == null) cachedJumpAction = InputSystem.actions?.FindAction("Jump");
+        InputAction jumpAction = cachedJumpAction;
         if (jumpAction != null && jumpAction.WasPressedThisFrame())
         {
             return true;

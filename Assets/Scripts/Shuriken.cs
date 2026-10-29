@@ -40,6 +40,8 @@ public class Shuriken : MonoBehaviour
     private bool hasLastMousePos = false;
     private Vector3 baseScale = Vector3.one;
     private Coroutine punchScaleCoroutine;
+    private Camera cachedCamera;
+    private static Material sharedTrailMaterial;
 
     public bool IsReflected => isReflected;
 
@@ -107,7 +109,8 @@ public class Shuriken : MonoBehaviour
             Shader spriteShader = Shader.Find("Sprites/Default");
             if (spriteShader != null)
             {
-                trailRenderer.material = new Material(spriteShader);
+                if (sharedTrailMaterial == null) sharedTrailMaterial = new Material(spriteShader);
+                trailRenderer.material = sharedTrailMaterial;
             }
         }
 
@@ -197,7 +200,8 @@ public class Shuriken : MonoBehaviour
             return;
         }
 
-        Camera cam = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (cachedCamera == null) cachedCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        Camera cam = cachedCamera;
         if (cam == null || UnityEngine.InputSystem.Mouse.current == null) return;
 
         Vector3 screenPos = UnityEngine.InputSystem.Mouse.current.position.ReadValue();
@@ -295,13 +299,16 @@ public class Shuriken : MonoBehaviour
 
     private Vector2 FindBestEnemyDirection(Vector2 defaultDir)
     {
-        EnemyBase[] allEnemies = FindObjectsByType<EnemyBase>(FindObjectsSortMode.None);
+        var activeList = (GameManager.Instance != null) ? GameManager.Instance.ActiveEnemies : null;
+        int activeCount = (activeList != null && activeList.Count > 0) ? activeList.Count : 0;
+        EnemyBase[] allEnemies = (activeCount == 0) ? FindObjectsByType<EnemyBase>(FindObjectsSortMode.None) : null;
+        int totalCandidates = (activeCount > 0) ? activeCount : (allEnemies != null ? allEnemies.Length : 0);
         EnemyBase bestTarget = null;
         float bestScore = -1f;
 
-        for (int i = 0; i < allEnemies.Length; i++)
+        for (int i = 0; i < totalCandidates; i++)
         {
-            EnemyBase enemy = allEnemies[i];
+            EnemyBase enemy = (activeCount > 0) ? (activeList[i] != null ? activeList[i].GetComponent<EnemyBase>() : null) : allEnemies[i];
             if (enemy == null || enemy.IsDead || enemy is ArmoredNinjaWeakPoint) continue;
 
             Vector2 toEnemy = (Vector2)enemy.transform.position - (Vector2)transform.position;

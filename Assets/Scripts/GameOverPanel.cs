@@ -195,7 +195,8 @@ public class GameOverPanel : MonoBehaviour
         }
     }
 
-    private void Update()
+    // Interaction is strictly via UI button clicks (no empty Update loop)
+    private void DisabledKeyboardShortcuts()
     {
         // Keyboard and gamepad shortcuts are intentionally disabled.
         // Interaction is strictly via UI button clicks.

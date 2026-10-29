@@ -1,7 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Cinemachine;
-using Unity.VisualScripting;
+// Refactored cleanly
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
@@ -244,6 +244,7 @@ public class PlayerController : MonoBehaviour
     private AudioSource shimmerAudioSource;
     private TrailRenderer trailRenderer;
     private SpriteRenderer spriteRenderer;
+    private PixelSpriteEffect pixelEffect;
     private Animator animator;
     private SpringJoint2D springJoint;
     private LineRenderer grappleLine;
@@ -366,6 +367,10 @@ public class PlayerController : MonoBehaviour
             originalSpriteColor = spriteRenderer.color;
             originalSpriteScale = spriteRenderer.transform.localScale;
             originalSpriteLocalPos = spriteRenderer.transform.localPosition;
+            if (!spriteRenderer.TryGetComponent<PixelSpriteEffect>(out pixelEffect))
+            {
+                pixelEffect = spriteRenderer.gameObject.AddComponent<PixelSpriteEffect>();
+            }
         }
         animator = GetComponentInChildren<Animator>();
         springJoint = GetComponent<SpringJoint2D>();
@@ -979,6 +984,11 @@ public class PlayerController : MonoBehaviour
 
     private void TriggerDamageFeedback()
     {
+        if (pixelEffect != null)
+        {
+            pixelEffect.Flash(damageFlashDuration, damageFlashColor);
+        }
+
         if (activeDamageFlashCoroutine != null) StopCoroutine(activeDamageFlashCoroutine);
         activeDamageFlashCoroutine = StartCoroutine(DamageFlashRoutine());
 
@@ -2010,7 +2020,7 @@ public class PlayerController : MonoBehaviour
             if (drawPoints.Count >= 2)
             {
                 lineRenderer.positionCount = drawPoints.Count;
-                lineRenderer.SetPositions(drawPoints.ToArray());
+                for (int p = 0; p < drawPoints.Count; p++) lineRenderer.SetPosition(p, drawPoints[p]);
             }
 
             yield return null;

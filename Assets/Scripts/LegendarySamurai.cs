@@ -1424,6 +1424,12 @@ public class LegendarySamurai : EnemyBase
 
     private void TriggerHitFlash(Color? flashColor = null)
     {
+        if (pixelEffect != null)
+        {
+            pixelEffect.Flash(0.12f, flashColor ?? Color.white);
+            return;
+        }
+
         if (flashCoroutine != null) StopCoroutine(flashCoroutine);
         flashCoroutine = StartCoroutine(HitFlashRoutine(flashColor ?? Color.white));
     }

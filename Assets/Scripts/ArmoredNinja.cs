@@ -324,6 +324,12 @@ public class ArmoredNinja : EnemyBase
 
     private void TriggerFlash()
     {
+        if (pixelEffect != null)
+        {
+            pixelEffect.Flash(0.12f, hitFlashColor);
+            return;
+        }
+
         if (flashCoroutine != null) StopCoroutine(flashCoroutine);
         flashCoroutine = StartCoroutine(ArmorFlashRoutine());
     }

@@ -1,7 +1,10 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.UI;
 
+/// <summary>
+/// Handles UI button hover, click scaling, and audio feedback for both MainMenu and GameOverPanel.
+/// </summary>
+[DisallowMultipleComponent]
 public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler
 {
     [Header("Scale Animation Settings")]
@@ -15,20 +18,44 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
 
     private Vector3 originalScale;
     private Vector3 targetScale;
-    private MainMenu mainMenu;
-    private GameOverPanel gameOverPanel;
+    private MainMenu cachedMainMenu;
+    private GameOverPanel cachedGameOverPanel;
+
+    private MainMenu MainMenuRef
+    {
+        get
+        {
+            if (cachedMainMenu == null)
+            {
+                cachedMainMenu = Object.FindFirstObjectByType<MainMenu>();
+            }
+            return cachedMainMenu;
+        }
+    }
+
+    private GameOverPanel GameOverPanelRef
+    {
+        get
+        {
+            if (cachedGameOverPanel == null)
+            {
+                cachedGameOverPanel = GameOverPanel.Instance != null ? GameOverPanel.Instance : Object.FindFirstObjectByType<GameOverPanel>();
+            }
+            return cachedGameOverPanel;
+        }
+    }
 
     private void Awake()
     {
         originalScale = transform.localScale;
         targetScale = originalScale;
-        mainMenu = FindFirstObjectByType<MainMenu>();
-        gameOverPanel = FindFirstObjectByType<GameOverPanel>();
+        cachedMainMenu = Object.FindFirstObjectByType<MainMenu>();
+        cachedGameOverPanel = GameOverPanel.Instance != null ? GameOverPanel.Instance : Object.FindFirstObjectByType<GameOverPanel>();
     }
 
     public void SetGameOverPanel(GameOverPanel panel)
     {
-        gameOverPanel = panel;
+        cachedGameOverPanel = panel;
     }
 
     private void OnEnable()
@@ -39,19 +66,32 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
 
     private void Update()
     {
-        transform.localScale = Vector3.Lerp(transform.localScale, targetScale, Time.unscaledDeltaTime * animationSpeed);
+        // Avoid calculating lerps every frame when the button scale is already settled
+        if ((transform.localScale - targetScale).sqrMagnitude > 0.00001f)
+        {
+            transform.localScale = Vector3.Lerp(transform.localScale, targetScale, Time.unscaledDeltaTime * animationSpeed);
+            if ((transform.localScale - targetScale).sqrMagnitude <= 0.00001f)
+            {
+                transform.localScale = targetScale;
+            }
+        }
     }
 
     public void OnPointerEnter(PointerEventData eventData)
     {
         targetScale = originalScale * hoverScale;
-        if (mainMenu != null)
+
+        MainMenu menu = MainMenuRef;
+        if (menu != null)
         {
-            mainMenu.PlayButtonHoverSFX(hoverSFX);
+            menu.PlayButtonHoverSFX(hoverSFX);
+            return;
         }
-        else if (gameOverPanel != null)
+
+        GameOverPanel panel = GameOverPanelRef;
+        if (panel != null)
         {
-            gameOverPanel.PlayButtonHoverSFX(hoverSFX);
+            panel.PlayButtonHoverSFX(hoverSFX);
         }
     }
 
@@ -63,13 +103,18 @@ public class MenuButtonFX : MonoBehaviour, IPointerEnterHandler, IPointerExitHan
     public void OnPointerDown(PointerEventData eventData)
     {
         targetScale = originalScale * clickScale;
-        if (mainMenu != null)
+
+        MainMenu menu = MainMenuRef;
+        if (menu != null)
         {
-            mainMenu.PlayButtonClickSFX(clickSFX);
+            menu.PlayButtonClickSFX(clickSFX);
+            return;
         }
-        else if (gameOverPanel != null)
+
+        GameOverPanel panel = GameOverPanelRef;
+        if (panel != null)
         {
-            gameOverPanel.PlayButtonClickSFX(clickSFX);
+            panel.PlayButtonClickSFX(clickSFX);
         }
     }
 }

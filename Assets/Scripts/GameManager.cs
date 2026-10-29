@@ -69,6 +69,7 @@ public class GameManager : MonoBehaviour
     public int CurrentWave { get; private set; }
     public int TotalWaves => totalWaves;
     public int ActiveEnemyCount => activeEnemies.Count;
+    public IReadOnlyList<GameObject> ActiveEnemies => activeEnemies;
     public bool AllWavesCompleted { get; private set; }
 
     private PlayerController player;
@@ -187,7 +188,13 @@ public class GameManager : MonoBehaviour
         }
 
         // Ensure any remaining enemies in the scene (including pre-placed enemies) are completely gone
-        while (activeEnemies.Count > 0 || FindObjectsByType<EnemyBase>(FindObjectsSortMode.None).Length > 0)
+        while (activeEnemies.Count > 0)
+        {
+            activeEnemies.RemoveAll(enemy => enemy == null);
+            yield return null;
+        }
+
+        while (HasAnyLivingEnemies())
         {
             activeEnemies.RemoveAll(enemy => enemy == null);
             yield return null;
@@ -608,6 +615,19 @@ public class GameManager : MonoBehaviour
         {
             activeEnemies.Add(enemy);
         }
+    }
+
+    private bool HasAnyLivingEnemies()
+    {
+        EnemyBase[] remaining = FindObjectsByType<EnemyBase>(FindObjectsSortMode.None);
+        for (int i = 0; i < remaining.Length; i++)
+        {
+            if (remaining[i] != null && !remaining[i].IsDead && !(remaining[i] is ArmoredNinjaWeakPoint) && !(remaining[i] is BossTargetPoint))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void UnregisterEnemy(GameObject enemy)

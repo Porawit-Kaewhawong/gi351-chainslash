@@ -10,6 +10,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     {
         Normal,
         WallSticking,
+        CeilingRunning,
         Telegraphing,
         Diving,
         Dodging
@@ -30,6 +31,26 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     [SerializeField] protected float doubleJumpDelay = 0.25f;
     [SerializeField] protected float wallCheckDistance = 0.6f;
     [SerializeField] protected float groundCheckDistance = 0.6f;
+
+    [Header("AI & Pathfinding Settings")]
+    [Tooltip("Enable intelligent obstacle leaping, gap jumping, and platform pathing.")]
+    [SerializeField] protected bool smartPathfinding = true;
+    [Tooltip("Distance ahead to look for gaps or pits.")]
+    [SerializeField] protected float ledgeCheckDistance = 0.45f;
+    [Tooltip("Maximum gap distance the enemy will attempt to jump across.")]
+    [SerializeField] protected float maxLeapGapDistance = 3.2f;
+    [Tooltip("Horizontal separation radius between adjacent enemies to prevent clustering.")]
+    [SerializeField] protected float flockingSeparationRadius = 0.75f;
+
+    [Header("Wall & Ceiling Running Settings")]
+    [Tooltip("Enable running along ceilings when reaching the top of a wall or jumping into a ceiling.")]
+    [SerializeField] protected bool canCeilingRun = true;
+    [Tooltip("Upward cling force applied while ceiling running to keep feet locked against the ceiling.")]
+    [SerializeField] protected float ceilingClingForce = 3.5f;
+    [Tooltip("Maximum duration the enemy will run along a ceiling before diving at the player.")]
+    [SerializeField] protected float maxCeilingRunDuration = 2.4f;
+    [Tooltip("Speed multiplier while running on the ceiling.")]
+    [SerializeField] protected float ceilingRunSpeedMultiplier = 1.4f;
 
     [Header("Telegraph Wind-up Settings")]
     [SerializeField] protected float windUpDuration = 0.4f;
@@ -69,11 +90,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     protected bool isTarget = false;
     protected int wallRunDirection = 1;
     protected float wallRunStartTime;
+    protected int ceilingRunDirection = 1;
+    protected float ceilingRunStartTime;
+    protected bool wasCeilingRunning;
     protected float defaultGravityScale = 1f;
+    protected float stuckTimer = 0f;
+    protected static readonly ContactFilter2D FlockingFilter = new ContactFilter2D { useTriggers = false };
+    protected static readonly Collider2D[] FlockingBuffer = new Collider2D[8];
 
     protected Rigidbody2D rb;
     protected Collider2D col;
     protected SpriteRenderer spriteRenderer;
+    protected PixelSpriteEffect pixelEffect;
     protected PlayerController playerController;
     protected Color originalColor = Color.white;
     private Material originalSpriteMaterial;
@@ -82,6 +110,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     private GameObject outlineContainer;
     private SpriteRenderer[] outlineRenderers;
     private static Material sharedOutlineMaterial;
+    private static Camera cachedMainCamera;
+    protected static Camera MainCamera
+    {
+        get
+        {
+            if (cachedMainCamera == null)
+            {
+                cachedMainCamera = Camera.main;
+            }
+            return cachedMainCamera;
+        }
+    }
     private static readonly Vector2[] OutlineDirections = new Vector2[]
     {
         new Vector2( 1f,  0f),
@@ -141,7 +181,19 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             originalColor = spriteRenderer.color;
             originalSpriteMaterial = spriteRenderer.sharedMaterial;
             originalSpriteLocalPos = spriteRenderer.transform.localPosition;
-            CreateSpriteOutlineIndicator();
+            if (!spriteRenderer.TryGetComponent<PixelSpriteEffect>(out pixelEffect))
+            {
+                pixelEffect = spriteRenderer.gameObject.AddComponent<PixelSpriteEffect>();
+            }
+            if (pixelEffect != null)
+            {
+                pixelEffect.OutlineColor = targetableOutlineColor;
+                pixelEffect.OutlineThickness = targetableOutlineThickness > 0.5f ? targetableOutlineThickness : 1.2f;
+            }
+            else
+            {
+                CreateSpriteOutlineIndicator();
+            }
         }
 
         if (telegraphColor.a <= 0f)
@@ -325,9 +377,10 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     {
         if (isTarget || PlayerController.Instance == null || !PlayerController.Instance.IsInMode) return;
 
-        if (Camera.main != null && Mouse.current != null && col != null)
+        Camera cam = MainCamera;
+        if (cam != null && Mouse.current != null && col != null)
         {
-            Vector2 mouseWorldPos = Camera.main.ScreenToWorldPoint(Mouse.current.position.ReadValue());
+            Vector2 mouseWorldPos = cam.ScreenToWorldPoint(Mouse.current.position.ReadValue());
             if (col.OverlapPoint(mouseWorldPos))
             {
                 TrySelectTarget();
@@ -344,6 +397,13 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             PlayerController.Instance.TargetSetup(transform);
             isTarget = true;
 
+            if (pixelEffect != null)
+            {
+                pixelEffect.SetOutline(true, targetableOutlineColor, 2f, PixelSpriteEffect.OutlineMode.Both);
+                pixelEffect.Flash(0.08f, Color.white);
+            }
+            else
+
             if (spriteRenderer != null)
             {
                 if (sharedOutlineMaterial != null)
@@ -357,6 +417,17 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             {
                 outlineContainer.SetActive(false);
             }
+        }
+    }
+
+    /// <summary>
+    /// Triggers an arcade damage or impact flash using the Pixel2D shader.
+    /// </summary>
+    public virtual void TriggerHitFlash(float duration = 0.12f, Color? flashColor = null)
+    {
+        if (pixelEffect != null)
+        {
+            pixelEffect.Flash(duration, flashColor ?? Color.white);
         }
     }
 
@@ -383,6 +454,16 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
                 }
                 break;
 
+            case State.CeilingRunning:
+                if (rb != null)
+                {
+                    rb.gravityScale = 0f;
+                    float speedX = speed * ceilingRunSpeedMultiplier;
+                    // Upward cling velocity keeps feet locked against the ceiling physics
+                    rb.linearVelocity = new Vector2(ceilingRunDirection * speedX, ceilingClingForce);
+                }
+                break;
+
             case State.Telegraphing:
                 if (rb != null)
                 {
@@ -404,14 +485,32 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
                 if (rb != null)
                 {
                     rb.gravityScale = defaultGravityScale;
-                    rb.AddForce(new Vector2(dir.x * speed, 0f));
-                    Vector2 velocity = rb.linearVelocity;
-                    velocity.x = Mathf.Clamp(velocity.x, -speed * 1.5f, speed * 1.5f);
-                    rb.linearVelocity = velocity;
 
-                    if (Mathf.Abs(dir.x) > 0.05f)
+                    // Flocking separation from other nearby enemies to prevent sprite clumping
+                    float separation = CalculateSeparationOffset();
+                    float moveDirX = dir.x + (separation * 0.4f);
+                    if (Mathf.Abs(moveDirX) > 0.02f)
                     {
-                        HandleStepClimb(dir.x);
+                        moveDirX = Mathf.Sign(moveDirX);
+                    }
+
+                    // Stuck detection: trying to move horizontally but blocked
+                    if (Mathf.Abs(moveDirX) > 0.1f && Mathf.Abs(rb.linearVelocityX) < 0.15f)
+                    {
+                        stuckTimer += Time.fixedDeltaTime;
+                    }
+                    else
+                    {
+                        stuckTimer = Mathf.Max(0f, stuckTimer - Time.fixedDeltaTime * 2f);
+                    }
+
+                    float targetVelX = moveDirX * speed;
+                    float newVelX = Mathf.MoveTowards(rb.linearVelocityX, targetVelX, speed * 8f * Time.fixedDeltaTime);
+                    rb.linearVelocity = new Vector2(newVelX, rb.linearVelocityY);
+
+                    if (Mathf.Abs(moveDirX) > 0.05f)
+                    {
+                        HandleStepClimb(moveDirX);
                     }
                 }
                 break;
@@ -422,20 +521,10 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     protected virtual void HandleJump(Vector2 dir)
     {
-        if (col == null) return;
+        if (col == null || rb == null) return;
         Bounds bounds = col.bounds;
 
-        // Cast from the bottom of the collider so collider height (1.3) never swallows groundCheckDistance
-        Vector2 groundBoxOrigin = new Vector2(bounds.center.x, bounds.min.y + 0.06f);
-        Vector2 groundBoxSize = new Vector2(bounds.size.x * 0.75f, 0.08f);
-        bool grounded = Physics2D.BoxCast(
-            groundBoxOrigin,
-            groundBoxSize,
-            0f,
-            Vector2.down,
-            0.16f,
-            groundLayer
-        );
+        bool grounded = CheckGrounded(bounds);
 
         int desiredWallDir = Mathf.Abs(dir.x) > 0.01f ? (dir.x > 0f ? 1 : -1) : wallRunDirection;
         bool isTouchingWall = IsTouchingWall(bounds, desiredWallDir);
@@ -443,31 +532,55 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         if (currentState == State.WallSticking)
         {
             bool stillOnWall = IsTouchingWall(bounds, wallRunDirection);
-            bool hitCeiling = Physics2D.BoxCast(
-                new Vector2(bounds.center.x, bounds.max.y - 0.05f),
-                new Vector2(bounds.size.x * 0.6f, 0.08f),
-                0f,
-                Vector2.up,
-                0.2f,
-                groundLayer
-            );
+            bool hitCeiling = IsTouchingCeiling(bounds);
+
+            // Transition from wall-run to ceiling-run when reaching a ceiling!
+            if (hitCeiling && canCeilingRun)
+            {
+                int roomDir = -wallRunDirection;
+                StartCeilingRun(roomDir);
+                return;
+            }
 
             // If the enemy ran all the way up past the top of the wall/ledge, vault onto the platform!
             if (!stillOnWall && Time.time > wallRunStartTime + 0.1f)
             {
                 currentState = State.Normal;
-                if (rb != null)
-                {
-                    rb.gravityScale = defaultGravityScale;
-                    rb.linearVelocity = new Vector2(wallRunDirection * CurrentMoveSpeed * 1.6f, jumpForce * 0.45f);
-                }
+                rb.gravityScale = defaultGravityScale;
+                rb.linearVelocity = new Vector2(wallRunDirection * CurrentMoveSpeed * 1.6f, jumpForce * 0.45f);
                 lastJumpTime = Time.time;
                 nextJumpTime = Time.time + jumpCooldown;
                 return;
             }
 
-            // If the wall-run timer finished or the enemy hit a ceiling, telegraph and dive at the player
+            // If the wall-run timer finished or hit a ceiling without ceiling run
             if (Time.time >= nextJumpTime || hitCeiling)
+            {
+                StartCoroutine(TelegraphAndDive());
+            }
+            return;
+        }
+
+        if (currentState == State.CeilingRunning)
+        {
+            bool stillOnCeiling = IsTouchingCeiling(bounds);
+            bool hitWallAhead = IsTouchingWall(bounds, ceilingRunDirection);
+
+            // Ambush dive when directly overhead of the player!
+            bool directlyOverhead = false;
+            Transform targetPlayer = playerController != null ? playerController.transform : (PlayerController.Instance != null ? PlayerController.Instance.transform : null);
+            if (targetPlayer != null)
+            {
+                float dx = Mathf.Abs(targetPlayer.position.x - transform.position.x);
+                float dy = transform.position.y - targetPlayer.position.y;
+                if (dx < 1.35f && dy > 1.0f)
+                {
+                    directlyOverhead = true;
+                }
+            }
+
+            // If the ceiling ended, or hit an opposing wall, or timed out, or directly overhead: drop-kick dive!
+            if (!stillOnCeiling || hitWallAhead || directlyOverhead || Time.time >= nextJumpTime)
             {
                 StartCoroutine(TelegraphAndDive());
             }
@@ -484,6 +597,10 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             return;
         }
 
+        Transform playerTarget = playerController != null ? playerController.transform : (PlayerController.Instance != null ? PlayerController.Instance.transform : null);
+        float targetDeltaY = playerTarget != null ? (playerTarget.position.y - transform.position.y) : 0f;
+        float targetDeltaX = playerTarget != null ? (playerTarget.position.x - transform.position.x) : 0f;
+
         if (grounded && Time.time > lastJumpTime + 0.1f)
         {
             jumpsLeft = maxJumps;
@@ -493,8 +610,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             }
 
             // If player is on a lower floor and we are on a drop-through platform, drop down!
-            Transform playerTarget = playerController != null ? playerController.transform : (PlayerController.Instance != null ? PlayerController.Instance.transform : null);
-            if (playerTarget != null && playerTarget.position.y < transform.position.y - 1.2f && Time.time > lastJumpTime + 0.35f)
+            if (targetDeltaY < -1.2f && Time.time > lastJumpTime + 0.35f)
             {
                 if (TryDropThroughPlatform())
                 {
@@ -504,33 +620,217 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             }
         }
 
-        // Start wall-running when contacting a wall in the direction of the player
+        // Start wall-running when contacting a tall wall in the direction of the player
         if (isTouchingWall && Time.time >= wallRunStartTime + 0.35f)
         {
             wallRunDirection = desiredWallDir;
             wallRunStartTime = Time.time;
             currentState = State.WallSticking;
             nextJumpTime = Time.time + 1.1f;
-            if (rb != null)
-            {
-                rb.gravityScale = 0f;
-                float climbSpeed = Mathf.Max(CurrentMoveSpeed * 1.6f, 4.2f);
-                rb.linearVelocity = new Vector2(wallRunDirection * 1.5f, climbSpeed);
-            }
+            rb.gravityScale = 0f;
+            float climbSpeed = Mathf.Max(CurrentMoveSpeed * 1.6f, 4.2f);
+            rb.linearVelocity = new Vector2(wallRunDirection * 1.5f, climbSpeed);
             return;
         }
 
+        // --- SMART JUMP DECISIONS ---
         if (grounded && Time.time >= nextJumpTime && jumpsLeft > 0)
         {
-            Jump();
-            nextJumpTime = Time.time + jumpCooldown;
+            bool shouldJump = false;
+            float jumpMultiplier = 1f;
+            float forwardBoost = 0f;
+
+            if (smartPathfinding)
+            {
+                // 1. Gap / Pit ahead
+                bool atLedge = DetectLedgeOrGap(bounds, dir.x, out bool canLeap, out float gapWidth);
+                if (atLedge)
+                {
+                    if (targetDeltaY >= -0.8f && canLeap)
+                    {
+                        shouldJump = true;
+                        jumpMultiplier = 1.1f;
+                        forwardBoost = dir.x * CurrentMoveSpeed * 0.8f;
+                    }
+                    else if (targetDeltaY < -1.0f)
+                    {
+                        // Player is below - smoothly run/walk off ledge to drop down without jumping!
+                        shouldJump = false;
+                    }
+                    else if (!canLeap)
+                    {
+                        // Dead drop or bottomless chasm with no landing
+                        shouldJump = false;
+                    }
+                }
+
+                // 2. Obstacle ahead higher than step-climb height
+                if (!shouldJump && DetectObstacleAhead(bounds, dir.x, out bool isTallWall))
+                {
+                    if (isTallWall)
+                    {
+                        // Jump towards the wall to latch on
+                        shouldJump = true;
+                        jumpMultiplier = 0.9f;
+                    }
+                    else
+                    {
+                        // Low obstacle/hurdle, jump over it
+                        shouldJump = true;
+                        jumpMultiplier = 1.0f;
+                    }
+                }
+
+                // 3. Player is on a higher platform
+                if (!shouldJump && targetDeltaY > 0.85f && Mathf.Abs(targetDeltaX) < 4.5f)
+                {
+                    shouldJump = true;
+                    jumpMultiplier = Mathf.Clamp(0.9f + targetDeltaY * 0.12f, 1f, 1.45f);
+                }
+
+                // 4. Stuck recovery
+                if (!shouldJump && stuckTimer >= 0.35f)
+                {
+                    shouldJump = true;
+                    jumpMultiplier = 1.1f;
+                    stuckTimer = 0f;
+                }
+            }
+            else
+            {
+                // Fallback to legacy jump
+                shouldJump = true;
+            }
+
+            if (shouldJump)
+            {
+                Jump(jumpMultiplier);
+                if (Mathf.Abs(forwardBoost) > 0.01f)
+                {
+                    rb.linearVelocity = new Vector2(rb.linearVelocityX + forwardBoost, rb.linearVelocityY);
+                }
+                nextJumpTime = Time.time + jumpCooldown;
+                return;
+            }
+        }
+
+        // Jump onto ceiling if touching overhead ceiling while airborne
+        if (!grounded && canCeilingRun && IsTouchingCeiling(bounds) && Time.time > lastJumpTime + 0.15f)
+        {
+            int toPlayerDirX = (playerTarget != null && playerTarget.position.x < transform.position.x) ? -1 : 1;
+            StartCeilingRun(toPlayerDirX);
             return;
         }
 
+        // --- AIR NAVIGATION & DOUBLE JUMP ---
         if (!grounded && jumpsLeft > 0 && Time.time >= lastJumpTime + doubleJumpDelay && !isTouchingWall)
         {
-            Jump();
+            // Only double jump if falling or at apex, and still need vertical lift to reach the target/platform
+            if (rb.linearVelocityY < 1.2f && (targetDeltaY > 0.3f || isTouchingWall || stuckTimer > 0.2f))
+            {
+                Jump(0.95f);
+            }
         }
+    }
+
+    protected virtual bool CheckGrounded(Bounds bounds)
+    {
+        Vector2 groundBoxOrigin = new Vector2(bounds.center.x, bounds.min.y + 0.06f);
+        Vector2 groundBoxSize = new Vector2(bounds.size.x * 0.75f, 0.08f);
+        return Physics2D.BoxCast(
+            groundBoxOrigin,
+            groundBoxSize,
+            0f,
+            Vector2.down,
+            0.16f,
+            groundLayer
+        );
+    }
+
+    protected virtual bool DetectLedgeOrGap(Bounds bounds, float moveDirX, out bool canLeap, out float gapWidth)
+    {
+        canLeap = false;
+        gapWidth = 0f;
+        if (Mathf.Abs(moveDirX) < 0.05f) return false;
+
+        float dirX = Mathf.Sign(moveDirX);
+        float footY = bounds.min.y;
+        float probeX = bounds.center.x + (dirX * (bounds.extents.x + ledgeCheckDistance));
+
+        // 1. Check if ground exists immediately ahead of the front foot
+        Vector2 probeOrigin = new Vector2(probeX, footY + 0.1f);
+        RaycastHit2D groundAhead = Physics2D.Raycast(probeOrigin, Vector2.down, 1.4f, groundLayer);
+
+        if (groundAhead.collider != null && !groundAhead.collider.isTrigger)
+        {
+            return false; // Ground is present, not a ledge
+        }
+
+        // 2. A ledge or gap is detected! Probe forward to find a walkable surface across the gap
+        for (float dist = 0.8f; dist <= maxLeapGapDistance; dist += 0.45f)
+        {
+            Vector2 leapProbe = new Vector2(probeX + (dirX * dist), footY + 0.35f);
+            RaycastHit2D landingHit = Physics2D.Raycast(leapProbe, Vector2.down, 1.9f, groundLayer);
+            if (landingHit.collider != null && !landingHit.collider.isTrigger)
+            {
+                canLeap = true;
+                gapWidth = dist;
+                return true;
+            }
+        }
+
+        return true;
+    }
+
+    protected virtual bool DetectObstacleAhead(Bounds bounds, float moveDirX, out bool isTallWall)
+    {
+        isTallWall = false;
+        if (Mathf.Abs(moveDirX) < 0.05f) return false;
+
+        float dirX = Mathf.Sign(moveDirX);
+        float checkDist = bounds.extents.x + Mathf.Max(0.2f, wallCheckDistance * 0.5f);
+
+        // Check at waist level (above step-climb height)
+        Vector2 waistOrigin = new Vector2(bounds.center.x, bounds.min.y + maxStepHeight + 0.15f);
+        RaycastHit2D waistHit = Physics2D.Raycast(waistOrigin, Vector2.right * dirX, checkDist, groundLayer);
+
+        if (waistHit.collider == null || waistHit.collider.isTrigger)
+        {
+            return false;
+        }
+
+        // Check at head level to see if it extends into a tall wall
+        Vector2 headOrigin = new Vector2(bounds.center.x, bounds.max.y + 0.3f);
+        RaycastHit2D headHit = Physics2D.Raycast(headOrigin, Vector2.right * dirX, checkDist, groundLayer);
+        isTallWall = headHit.collider != null && !headHit.collider.isTrigger;
+
+        return true;
+    }
+
+    protected virtual float CalculateSeparationOffset()
+    {
+        if (flockingSeparationRadius <= 0f) return 0f;
+
+        int count = Physics2D.OverlapCircle(transform.position, flockingSeparationRadius, FlockingFilter, FlockingBuffer);
+        float separation = 0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            Collider2D otherCol = FlockingBuffer[i];
+            if (otherCol == null || otherCol == col || otherCol.isTrigger) continue;
+
+            if (otherCol.TryGetComponent<EnemyBase>(out EnemyBase otherEnemy) && !otherEnemy.IsDead)
+            {
+                float deltaX = transform.position.x - otherEnemy.transform.position.x;
+                if (Mathf.Abs(deltaX) < 0.01f)
+                {
+                    deltaX = (GetInstanceID() > otherEnemy.GetInstanceID()) ? 0.1f : -0.1f;
+                }
+                separation += Mathf.Sign(deltaX) * Mathf.Clamp01(1f - (Mathf.Abs(deltaX) / flockingSeparationRadius));
+            }
+        }
+
+        return Mathf.Clamp(separation, -1f, 1f);
     }
 
     public virtual bool TryDropThroughPlatform()
@@ -549,6 +849,29 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             }
         }
         return false;
+    }
+
+    protected virtual void StartCeilingRun(int runDirection)
+    {
+        currentState = State.CeilingRunning;
+        ceilingRunDirection = runDirection != 0 ? runDirection : 1;
+        ceilingRunStartTime = Time.time;
+        nextJumpTime = Time.time + maxCeilingRunDuration;
+        wasCeilingRunning = true;
+
+        if (rb != null)
+        {
+            rb.gravityScale = 0f;
+            float speedX = CurrentMoveSpeed * ceilingRunSpeedMultiplier;
+            rb.linearVelocity = new Vector2(ceilingRunDirection * speedX, ceilingClingForce);
+        }
+    }
+
+    protected bool IsTouchingCeiling(Bounds bounds)
+    {
+        Vector2 boxOrigin = new Vector2(bounds.center.x, bounds.max.y - 0.04f);
+        Vector2 boxSize = new Vector2(bounds.size.x * 0.7f, 0.08f);
+        return Physics2D.BoxCast(boxOrigin, boxSize, 0f, Vector2.up, 0.22f, groundLayer);
     }
 
     protected bool IsTouchingWall(Bounds bounds, int horizontalDir)
@@ -650,6 +973,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         }
     }
 
+    
     protected virtual IEnumerator TelegraphAndDive()
     {
         currentState = State.Telegraphing;
@@ -695,7 +1019,13 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
 
     protected virtual void Jump()
     {
-        rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
+        Jump(1f);
+    }
+
+    protected virtual void Jump(float multiplier)
+    {
+        if (rb == null) return;
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce * multiplier);
         jumpsLeft--;
         lastJumpTime = Time.time;
     }
@@ -718,7 +1048,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             sr.color = targetableOutlineColor;
             sr.sortingLayerID = spriteRenderer.sortingLayerID;
             sr.sortingOrder = spriteRenderer.sortingOrder - 1;
-            sr.transform.localPosition = (Vector3)(OutlineDirections[i] * targetableOutlineThickness);
+
         }
     }
 
@@ -729,6 +1059,10 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         if (!inCombatMode && isTarget)
         {
             isTarget = false;
+            if (pixelEffect != null)
+            {
+                pixelEffect.SetOutline(false);
+            }
             if (spriteRenderer != null)
             {
                 if (originalSpriteMaterial != null)
@@ -741,7 +1075,11 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         }
         else if (inCombatMode && isTarget && spriteRenderer != null)
         {
-            // Keep locked-on enemies as a full-body glowing silhouette in their targetIndicator color + micro-jitter
+            if (pixelEffect != null)
+            {
+                pixelEffect.SetOutline(true, targetableOutlineColor, 2f, PixelSpriteEffect.OutlineMode.Both);
+            }
+            else
             if (sharedOutlineMaterial != null && spriteRenderer.sharedMaterial != sharedOutlineMaterial)
             {
                 spriteRenderer.sharedMaterial = sharedOutlineMaterial;
@@ -753,6 +1091,14 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
         }
 
         bool showOutline = inCombatMode && !isTarget;
+        if (pixelEffect != null)
+        {
+            if (pixelEffect.OutlineEnabled != showOutline)
+            {
+                pixelEffect.SetOutline(showOutline, targetableOutlineColor, 1.2f, PixelSpriteEffect.OutlineMode.Outer);
+            }
+        }
+        else
         if (outlineContainer != null && outlineContainer.activeSelf != showOutline)
         {
             outlineContainer.SetActive(showOutline);
@@ -769,6 +1115,12 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             transform.rotation = Quaternion.identity;
             spriteRenderer.flipX = wallRunDirection < 0;
             spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, wallRunDirection * 90f);
+        }
+        else if (currentState == State.CeilingRunning)
+        {
+            transform.rotation = Quaternion.identity;
+            spriteRenderer.flipX = ceilingRunDirection < 0;
+            spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, 180f);
         }
         else
         {
@@ -806,6 +1158,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             }
         }
 
+        TriggerHitFlash(0.12f, Color.white);
         rb.linearVelocity = pullForce;
     }
 
@@ -829,6 +1182,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
             }
         }
 
+        TriggerHitFlash(0.18f, new Color(1f, 0.9f, 0.35f, 1f));
         rb.linearVelocity = kickImpulse;
     }
 

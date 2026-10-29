@@ -51,7 +51,8 @@ public class ChainEnemy : EnemyBase
 
         if (playerController != null)
         {
-            isAggro = Vector2.Distance(transform.position, playerController.transform.position) <= aggroDistance;
+            Vector2 toPlayer = (Vector2)transform.position - (Vector2)playerController.transform.position;
+            isAggro = toPlayer.sqrMagnitude <= (aggroDistance * aggroDistance);
         }
     }
 
