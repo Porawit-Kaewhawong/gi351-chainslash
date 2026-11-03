@@ -4,7 +4,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 
 [RequireComponent(typeof(Rigidbody2D), typeof(Collider2D))]
-public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
+public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashable
 {
     public enum State
     {
@@ -432,6 +432,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler
     }
 
     public abstract void OnDeath(Vector2 deathImpulse = default);
+    public virtual void OnSlashed(Vector2 slashVector) => OnDeath(slashVector);
 
     protected virtual void Movement()
     {

@@ -180,6 +180,14 @@ MonoBehaviour:
   doubleJumpDelay: 0.15
   wallCheckDistance: 0.6
   groundCheckDistance: 0.6
+  smartPathfinding: 1
+  ledgeCheckDistance: 0.45
+  maxLeapGapDistance: 3.2
+  flockingSeparationRadius: 0.75
+  canCeilingRun: 1
+  ceilingClingForce: 3.5
+  maxCeilingRunDuration: 2.4
+  ceilingRunSpeedMultiplier: 1.4
   windUpDuration: 0.4
   showTelegraphColor: 0
   telegraphColor: {r: 1, g: 0, b: 0, a: 1}
@@ -202,6 +210,34 @@ MonoBehaviour:
   hitDamageSFX: {fileID: 8300000, guid: fc4a585deb93e0f4cb03f1016ce2fd22, type: 3}
   deflectSFX: {fileID: 8300000, guid: 4479b1a8ec906564284337fd242e6102, type: 3}
   hitVFX: {fileID: 1000000000000001, guid: 1a2b3c4d5e6f708192a3b4c5d6e7f801, type: 3}
+  weakPointsPerPhase: 0300000004000000050000000600000007000000
+  orbitSpeedPerPhase:
+  - 0
+  - 0
+  - 25
+  - 45
+  - 65
+  radiusMinPerPhase:
+  - 1.5
+  - 1.8
+  - 2
+  - 2.2
+  - 2.5
+  radiusMaxPerPhase:
+  - 2.2
+  - 2.8
+  - 3.4
+  - 4
+  - 4.6
+  trapPointsPerPhase: 0000000000000000000000000100000002000000
+  circleLifetimePerPhase:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 3
+  phase5ComboDamage: 2
+  circleShatterSFX: {fileID: 0}
   bossPatrolSpeed: 3.2
   maxTimeBetweenAttacks: 4.5
   minTimeBetweenAttacks: 1.5
@@ -214,7 +250,7 @@ MonoBehaviour:
   shurikenBurstVolume: 1.2
   windSlashVolume: 1.2
   hiddenStabVolume: 1.3
-  hitDeflectVolume: 0.3
+  hitDeflectVolume: 0.6
   roarVolume: 1.4
   defeatVolume: 1.5
   bossVolumeSlider: {fileID: 0}

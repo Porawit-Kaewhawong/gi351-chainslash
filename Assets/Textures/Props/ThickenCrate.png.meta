@@ -1,10 +1,10 @@
 fileFormatVersion: 2
-guid: ba22ad31c5903a445903f786d427fe7e
+guid: f67143dc65029f64ba85edd1180f931c
 TextureImporter:
   internalIDToNameTable:
   - first:
-      213: 9130931656606948373
-    second: MAP2_2_0
+      213: -5248278244789818269
+    second: ThickenCrate_0
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -37,7 +37,7 @@ TextureImporter:
   maxTextureSize: 2048
   textureSettings:
     serializedVersion: 2
-    filterMode: 1
+    filterMode: 0
     aniso: 1
     mipBias: 0
     wrapU: 1
@@ -152,13 +152,13 @@ TextureImporter:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: MAP2_2_0
+      name: ThickenCrate_0
       rect:
         serializedVersion: 2
         x: 0
         y: 0
-        width: 1920
-        height: 1080
+        width: 32
+        height: 32
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -167,8 +167,8 @@ TextureImporter:
       physicsShape: []
       tessellationDetail: -1
       bones: []
-      spriteID: 51c1d64c6f597be70800000000000000
-      internalID: 9130931656606948373
+      spriteID: 36c64e03ebe5a27b0800000000000000
+      internalID: -5248278244789818269
       vertices: []
       indices: 
       edges: []
@@ -187,7 +187,7 @@ TextureImporter:
     spriteCustomMetadata:
       entries: []
     nameFileIdTable:
-      MAP2_2_0: 9130931656606948373
+      ThickenCrate_0: -5248278244789818269
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 

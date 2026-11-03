@@ -848,7 +848,7 @@ Camera:
   far clip plane: 1000
   field of view: 34
   orthographic: 1
-  orthographic size: 1
+  orthographic size: 7.5
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -873,7 +873,7 @@ Transform:
   m_GameObject: {fileID: 519420028}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: -10}
+  m_LocalPosition: {x: 18.5767, y: -1.69455, z: -10}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1554,7 +1554,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 073797afb82c5a1438f328866b10b3f0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_ComponentVersion: 2
+  m_ComponentVersion: 3
   m_LightType: 4
   m_BlendStyleIndex: 0
   m_FalloffIntensity: 0.5
@@ -182104,6 +182104,11 @@ Transform:
   - {fileID: 148815507}
   m_Father: {fileID: 1700833022}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!4 &1413241225 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 696738621975650736, guid: 097571968c380a74f8dea9c9a54e3dc9, type: 3}
+  m_PrefabInstance: {fileID: 2083895261}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &1487282809
 GameObject:
   m_ObjectHideFlags: 0
@@ -182379,7 +182384,7 @@ MonoBehaviour:
   RotationMode: 1
   UpdateMethod: 2
   Targets:
-  - Object: {fileID: 0}
+  - Object: {fileID: 1413241225}
     Weight: 6
     Radius: 6
   - Object: {fileID: 0}
@@ -182395,7 +182400,7 @@ Transform:
   m_GameObject: {fileID: 1640964253}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 18.5767, y: -1.69455, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -182681,7 +182686,7 @@ Transform:
   m_GameObject: {fileID: 1890070557}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: -10}
+  m_LocalPosition: {x: 18.5767, y: -1.69455, z: -10}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

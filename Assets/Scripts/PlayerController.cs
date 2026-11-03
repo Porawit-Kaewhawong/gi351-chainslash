@@ -2038,6 +2038,7 @@ public class PlayerController : MonoBehaviour
 
         Vector2 slashVector = (origPoints[origPoints.Length - 1] - origPoints[0]).normalized;
         HashSet<EnemyBase> primaryEnemies = new HashSet<EnemyBase>();
+        bool anyTargetSlashed = false;
         HashSet<EnemyBase> aliveBeforeSlash = new HashSet<EnemyBase>();
 
         for (int i = 0; i < lineRendererManager.targets.Count; i++)
@@ -2094,6 +2095,15 @@ public class PlayerController : MonoBehaviour
                 Instantiate(slashImpactPrefab, targetObj.transform.position, Quaternion.identity);
             }
 
+            // Check slashable props / crates
+            ISlashable slashable = targetObj.GetComponentInParent<ISlashable>();
+            if (slashable != null && !(slashable is EnemyBase))
+            {
+                slashable.OnSlashed(slashVector);
+                anyTargetSlashed = true;
+                continue;
+            }
+
             ChainEnemy chainEnemy = targetObj.GetComponentInParent<ChainEnemy>();
             if (chainEnemy != null)
             {
@@ -2115,7 +2125,7 @@ public class PlayerController : MonoBehaviour
         }
 
         // Check whether at least one primary enemy actually died or sustained damage
-        bool anyEnemyDiedOrHit = false;
+        bool anyEnemyDiedOrHit = anyTargetSlashed;
         foreach (EnemyBase primaryEnemy in primaryEnemies)
         {
             if (primaryEnemy == null)
