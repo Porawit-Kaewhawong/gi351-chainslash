@@ -6,6 +6,8 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Collider2D))]
 public class Platformer : MonoBehaviour
 {
+    #region Serialized Fields
+
     [Header("Effector Settings")]
     [Tooltip("Arc angle of the top one-way surface (170° prevents side snags while allowing smooth landing).")]
     [SerializeField] private float surfaceArc = 170f;
@@ -31,6 +33,10 @@ public class Platformer : MonoBehaviour
     [Tooltip("Minimum vertical distance the player must be below the enemy to trigger enemy drop-through.")]
     [SerializeField] private float enemyVerticalThreshold = 1.0f;
 
+    #endregion
+
+    #region Private State
+
     private Collider2D[] platformColliders;
     private PlatformEffector2D platformEffector;
 
@@ -45,6 +51,10 @@ public class Platformer : MonoBehaviour
     private readonly Dictionary<EnemyBase, float> enemyStayTimers = new Dictionary<EnemyBase, float>();
     private readonly List<EnemyBase> enemiesToRemove = new List<EnemyBase>();
 
+    #endregion
+
+    #region Unity Lifecycle
+
     private void Reset()
     {
         ConfigurePlatform();
@@ -54,6 +64,23 @@ public class Platformer : MonoBehaviour
     {
         ConfigurePlatform();
     }
+
+    private void Update()
+    {
+        if (allowPlayerDropThrough && isPlayerOnPlatform && playerObject != null)
+        {
+            HandlePlayerInput();
+        }
+
+        if (allowEnemyDropThrough && enemyStayTimers.Count > 0)
+        {
+            UpdateEnemyDropThrough();
+        }
+    }
+
+    #endregion
+
+    #region Core Logic
 
     private void ConfigurePlatform()
     {
@@ -67,8 +94,9 @@ public class Platformer : MonoBehaviour
         }
 
         platformColliders = GetComponentsInChildren<Collider2D>();
-        foreach (Collider2D col in platformColliders)
+        for (int i = 0; i < platformColliders.Length; i++)
         {
+            Collider2D col = platformColliders[i];
             if (col != null && !col.isTrigger)
             {
                 col.usedByEffector = true;
@@ -92,18 +120,9 @@ public class Platformer : MonoBehaviour
         }
     }
 
-    private void Update()
-    {
-        if (allowPlayerDropThrough && isPlayerOnPlatform && playerObject != null)
-        {
-            HandlePlayerInput();
-        }
+    #endregion
 
-        if (allowEnemyDropThrough && enemyStayTimers.Count > 0)
-        {
-            UpdateEnemyDropThrough();
-        }
-    }
+    #region Input Handling
 
     private void HandlePlayerInput()
     {
@@ -196,14 +215,19 @@ public class Platformer : MonoBehaviour
         return false;
     }
 
+    #endregion
+
+    #region Drop-Through Logic
+
     private void UpdateEnemyDropThrough()
     {
         enemiesToRemove.Clear();
 
         PlayerController player = PlayerController.Instance;
         Vector3 playerPos = player != null ? player.transform.position : Vector3.zero;
+        float dt = Time.deltaTime;
 
-        foreach (var kvp in enemyStayTimers)
+        foreach (KeyValuePair<EnemyBase, float> kvp in enemyStayTimers)
         {
             EnemyBase enemy = kvp.Key;
             if (enemy == null || enemy.IsDead || !enemy.gameObject.activeInHierarchy)
@@ -217,12 +241,11 @@ public class Platformer : MonoBehaviour
 
             if (playerIsBelow)
             {
-                float updatedTime = kvp.Value + Time.deltaTime;
+                float updatedTime = kvp.Value + dt;
                 if (updatedTime >= enemyDropDelay)
                 {
                     DropThrough(enemy.gameObject);
                     enemiesToRemove.Add(enemy);
-                    continue;
                 }
                 else
                 {
@@ -272,11 +295,13 @@ public class Platformer : MonoBehaviour
         }
 
         // Disable collision with all colliders of this platform
-        foreach (Collider2D pCol in platformColliders)
+        for (int i = 0; i < platformColliders.Length; i++)
         {
+            Collider2D pCol = platformColliders[i];
             if (pCol == null) continue;
-            foreach (Collider2D cCol in characterColliders)
+            for (int j = 0; j < characterColliders.Length; j++)
             {
+                Collider2D cCol = characterColliders[j];
                 if (cCol != null)
                 {
                     Physics2D.IgnoreCollision(cCol, pCol, true);
@@ -293,13 +318,15 @@ public class Platformer : MonoBehaviour
             timer += Time.deltaTime;
 
             bool isCompletelyBelow = true;
-            foreach (Collider2D pCol in platformColliders)
+            for (int i = 0; i < platformColliders.Length; i++)
             {
+                Collider2D pCol = platformColliders[i];
                 if (pCol == null) continue;
                 float platformBottom = pCol.bounds.min.y;
 
-                foreach (Collider2D cCol in characterColliders)
+                for (int j = 0; j < characterColliders.Length; j++)
                 {
+                    Collider2D cCol = characterColliders[j];
                     if (cCol != null && cCol.bounds.max.y > platformBottom)
                     {
                         isCompletelyBelow = false;
@@ -318,11 +345,13 @@ public class Platformer : MonoBehaviour
         }
 
         // Restore collision
-        foreach (Collider2D pCol in platformColliders)
+        for (int i = 0; i < platformColliders.Length; i++)
         {
+            Collider2D pCol = platformColliders[i];
             if (pCol == null) continue;
-            foreach (Collider2D cCol in characterColliders)
+            for (int j = 0; j < characterColliders.Length; j++)
             {
+                Collider2D cCol = characterColliders[j];
                 if (cCol != null)
                 {
                     Physics2D.IgnoreCollision(cCol, pCol, false);
@@ -331,6 +360,10 @@ public class Platformer : MonoBehaviour
         }
     }
 
+    #endregion
+
+    #region Collision Callbacks
+
     private void OnCollisionEnter2D(Collision2D collision)
     {
         HandleCollisionContact(collision);
@@ -338,18 +371,19 @@ public class Platformer : MonoBehaviour
 
     private void OnCollisionStay2D(Collision2D collision)
     {
+        if (isPlayerOnPlatform && collision.gameObject == playerObject) return;
         HandleCollisionContact(collision);
     }
 
     private void HandleCollisionContact(Collision2D collision)
     {
-        if (collision.gameObject.CompareTag("Player") || collision.gameObject.GetComponent<PlayerController>() != null)
+        GameObject hitObj = collision.gameObject;
+        if (IsPlayerGameObject(hitObj))
         {
             isPlayerOnPlatform = true;
-            playerObject = collision.gameObject;
+            playerObject = hitObj;
         }
-        else if (collision.gameObject.TryGetComponent<EnemyBase>(out EnemyBase enemy) ||
-                 (collision.gameObject.GetComponentInParent<EnemyBase>() is EnemyBase pEnemy && (enemy = pEnemy) != null))
+        else if (TryResolveEnemy(hitObj, out EnemyBase enemy))
         {
             if (!enemyStayTimers.ContainsKey(enemy))
             {
@@ -360,17 +394,32 @@ public class Platformer : MonoBehaviour
 
     private void OnCollisionExit2D(Collision2D collision)
     {
-        if (collision.gameObject.CompareTag("Player") || collision.gameObject.GetComponent<PlayerController>() != null)
+        GameObject hitObj = collision.gameObject;
+        if (hitObj == playerObject || IsPlayerGameObject(hitObj))
         {
             isPlayerOnPlatform = false;
             playerObject = null;
             playerHoldDownTimer = 0f;
         }
-        else if (collision.gameObject.TryGetComponent<EnemyBase>(out EnemyBase enemy) ||
-                 (collision.gameObject.GetComponentInParent<EnemyBase>() is EnemyBase pEnemy && (enemy = pEnemy) != null))
+        else if (TryResolveEnemy(hitObj, out EnemyBase enemy))
         {
             enemyStayTimers.Remove(enemy);
         }
     }
-}
 
+    private static bool IsPlayerGameObject(GameObject obj)
+    {
+        if (obj == null) return false;
+        if (PlayerController.Instance != null && obj == PlayerController.Instance.gameObject) return true;
+        return obj.CompareTag("Player") || obj.TryGetComponent<PlayerController>(out _);
+    }
+
+    private static bool TryResolveEnemy(GameObject obj, out EnemyBase enemy)
+    {
+        if (obj.TryGetComponent(out enemy)) return true;
+        enemy = obj.GetComponentInParent<EnemyBase>();
+        return enemy != null;
+    }
+
+    #endregion
+}

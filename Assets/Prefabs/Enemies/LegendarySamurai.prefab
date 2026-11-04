@@ -210,34 +210,15 @@ MonoBehaviour:
   hitDamageSFX: {fileID: 8300000, guid: fc4a585deb93e0f4cb03f1016ce2fd22, type: 3}
   deflectSFX: {fileID: 8300000, guid: 4479b1a8ec906564284337fd242e6102, type: 3}
   hitVFX: {fileID: 1000000000000001, guid: 1a2b3c4d5e6f708192a3b4c5d6e7f801, type: 3}
-  weakPointsPerPhase: 0300000004000000050000000600000007000000
-  orbitSpeedPerPhase:
-  - 0
-  - 0
-  - 25
-  - 45
-  - 65
-  radiusMinPerPhase:
-  - 1.5
-  - 1.8
-  - 2
-  - 2.2
-  - 2.5
-  radiusMaxPerPhase:
-  - 2.2
-  - 2.8
-  - 3.4
-  - 4
-  - 4.6
-  trapPointsPerPhase: 0000000000000000000000000100000002000000
-  circleLifetimePerPhase:
-  - 0
-  - 0
-  - 0
-  - 0
-  - 3
-  phase5ComboDamage: 2
-  circleShatterSFX: {fileID: 0}
+  useSequentialIaiPatterns: 1
+  showIaiGuideLine: 1
+  iaiPatternSpread: 2
+  iaiGuideColor: {r: 1, g: 0.85, b: 0.25, a: 0.45}
+  iaiGuideCompletedColor: {r: 0.2, g: 0.95, b: 1, a: 0.85}
+  iaiGuideLineWidth: 0.08
+  weakPointFontAsset: {fileID: 11400000, guid: 7b10e90a0f282904ea04394eb6724133, type: 2}
+  weakPointNumberFontSize: 2
+  pointSelectChimeSFX: {fileID: 0}
   bossPatrolSpeed: 3.2
   maxTimeBetweenAttacks: 4.5
   minTimeBetweenAttacks: 1.5

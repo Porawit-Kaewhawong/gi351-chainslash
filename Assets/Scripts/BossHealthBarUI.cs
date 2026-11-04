@@ -26,6 +26,24 @@ using TMPro;
 /// </summary>
 public class BossHealthBarUI : MonoBehaviour
 {
+    #region Constants & Static Cache
+
+    private const string GhostLagBarName = "GhostLagBar";
+    private const string SegmentDividersName = "SegmentDividers";
+    private const string DefeatedRichText = "<color=#FFD700><b>DEFEATED</b></color>";
+    private const string DefeatedPlainText = "DEFEATED";
+    private const float HitFlashDuration = 0.08f;
+
+    private static readonly Color DefeatedTextColor = new Color(1f, 0.84f, 0.2f, 1f);
+    private static readonly Color DangerPulseHighlightColor = new Color(1f, 0.55f, 0.6f, 1f);
+    private static readonly WaitForSeconds IntroInitialDelayWait = new WaitForSeconds(0.12f);
+
+    private static Sprite cachedPixelSprite;
+
+    #endregion
+
+    #region Serialized Fields
+
     [Header("Boss Reference (Auto-detected if left empty)")]
     [SerializeField] private LegendarySamurai boss;
 
@@ -107,9 +125,23 @@ public class BossHealthBarUI : MonoBehaviour
         new Color(1.00f, 0.20f, 0.25f, 1.0f)  // Phrase 5: Burning Crimson
     };
 
+    #endregion
+
+    #region Public Properties
+
+    public TMP_Text TitleText { get => titleText; set => titleText = value; }
+    public TMP_Text PhraseText { get => phraseText; set => phraseText = value; }
+    public GameObject BackgroundBar { get => backgroundBar; set => backgroundBar = value; }
+    public Image FillBar { get => fillBar; set => fillBar = value; }
+
+    #endregion
+
+    #region Private State
+
     // Procedural runtime components
     private Image ghostBar;
     private GameObject segmentContainer;
+    private CanvasGroup cachedCanvasGroup;
 
     // Runtime tracking
     private int currentHits = 20;
@@ -134,13 +166,9 @@ public class BossHealthBarUI : MonoBehaviour
     private Vector3 defaultPhraseLocalPos = Vector3.zero;
     private Transform activePhraseTransform;
 
-    private static Sprite cachedPixelSprite;
+    #endregion
 
-    // Public properties
-    public TMP_Text TitleText { get => titleText; set => titleText = value; }
-    public TMP_Text PhraseText { get => phraseText; set => phraseText = value; }
-    public GameObject BackgroundBar { get => backgroundBar; set => backgroundBar = value; }
-    public Image FillBar { get => fillBar; set => fillBar = value; }
+    #region Unity Lifecycle
 
     private void Awake()
     {
@@ -169,41 +197,93 @@ public class BossHealthBarUI : MonoBehaviour
         }
     }
 
-    private void CacheRects()
+    private void Update()
     {
-        if (backgroundBar != null)
+        if (isDefeated || isIntroPlaying) return;
+
+        float dt = Time.unscaledDeltaTime;
+
+        // 1. Smooth Eased Drainage of Main Fill Bar
+        if (!Mathf.Approximately(displayFillRatio, targetFillRatio))
         {
-            shakeRect = backgroundBar.GetComponent<RectTransform>();
-        }
-        if (shakeRect == null)
-        {
-            shakeRect = GetComponent<RectTransform>();
-        }
-        if (shakeRect != null)
-        {
-            defaultShakePos = shakeRect.anchoredPosition;
-            scaleRect = shakeRect;
+            displayFillRatio = Mathf.MoveTowards(displayFillRatio, targetFillRatio, 3.8f * dt);
+            if (fillBar != null)
+            {
+                fillBar.fillAmount = displayFillRatio;
+            }
         }
 
-        activePhraseTransform = phraseText != null ? phraseText.transform : (legacyPhraseText != null ? legacyPhraseText.transform : null);
-        if (activePhraseTransform != null)
+        // 2. Dual-Bar Ghost Catch-Up
+        if (ghostBar != null)
         {
-            defaultPhraseLocalPos = activePhraseTransform.localPosition;
+            if (ghostDelayTimer > 0f)
+            {
+                ghostDelayTimer -= dt;
+            }
+            else if (ghostFillRatio > displayFillRatio)
+            {
+                ghostFillRatio = Mathf.MoveTowards(ghostFillRatio, displayFillRatio, ghostCatchupSpeed * dt);
+                ghostBar.fillAmount = ghostFillRatio;
+            }
+            else if (!Mathf.Approximately(ghostFillRatio, displayFillRatio))
+            {
+                ghostFillRatio = displayFillRatio;
+                ghostBar.fillAmount = ghostFillRatio;
+            }
         }
-    }
 
-    private void ConfigureFillBar()
-    {
+        // 3. Dynamic Hit Impact Flash and Phase 5 Heartbeat Pulse
         if (fillBar != null)
         {
-            if (fillBar.type != Image.Type.Filled)
+            if (hitFlashTimer > 0f)
             {
-                fillBar.type = Image.Type.Filled;
-                fillBar.fillMethod = Image.FillMethod.Horizontal;
-                fillBar.fillOrigin = (int)Image.OriginHorizontal.Left;
+                hitFlashTimer -= dt;
+                float t = Mathf.Clamp01(hitFlashTimer / HitFlashDuration);
+                fillBar.color = Color.Lerp(currentTargetColor, Color.white, t);
+            }
+            else if (currentPhase >= 5)
+            {
+                // Phrase 5 Critical Adrenaline Heartbeat Pulse
+                float pulse = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 9f);
+                fillBar.color = Color.Lerp(currentTargetColor, DangerPulseHighlightColor, pulse * 0.55f);
+
+                // Subtle urgency text jitter
+                if (activePhraseTransform != null)
+                {
+                    Vector2 jitter = Random.insideUnitCircle * 0.85f;
+                    activePhraseTransform.localPosition = new Vector3(
+                        defaultPhraseLocalPos.x + jitter.x,
+                        defaultPhraseLocalPos.y + jitter.y,
+                        defaultPhraseLocalPos.z
+                    );
+                }
+            }
+            else
+            {
+                // Living subtle energy shimmer along the bar
+                float shimmer = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 2.2f);
+                fillBar.color = Color.Lerp(currentTargetColor, currentTargetColor * 1.12f, shimmer * 0.18f);
+
+                if (activePhraseTransform != null && activePhraseTransform.localPosition != defaultPhraseLocalPos)
+                {
+                    activePhraseTransform.localPosition = defaultPhraseLocalPos;
+                }
             }
         }
     }
+
+    private void OnDestroy()
+    {
+        if (boss != null)
+        {
+            boss.onBossHealthChanged.RemoveListener(OnHealthChanged);
+            boss.onBossDefeated.RemoveListener(OnBossDefeated);
+        }
+    }
+
+    #endregion
+
+    #region Initialization & Procedural Setup
 
     /// <summary>
     /// Direct shortcut to assign references programmatically.
@@ -215,6 +295,7 @@ public class BossHealthBarUI : MonoBehaviour
         if (bgBar != null) backgroundBar = bgBar;
         if (fill != null) fillBar = fill;
 
+        cachedCanvasGroup = null;
         ConfigureFillBar();
         CacheRects();
     }
@@ -271,19 +352,54 @@ public class BossHealthBarUI : MonoBehaviour
         }
     }
 
+    private void CacheRects()
+    {
+        if (backgroundBar != null)
+        {
+            shakeRect = backgroundBar.GetComponent<RectTransform>();
+        }
+        if (shakeRect == null)
+        {
+            shakeRect = GetComponent<RectTransform>();
+        }
+        if (shakeRect != null)
+        {
+            defaultShakePos = shakeRect.anchoredPosition;
+            scaleRect = shakeRect;
+        }
+
+        activePhraseTransform = phraseText != null
+            ? phraseText.transform
+            : (legacyPhraseText != null ? legacyPhraseText.transform : null);
+
+        if (activePhraseTransform != null)
+        {
+            defaultPhraseLocalPos = activePhraseTransform.localPosition;
+        }
+    }
+
+    private void ConfigureFillBar()
+    {
+        if (fillBar != null && fillBar.type != Image.Type.Filled)
+        {
+            fillBar.type = Image.Type.Filled;
+            fillBar.fillMethod = Image.FillMethod.Horizontal;
+            fillBar.fillOrigin = (int)Image.OriginHorizontal.Left;
+        }
+    }
+
     private void CreateGhostBar()
     {
         if (!enableGhostBar || fillBar == null) return;
 
         Transform parent = fillBar.transform.parent;
-        Transform existing = parent.Find("GhostLagBar");
-        if (existing != null)
+        Transform existing = parent.Find(GhostLagBarName);
+        if (existing != null && existing.TryGetComponent(out ghostBar))
         {
-            ghostBar = existing.GetComponent<Image>();
-            if (ghostBar != null) return;
+            return;
         }
 
-        GameObject ghostObj = new GameObject("GhostLagBar");
+        GameObject ghostObj = new GameObject(GhostLagBarName);
         RectTransform ghostRect = ghostObj.AddComponent<RectTransform>();
         ghostRect.SetParent(parent, false);
 
@@ -312,13 +428,13 @@ public class BossHealthBarUI : MonoBehaviour
         if (!enableSegmentDividers || fillBar == null) return;
 
         Transform parent = fillBar.transform.parent;
-        Transform existing = parent.Find("SegmentDividers");
+        Transform existing = parent.Find(SegmentDividersName);
         if (existing != null)
         {
             Destroy(existing.gameObject);
         }
 
-        segmentContainer = new GameObject("SegmentDividers");
+        segmentContainer = new GameObject(SegmentDividersName);
         RectTransform containerRect = segmentContainer.AddComponent<RectTransform>();
         containerRect.SetParent(parent, false);
 
@@ -350,79 +466,13 @@ public class BossHealthBarUI : MonoBehaviour
             Image divImg = divObj.AddComponent<Image>();
             divImg.sprite = pixelSprite;
             divImg.color = segmentDividerColor;
+            divImg.raycastTarget = false;
         }
     }
 
-    private void Update()
-    {
-        if (isDefeated || isIntroPlaying) return;
+    #endregion
 
-        // 1. Smooth Eased Drainage of Main Fill Bar
-        if (!Mathf.Approximately(displayFillRatio, targetFillRatio))
-        {
-            displayFillRatio = Mathf.MoveTowards(displayFillRatio, targetFillRatio, 3.8f * Time.unscaledDeltaTime);
-            if (fillBar != null)
-            {
-                fillBar.fillAmount = displayFillRatio;
-            }
-        }
-
-        // 2. Dual-Bar Ghost Catch-Up
-        if (ghostBar != null)
-        {
-            if (ghostDelayTimer > 0f)
-            {
-                ghostDelayTimer -= Time.unscaledDeltaTime;
-            }
-            else if (ghostFillRatio > displayFillRatio)
-            {
-                ghostFillRatio = Mathf.MoveTowards(ghostFillRatio, displayFillRatio, ghostCatchupSpeed * Time.unscaledDeltaTime);
-                ghostBar.fillAmount = ghostFillRatio;
-            }
-            else
-            {
-                ghostFillRatio = displayFillRatio;
-                ghostBar.fillAmount = ghostFillRatio;
-            }
-        }
-
-        // 3. Dynamic Hit Impact Flash and Phase 5 Heartbeat Pulse
-        if (fillBar != null)
-        {
-            if (hitFlashTimer > 0f)
-            {
-                hitFlashTimer -= Time.unscaledDeltaTime;
-                float t = Mathf.Clamp01(hitFlashTimer / 0.08f);
-                fillBar.color = Color.Lerp(currentTargetColor, Color.white, t);
-            }
-            else if (currentPhase >= 5)
-            {
-                // Phrase 5 Critical Adrenaline Heartbeat Pulse
-                float pulse = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 9f);
-                Color dangerPulseColor = Color.Lerp(currentTargetColor, new Color(1f, 0.55f, 0.6f, 1f), pulse * 0.55f);
-                fillBar.color = dangerPulseColor;
-
-                // Subtle urgency text jitter
-                if (activePhraseTransform != null)
-                {
-                    Vector2 jitter = Random.insideUnitCircle * 0.85f;
-                    activePhraseTransform.localPosition = defaultPhraseLocalPos + (Vector3)jitter;
-                }
-            }
-            else
-            {
-                // Living subtle energy shimmer along the bar
-                float shimmer = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 2.2f);
-                Color livingColor = Color.Lerp(currentTargetColor, currentTargetColor * 1.12f, shimmer * 0.18f);
-                fillBar.color = livingColor;
-
-                if (activePhraseTransform != null && activePhraseTransform.localPosition != defaultPhraseLocalPos)
-                {
-                    activePhraseTransform.localPosition = defaultPhraseLocalPos;
-                }
-            }
-        }
-    }
+    #region UI & Display Logic
 
     private void OnHealthChanged(int hitsRemaining, int totalHits)
     {
@@ -436,7 +486,7 @@ public class BossHealthBarUI : MonoBehaviour
         ghostDelayTimer = ghostGraceDelay;
 
         // Trigger arcade white hit-flash on the bar
-        hitFlashTimer = 0.08f;
+        hitFlashTimer = HitFlashDuration;
 
         // Trigger physical elastic squish and directional impact shake
         TriggerHitReaction();
@@ -451,13 +501,39 @@ public class BossHealthBarUI : MonoBehaviour
         }
     }
 
+    private void OnBossDefeated()
+    {
+        if (isDefeated) return;
+        isDefeated = true;
+
+        if (phraseText != null)
+        {
+            phraseText.text = DefeatedRichText;
+            phraseText.color = DefeatedTextColor;
+        }
+        if (legacyPhraseText != null)
+        {
+            legacyPhraseText.text = DefeatedPlainText;
+            legacyPhraseText.color = DefeatedTextColor;
+        }
+
+        if (activePhraseTransform != null)
+        {
+            StartCoroutine(PhrasePunchRoutine(activePhraseTransform, DefeatedTextColor));
+        }
+
+        StartCoroutine(DefeatOutroRoutine());
+    }
+
     private void UpdateTitleDisplay()
     {
-        if (titleText != null && !string.IsNullOrEmpty(bossTitle))
+        if (string.IsNullOrEmpty(bossTitle)) return;
+
+        if (titleText != null)
         {
             titleText.text = bossTitle;
         }
-        if (legacyTitleText != null && !string.IsNullOrEmpty(bossTitle))
+        if (legacyTitleText != null)
         {
             legacyTitleText.text = bossTitle;
         }
@@ -466,31 +542,17 @@ public class BossHealthBarUI : MonoBehaviour
     private void UpdatePhraseDisplay(int phaseNumber, bool animatePunch)
     {
         phaseNumber = Mathf.Clamp(phaseNumber, 1, 5);
+        int phaseIndex = phaseNumber - 1;
 
-        string text;
-        if (showAttackName && phaseNumber - 1 < phraseAttackNames.Length)
-        {
-            text = $"{phrasePrefix}{phaseNumber} - {phraseAttackNames[phaseNumber - 1]}";
-        }
-        else
-        {
-            text = $"{phrasePrefix}{phaseNumber}";
-        }
+        string text = (showAttackName && phraseAttackNames != null && phaseIndex < phraseAttackNames.Length)
+            ? $"{phrasePrefix}{phaseNumber} - {phraseAttackNames[phaseIndex]}"
+            : $"{phrasePrefix}{phaseNumber}";
 
-        Color textColor = (phraseTextColors != null && phaseNumber - 1 < phraseTextColors.Length)
-            ? phraseTextColors[phaseNumber - 1]
+        Color textColor = (phraseTextColors != null && phaseIndex < phraseTextColors.Length)
+            ? phraseTextColors[phaseIndex]
             : Color.white;
 
-        if (phraseText != null)
-        {
-            phraseText.text = text;
-            phraseText.color = textColor;
-        }
-        if (legacyPhraseText != null)
-        {
-            legacyPhraseText.text = text;
-            legacyPhraseText.color = textColor;
-        }
+        SetPhraseTextAndColor(text, textColor);
 
         if (animatePunch && activePhraseTransform != null)
         {
@@ -499,51 +561,30 @@ public class BossHealthBarUI : MonoBehaviour
         }
     }
 
-    private IEnumerator PhrasePunchRoutine(Transform targetTransform, Color targetColor)
+    private void SetPhraseTextAndColor(string text, Color color)
     {
-        Vector3 baseScale = Vector3.one;
-        float duration = 0.32f;
-        float elapsed = 0f;
-
-        // Momentary golden/white phase-shift flash on text
-        if (phraseText != null) phraseText.color = Color.white;
-        if (legacyPhraseText != null) legacyPhraseText.color = Color.white;
-
-        while (elapsed < duration)
+        if (phraseText != null)
         {
-            elapsed += Time.unscaledDeltaTime;
-            float t = elapsed / duration;
-
-            // Elastic overshoot bounce (1.45x -> 0.92x -> 1.0x)
-            float scaleMultiplier;
-            if (t < 0.35f)
-            {
-                scaleMultiplier = Mathf.Lerp(1.0f, 1.45f, t / 0.35f);
-            }
-            else
-            {
-                float settleT = (t - 0.35f) / 0.65f;
-                scaleMultiplier = Mathf.Lerp(1.45f, 1.0f, Mathf.SmoothStep(0f, 1f, settleT));
-            }
-
-            targetTransform.localScale = baseScale * scaleMultiplier;
-
-            // Settle text color back to phase color
-            Color c = Color.Lerp(Color.white, targetColor, t);
-            if (phraseText != null) phraseText.color = c;
-            if (legacyPhraseText != null) legacyPhraseText.color = c;
-
-            yield return null;
+            phraseText.text = text;
+            phraseText.color = color;
         }
+        if (legacyPhraseText != null)
+        {
+            legacyPhraseText.text = text;
+            legacyPhraseText.color = color;
+        }
+    }
 
-        targetTransform.localScale = baseScale;
-        if (phraseText != null) phraseText.color = targetColor;
-        if (legacyPhraseText != null) legacyPhraseText.color = targetColor;
-        phrasePunchCoroutine = null;
+    private void SetPhraseColorOnly(Color color)
+    {
+        if (phraseText != null) phraseText.color = color;
+        if (legacyPhraseText != null) legacyPhraseText.color = color;
     }
 
     private void UpdateFillColor(int phaseNumber)
     {
+        if (phraseFillColors == null || phraseFillColors.Length == 0) return;
+
         int idx = Mathf.Clamp(phaseNumber - 1, 0, phraseFillColors.Length - 1);
         currentTargetColor = phraseFillColors[idx];
 
@@ -563,6 +604,10 @@ public class BossHealthBarUI : MonoBehaviour
         if (ghostBar != null) ghostBar.fillAmount = ghostFillRatio;
     }
 
+    #endregion
+
+    #region Hit Reactions & Phase Animations
+
     private void TriggerHitReaction()
     {
         if (!enableHitReaction) return;
@@ -573,7 +618,7 @@ public class BossHealthBarUI : MonoBehaviour
     private IEnumerator HitSquishAndShakeRoutine()
     {
         float timer = 0f;
-        float duration = hitReactionDuration;
+        float duration = Mathf.Max(0.01f, hitReactionDuration);
 
         while (timer < duration)
         {
@@ -586,7 +631,7 @@ public class BossHealthBarUI : MonoBehaviour
             {
                 float offsetX = Random.Range(-hitShakeMagnitude, hitShakeMagnitude) * damper;
                 float offsetY = Random.Range(-hitShakeMagnitude * 0.6f, hitShakeMagnitude * 0.6f) * damper;
-                shakeRect.anchoredPosition = defaultShakePos + new Vector2(offsetX, offsetY);
+                shakeRect.anchoredPosition = new Vector2(defaultShakePos.x + offsetX, defaultShakePos.y + offsetY);
             }
 
             // 2. Physical elastic squish (horizontal compress and vertical pop)
@@ -606,6 +651,37 @@ public class BossHealthBarUI : MonoBehaviour
         reactionCoroutine = null;
     }
 
+    private IEnumerator PhrasePunchRoutine(Transform targetTransform, Color targetColor)
+    {
+        const float duration = 0.32f;
+        float elapsed = 0f;
+
+        // Momentary golden/white phase-shift flash on text
+        SetPhraseColorOnly(Color.white);
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = elapsed / duration;
+
+            // Elastic overshoot bounce (1.45x -> 0.92x -> 1.0x)
+            float scaleMultiplier = t < 0.35f
+                ? Mathf.Lerp(1.0f, 1.45f, t / 0.35f)
+                : Mathf.Lerp(1.45f, 1.0f, Mathf.SmoothStep(0f, 1f, (t - 0.35f) / 0.65f));
+
+            targetTransform.localScale = new Vector3(scaleMultiplier, scaleMultiplier, scaleMultiplier);
+
+            // Settle text color back to phase color
+            SetPhraseColorOnly(Color.Lerp(Color.white, targetColor, t));
+
+            yield return null;
+        }
+
+        targetTransform.localScale = Vector3.one;
+        SetPhraseColorOnly(targetColor);
+        phrasePunchCoroutine = null;
+    }
+
     private IEnumerator IntroSequenceRoutine()
     {
         isIntroPlaying = true;
@@ -615,16 +691,18 @@ public class BossHealthBarUI : MonoBehaviour
         CanvasGroup cg = GetOrAddCanvasGroup();
         if (cg != null) cg.alpha = 0f;
 
-        yield return new WaitForSeconds(0.12f);
+        yield return IntroInitialDelayWait;
 
         float elapsed = 0f;
-        while (elapsed < introDuration)
+        float duration = Mathf.Max(0.01f, introDuration);
+        while (elapsed < duration)
         {
             elapsed += Time.unscaledDeltaTime;
-            float t = Mathf.Clamp01(elapsed / introDuration);
+            float t = Mathf.Clamp01(elapsed / duration);
 
             // Cubic ease out
-            float ease = 1f - Mathf.Pow(1f - t, 3f);
+            float invT = 1f - t;
+            float ease = 1f - (invT * invT * invT);
 
             if (cg != null) cg.alpha = ease;
 
@@ -641,55 +719,6 @@ public class BossHealthBarUI : MonoBehaviour
         introCoroutine = null;
     }
 
-    private CanvasGroup GetOrAddCanvasGroup()
-    {
-        CanvasGroup cg = GetComponent<CanvasGroup>();
-        if (cg == null && backgroundBar != null)
-        {
-            cg = backgroundBar.GetComponent<CanvasGroup>();
-            if (cg == null) cg = backgroundBar.AddComponent<CanvasGroup>();
-        }
-        if (cg == null)
-        {
-            cg = gameObject.AddComponent<CanvasGroup>();
-        }
-        return cg;
-    }
-
-    private int CalculatePhase(int hits, int total)
-    {
-        float hpPercent = (float)hits / total;
-        if (hpPercent > 0.80f) return 1;
-        if (hpPercent > 0.60f) return 2;
-        if (hpPercent > 0.40f) return 3;
-        if (hpPercent > 0.20f) return 4;
-        return 5;
-    }
-
-    private void OnBossDefeated()
-    {
-        if (isDefeated) return;
-        isDefeated = true;
-
-        if (phraseText != null)
-        {
-            phraseText.text = "<color=#FFD700><b>DEFEATED</b></color>";
-            phraseText.color = new Color(1f, 0.84f, 0.2f, 1f);
-        }
-        if (legacyPhraseText != null)
-        {
-            legacyPhraseText.text = "DEFEATED";
-            legacyPhraseText.color = new Color(1f, 0.84f, 0.2f, 1f);
-        }
-
-        if (activePhraseTransform != null)
-        {
-            StartCoroutine(PhrasePunchRoutine(activePhraseTransform, new Color(1f, 0.84f, 0.2f, 1f)));
-        }
-
-        StartCoroutine(DefeatOutroRoutine());
-    }
-
     private IEnumerator DefeatOutroRoutine()
     {
         // 1. Victory gold flash across both bars
@@ -698,14 +727,15 @@ public class BossHealthBarUI : MonoBehaviour
 
         // 2. Rapid drain to zero with quadratic acceleration
         float drainTimer = 0f;
-        float drainDuration = defeatDrainDuration;
+        float drainDuration = Mathf.Max(0.01f, defeatDrainDuration);
         float startFill = displayFillRatio;
 
         while (drainTimer < drainDuration)
         {
             drainTimer += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(drainTimer / drainDuration);
-            float f = Mathf.Lerp(startFill, 0f, 1f - Mathf.Pow(1f - t, 2f));
+            float invT = 1f - t;
+            float f = Mathf.Lerp(startFill, 0f, 1f - (invT * invT));
 
             if (fillBar != null) fillBar.fillAmount = f;
             if (ghostBar != null) ghostBar.fillAmount = f;
@@ -724,7 +754,7 @@ public class BossHealthBarUI : MonoBehaviour
         if (group != null)
         {
             float fadeTimer = 0f;
-            float fadeDuration = 0.85f;
+            const float fadeDuration = 0.85f;
             while (fadeTimer < fadeDuration)
             {
                 fadeTimer += Time.unscaledDeltaTime;
@@ -733,6 +763,40 @@ public class BossHealthBarUI : MonoBehaviour
             }
             group.alpha = 0f;
         }
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private CanvasGroup GetOrAddCanvasGroup()
+    {
+        if (cachedCanvasGroup != null) return cachedCanvasGroup;
+
+        if (!TryGetComponent(out cachedCanvasGroup) && backgroundBar != null)
+        {
+            if (!backgroundBar.TryGetComponent(out cachedCanvasGroup))
+            {
+                cachedCanvasGroup = backgroundBar.AddComponent<CanvasGroup>();
+            }
+        }
+
+        if (cachedCanvasGroup == null)
+        {
+            cachedCanvasGroup = gameObject.AddComponent<CanvasGroup>();
+        }
+
+        return cachedCanvasGroup;
+    }
+
+    private int CalculatePhase(int hits, int total)
+    {
+        float hpPercent = (float)hits / total;
+        if (hpPercent > 0.80f) return 1;
+        if (hpPercent > 0.60f) return 2;
+        if (hpPercent > 0.40f) return 3;
+        if (hpPercent > 0.20f) return 4;
+        return 5;
     }
 
     private static Sprite GetOrCreatePixelSprite()
@@ -746,13 +810,5 @@ public class BossHealthBarUI : MonoBehaviour
         return cachedPixelSprite;
     }
 
-    private void OnDestroy()
-    {
-        if (boss != null)
-        {
-            boss.onBossHealthChanged.RemoveListener(OnHealthChanged);
-            boss.onBossDefeated.RemoveListener(OnBossDefeated);
-        }
-    }
+    #endregion
 }
-

@@ -8,12 +8,19 @@ using UnityEngine;
 [RequireComponent(typeof(LineRenderer))]
 public class LineRendererManager : MonoBehaviour
 {
+    #region Public Fields & State
+
     public Coroutine activeCoroutine;
     public List<GameObject> targets = new List<GameObject>();
 
     public LineRenderer LineRendererCom { get; private set; }
 
+    #endregion
+
+    #region Private State & Properties
+
     private PlayerController cachedPlayer;
+
     public PlayerController Player
     {
         get
@@ -30,6 +37,10 @@ public class LineRendererManager : MonoBehaviour
         }
     }
 
+    #endregion
+
+    #region Unity Lifecycle
+
     private void Awake()
     {
         LineRendererCom = GetComponent<LineRenderer>();
@@ -37,15 +48,32 @@ public class LineRendererManager : MonoBehaviour
 
     private void Start()
     {
-        cachedPlayer = PlayerController.Instance != null ? PlayerController.Instance : Object.FindFirstObjectByType<PlayerController>();
+        cachedPlayer = PlayerController.Instance != null
+            ? PlayerController.Instance
+            : Object.FindFirstObjectByType<PlayerController>();
     }
 
+    private void OnDestroy()
+    {
+        StopActiveCoroutine();
+    }
+
+    #endregion
+
+    #region Target & Coroutine Management
+
     /// <summary>
-    /// Removes null or destroyed game object entries from the targets list.
+    /// Removes null or destroyed game object entries from the targets list without allocating a predicate delegate.
     /// </summary>
     public void CleanNullTargets()
     {
-        targets.RemoveAll(target => target == null);
+        for (int i = targets.Count - 1; i >= 0; i--)
+        {
+            if (targets[i] == null)
+            {
+                targets.RemoveAt(i);
+            }
+        }
     }
 
     /// <summary>
@@ -85,8 +113,5 @@ public class LineRendererManager : MonoBehaviour
         }
     }
 
-    private void OnDestroy()
-    {
-        StopActiveCoroutine();
-    }
+    #endregion
 }

@@ -9,12 +9,18 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class PixelSpriteEffect : MonoBehaviour
 {
+    #region Types
+
     public enum OutlineMode
     {
         Outer = 0,
         Inner = 1,
         Both = 2
     }
+
+    #endregion
+
+    #region Serialized Fields
 
     [Header("Shader References")]
     [Tooltip("Optional reference material using Custom/Pixel2D_Sprite. If null, a shared default instance is automatically applied.")]
@@ -49,26 +55,9 @@ public class PixelSpriteEffect : MonoBehaviour
     [Range(0f, 1f)]
     [SerializeField] private float ditherFade = 0f;
 
-    private SpriteRenderer spriteRenderer;
-    private MaterialPropertyBlock propertyBlock;
-    private Coroutine flashCoroutine;
+    #endregion
 
-    private static Material sharedPixelMaterial;
-    public static Material SharedPixelMaterial
-    {
-        get
-        {
-            if (sharedPixelMaterial == null)
-            {
-                Shader shader = Shader.Find("Custom/Pixel2D_Sprite");
-                if (shader != null)
-                {
-                    sharedPixelMaterial = new Material(shader) { name = "Pixel2D_Sprite_Shared" };
-                }
-            }
-            return sharedPixelMaterial;
-        }
-    }
+    #region Shader Property IDs
 
     // Cached shader property IDs
     private static readonly int PropEnableOutline = Shader.PropertyToID("_EnableOutline");
@@ -86,6 +75,36 @@ public class PixelSpriteEffect : MonoBehaviour
     private static readonly int PropColorSteps = Shader.PropertyToID("_ColorSteps");
     private static readonly int PropEnableDither = Shader.PropertyToID("_EnableDither");
     private static readonly int PropDitherFade = Shader.PropertyToID("_DitherFade");
+
+    #endregion
+
+    #region Private State
+
+    private SpriteRenderer spriteRenderer;
+    private MaterialPropertyBlock propertyBlock;
+    private Coroutine flashCoroutine;
+
+    private static Material sharedPixelMaterial;
+
+    #endregion
+
+    #region Public Properties
+
+    public static Material SharedPixelMaterial
+    {
+        get
+        {
+            if (sharedPixelMaterial == null)
+            {
+                Shader shader = Shader.Find("Custom/Pixel2D_Sprite");
+                if (shader != null)
+                {
+                    sharedPixelMaterial = new Material(shader) { name = "Pixel2D_Sprite_Shared" };
+                }
+            }
+            return sharedPixelMaterial;
+        }
+    }
 
     public bool OutlineEnabled
     {
@@ -117,6 +136,10 @@ public class PixelSpriteEffect : MonoBehaviour
         set { ditherFade = Mathf.Clamp01(value); ditherEnabled = ditherFade > 0.001f; ApplyProperties(); }
     }
 
+    #endregion
+
+    #region Unity Lifecycle
+
     private void Awake()
     {
         InitializeRenderer();
@@ -125,42 +148,13 @@ public class PixelSpriteEffect : MonoBehaviour
 
     private void OnValidate()
     {
-        if (spriteRenderer == null)
-            spriteRenderer = GetComponent<SpriteRenderer>();
-        if (propertyBlock == null)
-            propertyBlock = new MaterialPropertyBlock();
-
+        EnsureComponentsCached();
         ApplyProperties();
     }
 
-    private void InitializeRenderer()
-    {
-        if (spriteRenderer == null)
-        {
-            spriteRenderer = GetComponent<SpriteRenderer>();
-        }
+    #endregion
 
-        if (propertyBlock == null)
-        {
-            propertyBlock = new MaterialPropertyBlock();
-        }
-
-        if (pixelMaterial != null)
-        {
-            if (spriteRenderer.sharedMaterial != pixelMaterial)
-            {
-                spriteRenderer.sharedMaterial = pixelMaterial;
-            }
-        }
-        else if (spriteRenderer.sharedMaterial == null || !spriteRenderer.sharedMaterial.shader.name.Contains("Pixel2D_Sprite"))
-        {
-            Material shared = SharedPixelMaterial;
-            if (shared != null)
-            {
-                spriteRenderer.sharedMaterial = shared;
-            }
-        }
-    }
+    #region Public API
 
     /// <summary>
     /// Applies all active inspector settings to the SpriteRenderer via MaterialPropertyBlock.
@@ -168,7 +162,7 @@ public class PixelSpriteEffect : MonoBehaviour
     public void ApplyProperties()
     {
         if (spriteRenderer == null) return;
-        if (propertyBlock == null) propertyBlock = new MaterialPropertyBlock();
+        propertyBlock ??= new MaterialPropertyBlock();
 
         spriteRenderer.GetPropertyBlock(propertyBlock);
 
@@ -204,27 +198,6 @@ public class PixelSpriteEffect : MonoBehaviour
         flashCoroutine = StartCoroutine(FlashRoutine(duration > 0f ? duration : defaultFlashDuration, customFlashColor ?? defaultFlashColor));
     }
 
-    private IEnumerator FlashRoutine(float duration, Color color)
-    {
-        if (propertyBlock == null) propertyBlock = new MaterialPropertyBlock();
-        spriteRenderer.GetPropertyBlock(propertyBlock);
-        propertyBlock.SetColor(PropFlashColor, color);
-
-        float elapsed = 0f;
-        while (elapsed < duration)
-        {
-            elapsed += Time.deltaTime;
-            float t = 1f - (elapsed / duration);
-            propertyBlock.SetFloat(PropFlashAmount, t);
-            spriteRenderer.SetPropertyBlock(propertyBlock);
-            yield return null;
-        }
-
-        propertyBlock.SetFloat(PropFlashAmount, 0f);
-        spriteRenderer.SetPropertyBlock(propertyBlock);
-        flashCoroutine = null;
-    }
-
     /// <summary>
     /// Enables or disables the outline effect and updates outline parameters dynamically.
     /// </summary>
@@ -236,4 +209,63 @@ public class PixelSpriteEffect : MonoBehaviour
         if (mode.HasValue) outlineMode = mode.Value;
         ApplyProperties();
     }
+
+    #endregion
+
+    #region VFX / Rendering Logic
+
+    private void EnsureComponentsCached()
+    {
+        if (spriteRenderer == null)
+        {
+            spriteRenderer = GetComponent<SpriteRenderer>();
+        }
+
+        propertyBlock ??= new MaterialPropertyBlock();
+    }
+
+    private void InitializeRenderer()
+    {
+        EnsureComponentsCached();
+
+        if (pixelMaterial != null)
+        {
+            if (spriteRenderer.sharedMaterial != pixelMaterial)
+            {
+                spriteRenderer.sharedMaterial = pixelMaterial;
+            }
+        }
+        else if (spriteRenderer.sharedMaterial == null || !spriteRenderer.sharedMaterial.shader.name.Contains("Pixel2D_Sprite"))
+        {
+            Material shared = SharedPixelMaterial;
+            if (shared != null)
+            {
+                spriteRenderer.sharedMaterial = shared;
+            }
+        }
+    }
+
+    private IEnumerator FlashRoutine(float duration, Color color)
+    {
+        propertyBlock ??= new MaterialPropertyBlock();
+        spriteRenderer.GetPropertyBlock(propertyBlock);
+        propertyBlock.SetColor(PropFlashColor, color);
+
+        float elapsed = 0f;
+        float invDuration = 1f / duration;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = 1f - (elapsed * invDuration);
+            propertyBlock.SetFloat(PropFlashAmount, t);
+            spriteRenderer.SetPropertyBlock(propertyBlock);
+            yield return null;
+        }
+
+        propertyBlock.SetFloat(PropFlashAmount, 0f);
+        spriteRenderer.SetPropertyBlock(propertyBlock);
+        flashCoroutine = null;
+    }
+
+    #endregion
 }

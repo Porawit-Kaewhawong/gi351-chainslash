@@ -11,7 +11,26 @@ using UnityEngine.UI;
 [RequireComponent(typeof(Rigidbody2D), typeof(AudioSource))]
 public class PlayerController : MonoBehaviour
 {
+    #region Singleton & Constants
+
     public static PlayerController Instance { get; set; }
+
+    private static readonly int AnimIsInMode = Animator.StringToHash("isInMode");
+    private static readonly int AnimIsDash = Animator.StringToHash("isDash");
+    private static readonly int AnimIsJump = Animator.StringToHash("isJump");
+    private static readonly int AnimIsRunning = Animator.StringToHash("isRunning");
+
+    private static readonly float[] SafeSpawnXOffsets = { 0f, 1.5f, -1.5f, 3f, -3f, 4.5f, -4.5f, 6f, -6f, 8f, -8f };
+    private static readonly float[] SafeSpawnYProbes = { 0.5f, 2f, -1f, 4f, 6.5f };
+
+    private static readonly WaitForSeconds WaitHalfSecond = new WaitForSeconds(0.5f);
+    private static readonly WaitForSeconds WaitOneSecond = new WaitForSeconds(1f);
+    private static readonly WaitForSeconds WaitMeterRegenTick = new WaitForSeconds(0.03f);
+    private static readonly WaitForSeconds WaitMeterDegenTick = new WaitForSeconds(0.005f);
+    private static readonly WaitForSecondsRealtime WaitShimmerEcho = new WaitForSecondsRealtime(0.022f);
+
+    private static Sprite cachedSolidWhiteSprite;
+    private static Sprite cachedPixelHealCrossSprite;
 
     /// <summary>
     /// Explicitly destroys the current persistent player instance (e.g. on death or returning to Main Menu)
@@ -30,6 +49,45 @@ public class PlayerController : MonoBehaviour
             }
         }
     }
+
+    public static void EnforceSinglePlayerInstance()
+    {
+        PlayerController[] allPlayers = Object.FindObjectsByType<PlayerController>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        if (allPlayers.Length <= 1) return;
+
+        // Prefer an alive player over a dead one
+        PlayerController mainPlayer = (Instance != null && !Instance.isDead) ? Instance : null;
+        if (mainPlayer == null)
+        {
+            for (int i = 0; i < allPlayers.Length; i++)
+            {
+                if (allPlayers[i] != null && !allPlayers[i].isDead)
+                {
+                    mainPlayer = allPlayers[i];
+                    break;
+                }
+            }
+        }
+        if (mainPlayer == null && allPlayers.Length > 0)
+        {
+            mainPlayer = allPlayers[0];
+        }
+        Instance = mainPlayer;
+
+        for (int i = 0; i < allPlayers.Length; i++)
+        {
+            PlayerController p = allPlayers[i];
+            if (p != null && p != mainPlayer)
+            {
+                p.gameObject.SetActive(false);
+                Destroy(p.gameObject);
+            }
+        }
+    }
+
+    #endregion
+
+    #region Serialized Fields
 
     [Header("Mouse Cursor Settings")]
     [SerializeField] private Texture2D cursorTexture;
@@ -157,6 +215,10 @@ public class PlayerController : MonoBehaviour
     [Header("Audio Settings")]
     [SerializeField] private int maxSoundPlaying = 3;
 
+    #endregion
+
+    #region Private State
+
     // Movement state
     private bool doubleJump;
     private bool canDash = true;
@@ -178,27 +240,21 @@ public class PlayerController : MonoBehaviour
     private float defaultGravityScale = 2f;
     private bool pendingSpawnReset;
     private bool isDead;
-    public bool IsDead => isDead;
-    public void SetPendingSpawnReset(bool value) => pendingSpawnReset = value;
 
     // Health state
-    public float CurrentHealth { get; private set; }
-    public bool IsImmune => Time.unscaledTime < immunityEndTime || isDashing;
     private float immunityEndTime;
 
     // Combat state
-    public bool IsInMode { get; private set; }
-    public bool IsGrappling { get; private set; }
-    public Vector2 InputValue => inputValue;
     private bool isThrowingHook = false;
     private bool isFocusing = false;
     private float currentMeter;
     private float defaultFixedDeltaTime;
-    private List<Vector3> drawnLinePoints = new List<Vector3>();
+    private readonly List<Vector3> drawnLinePoints = new List<Vector3>();
 
     // Grapple state
     private Vector2 grappleAnchorPoint;
     private Transform grappleTargetTransform;
+    private Collider2D cachedGrappleEnemyCollider;
     private Vector2 currentHookTip;
     private GameObject insGrappleTargetIndicator;
 
@@ -222,11 +278,11 @@ public class PlayerController : MonoBehaviour
     private Color originalSpriteColor = Color.white;
     private Color originalHealthBarColor = Color.lightGreen;
     private SpriteRenderer modeDimRenderer;
-    private static Sprite cachedSolidWhiteSprite;
 
     // Instantiated Objects
     private GameObject insLineRendererObj;
     private LineRenderer insLineRendererCom;
+    private LineRendererManager insLineRendererManager;
     private GameObject insMouseTrail;
 
     // Input Actions
@@ -256,43 +312,31 @@ public class PlayerController : MonoBehaviour
     private float originalAudioSourceVolume = 1f;
     private float originalPitchedVolume = 1f;
     private float originalShimmerVolume = 1f;
-    private List<CanvasGroup> meterCanvasGroups = new List<CanvasGroup>();
-    private List<CanvasGroup> healthCanvasGroups = new List<CanvasGroup>();
+    private readonly List<CanvasGroup> meterCanvasGroups = new List<CanvasGroup>();
+    private readonly List<CanvasGroup> healthCanvasGroups = new List<CanvasGroup>();
 
-    public static void EnforceSinglePlayerInstance()
+    #endregion
+
+    #region Public Properties
+
+    public bool IsDead => isDead;
+    public float CurrentHealth { get; private set; }
+    public bool IsImmune => Time.unscaledTime < immunityEndTime || isDashing;
+    public bool IsInMode { get; private set; }
+    public bool IsGrappling { get; private set; }
+    public Vector2 InputValue => inputValue;
+
+    public void SetPendingSpawnReset(bool value) => pendingSpawnReset = value;
+
+    public void SetSpawnPositionForNewScene(Vector3 spawnPos)
     {
-        PlayerController[] allPlayers = Object.FindObjectsByType<PlayerController>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-        if (allPlayers.Length <= 1) return;
-
-        // Prefer an alive player over a dead one
-        PlayerController mainPlayer = (Instance != null && !Instance.isDead) ? Instance : null;
-        if (mainPlayer == null)
-        {
-            for (int i = 0; i < allPlayers.Length; i++)
-            {
-                if (allPlayers[i] != null && !allPlayers[i].isDead)
-                {
-                    mainPlayer = allPlayers[i];
-                    break;
-                }
-            }
-        }
-        if (mainPlayer == null && allPlayers.Length > 0)
-        {
-            mainPlayer = allPlayers[0];
-        }
-        Instance = mainPlayer;
-
-        for (int i = 0; i < allPlayers.Length; i++)
-        {
-            PlayerController p = allPlayers[i];
-            if (p != null && p != mainPlayer)
-            {
-                p.gameObject.SetActive(false);
-                Destroy(p.gameObject);
-            }
-        }
+        initialSpawnPosition = spawnPos;
+        pendingSpawnReset = true;
     }
+
+    #endregion
+
+    #region Unity Lifecycle
 
     private void Awake()
     {
@@ -329,8 +373,9 @@ public class PlayerController : MonoBehaviour
             defaultGravityScale = rb.gravityScale;
         }
         Collider2D[] colliders = GetComponents<Collider2D>();
-        foreach (var c in colliders)
+        for (int i = 0; i < colliders.Length; i++)
         {
+            Collider2D c = colliders[i];
             if (c != null && !c.isTrigger)
             {
                 playerCollider = c;
@@ -408,335 +453,6 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    public void SetSpawnPositionForNewScene(Vector3 spawnPos)
-    {
-        initialSpawnPosition = spawnPos;
-        pendingSpawnReset = true;
-    }
-
-    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
-    {
-        if (Instance != this)
-        {
-            gameObject.SetActive(false);
-            Destroy(gameObject);
-            return;
-        }
-
-        EnforceSinglePlayerInstance();
-
-        // If returning to the Main Menu scene (Build Index 0 or MainMenu component present), clean up persistent Player instance
-        if (scene.buildIndex == 0 || FindFirstObjectByType<MainMenu>() != null)
-        {
-            Time.timeScale = 1f;
-            if (defaultFixedDeltaTime > 0f)
-            {
-                Time.fixedDeltaTime = defaultFixedDeltaTime;
-            }
-            Destroy(gameObject);
-            return;
-        }
-
-        ResetStateForLoadedScene();
-    }
-
-    /// <summary>
-    /// Fully revives the player, restores full health & meter, enables colliders,
-    /// resets rigidbody physics & animator, restores visuals, and teleports to the safe spawn position.
-    /// </summary>
-    public void ReviveAndReset()
-    {
-        isDead = false;
-        CurrentHealth = maxHealth;
-        currentMeter = maxMeter;
-        pendingSpawnReset = true;
-
-        if (rb != null)
-        {
-            rb.simulated = true;
-            rb.bodyType = RigidbodyType2D.Dynamic;
-            rb.constraints = RigidbodyConstraints2D.FreezeRotation;
-            rb.gravityScale = defaultGravityScale;
-            rb.linearVelocity = Vector2.zero;
-        }
-
-        Collider2D[] colliders = GetComponentsInChildren<Collider2D>(true);
-        foreach (var c in colliders)
-        {
-            if (c != null) c.enabled = true;
-        }
-
-        SpriteRenderer[] renderers = GetComponentsInChildren<SpriteRenderer>(true);
-        foreach (var sr in renderers)
-        {
-            if (sr == null) continue;
-            sr.color = originalSpriteColor;
-            sr.sortingOrder = 5;
-        }
-
-        if (spriteRenderer != null)
-        {
-            spriteRenderer.color = originalSpriteColor;
-            spriteRenderer.transform.localScale = originalSpriteScale;
-            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
-            spriteRenderer.transform.localRotation = Quaternion.identity;
-            spriteRenderer.sortingOrder = 5;
-        }
-
-        if (animator != null)
-        {
-            animator.SetBool("isInMode", false);
-            animator.SetBool("isDash", false);
-            animator.SetBool("isJump", false);
-            animator.SetBool("isRunning", false);
-        }
-
-        DetachGrappling();
-        isFocusing = false;
-        IsInMode = false;
-        isDashing = false;
-        canDash = true;
-        isWallSliding = false;
-        ResetIdleSquashBob();
-
-        if (insMouseTrail != null)
-        {
-            Destroy(insMouseTrail);
-            insMouseTrail = null;
-        }
-
-        if (insLineRendererObj != null)
-        {
-            Destroy(insLineRendererObj);
-            insLineRendererObj = null;
-            insLineRendererCom = null;
-        }
-
-        if (trailRenderer != null)
-        {
-            trailRenderer.emitting = false;
-            trailRenderer.Clear();
-        }
-
-        if (healthBarImage != null)
-        {
-            healthBarImage.color = originalHealthBarColor;
-            healthBarImage.fillAmount = 1f;
-        }
-        SetHealthAlpha(0f);
-
-        if (modeMeterImage != null)
-        {
-            modeMeterImage.fillAmount = 1f;
-        }
-        SetMeterAlpha(0f);
-        SetHealIndicatorActive(false);
-
-        // Restore AudioSource volumes so rapid restarts never decay audio
-        if (audioSource != null)
-        {
-            audioSource.volume = originalAudioSourceVolume;
-            audioSource.UnPause();
-        }
-        if (pitchedAudioSource != null)
-        {
-            pitchedAudioSource.volume = originalPitchedVolume;
-            pitchedAudioSource.UnPause();
-        }
-        if (shimmerAudioSource != null)
-        {
-            shimmerAudioSource.volume = originalShimmerVolume;
-            shimmerAudioSource.UnPause();
-        }
-
-        Vector3 targetSpawnPos = GetSceneSpawnPosition();
-        transform.position = ResolveSafePlayerPosition(targetSpawnPos);
-        Physics2D.SyncTransforms();
-        pendingSpawnReset = false;
-    }
-
-    private void ResetStateForLoadedScene()
-    {
-        ReviveAndReset();
-
-        if (defaultFixedDeltaTime > 0f)
-        {
-            Time.timeScale = 1f;
-            Time.fixedDeltaTime = defaultFixedDeltaTime;
-        }
-
-        BindSceneCameraAndTargets();
-        SetupGrappleIndicator();
-        SetupModeDimOverlay();
-    }
-
-    private Vector3 GetSceneSpawnPosition()
-    {
-        GameManager gm = GameManager.Instance != null ? GameManager.Instance : FindFirstObjectByType<GameManager>();
-        if (gm != null && gm.PlayerSpawnPoint != null)
-        {
-            return gm.PlayerSpawnPoint.position;
-        }
-
-        if (pendingSpawnReset)
-        {
-            return initialSpawnPosition;
-        }
-
-        GameObject namedSpawn = GameObject.Find("PlayerSpawnPoint");
-        if (namedSpawn == null)
-        {
-            namedSpawn = GameObject.Find("SpawnPoint");
-        }
-        if (namedSpawn != null)
-        {
-            return namedSpawn.transform.position;
-        }
-
-        return initialSpawnPosition;
-    }
-
-    private Vector3 ResolveSafePlayerPosition(Vector3 desiredPos)
-    {
-        Vector2 boxSize = new Vector2(0.9f, 1.4f);
-        float halfHeight = 0.75f;
-
-        if (playerCollider is BoxCollider2D boxCol)
-        {
-            boxSize = Vector2.Scale(boxCol.size, transform.localScale) * 0.92f;
-            halfHeight = (boxCol.size.y * Mathf.Abs(transform.localScale.y)) * 0.5f;
-        }
-        else if (playerCollider != null && playerCollider.bounds.size.sqrMagnitude > 0.01f)
-        {
-            boxSize = (Vector2)playerCollider.bounds.size * 0.92f;
-            halfHeight = playerCollider.bounds.extents.y;
-        }
-
-        // 1. If desiredPos is already free of ground/wall colliders and has ground beneath it, use it directly
-        if (Physics2D.OverlapBox(desiredPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(desiredPos))
-        {
-            return desiredPos;
-        }
-
-        // 2. Try stepping straight up out of any embedded floor at desiredPos.x
-        for (float upOffset = 0.25f; upOffset <= 8f; upOffset += 0.25f)
-        {
-            Vector3 liftedPos = desiredPos + Vector3.up * upOffset;
-            if (Physics2D.OverlapBox(liftedPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(liftedPos))
-            {
-                return liftedPos;
-            }
-        }
-
-        // 3. Scan horizontal offsets around desiredPos (and world origin) from open air to find a clean floor surface
-        float[] xOffsets = new float[] { 0f, 1.5f, -1.5f, 3f, -3f, 4.5f, -4.5f, 6f, -6f, 8f, -8f };
-        float[] yProbes = new float[] { 0.5f, 2f, -1f, 4f, 6.5f };
-        Vector3[] searchCenters = new Vector3[] { desiredPos, Vector3.zero };
-
-        foreach (Vector3 center in searchCenters)
-        {
-            foreach (float xOffset in xOffsets)
-            {
-                foreach (float yProbe in yProbes)
-                {
-                    Vector2 rayOrigin = new Vector2(center.x + xOffset, center.y + yProbe);
-                    if (Physics2D.OverlapPoint(rayOrigin, groundLayer) != null)
-                    {
-                        continue;
-                    }
-
-                    RaycastHit2D hit = Physics2D.Raycast(rayOrigin, Vector2.down, 25f, groundLayer);
-                    if (hit.collider != null && hit.distance > 0.02f && hit.normal.y >= 0.7f)
-                    {
-                        Vector2 candidatePos = hit.point + Vector2.up * (halfHeight + 0.1f);
-                        if (Physics2D.OverlapBox(candidatePos, boxSize, 0f, groundLayer) == null)
-                        {
-                            return new Vector3(candidatePos.x, candidatePos.y, desiredPos.z);
-                        }
-                    }
-                }
-            }
-        }
-
-        return desiredPos;
-    }
-
-    private bool HasGroundBelow(Vector3 checkPos)
-    {
-        RaycastHit2D hit = Physics2D.Raycast(checkPos + Vector3.up * 0.5f, Vector2.down, 25f, groundLayer);
-        return hit.collider != null;
-    }
-
-    private void BindSceneCameraAndTargets()
-    {
-        // 1. Automatically detect the Main Camera in the active scene
-        mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
-        if (mainCamera != null)
-        {
-            if (mainCamera.GetComponent<CinemachineBrain>() == null)
-            {
-                mainCamera.gameObject.AddComponent<CinemachineBrain>();
-            }
-
-            Canvas playerCanvas = GetComponentInChildren<Canvas>(true);
-            if (playerCanvas != null && playerCanvas.renderMode == RenderMode.WorldSpace)
-            {
-                playerCanvas.worldCamera = mainCamera;
-            }
-        }
-
-        // 2. Automatically detect the CinemachineTargetGroup in the active scene and bind the Player
-        if (targetGroup == null)
-        {
-            targetGroup = FindFirstObjectByType<CinemachineTargetGroup>();
-        }
-
-        if (targetGroup != null)
-        {
-            if (targetGroup.Targets.Count == 0)
-            {
-                targetGroup.AddMember(transform, 5f, 5f);
-            }
-            else
-            {
-                targetGroup.Targets[0].Object = transform;
-            }
-
-            if (targetGroup.Targets.Count < 2)
-            {
-                targetGroup.AddMember(null, 5f, 5f);
-            }
-            else
-            {
-                targetGroup.Targets[1].Object = null;
-            }
-        }
-
-        // 3. Automatically detect CinemachineCamera and assign Target Group as its Tracking Target
-        cinemachineCamera = FindFirstObjectByType<CinemachineCamera>();
-        if (cinemachineCamera != null)
-        {
-            cinemachineCamera.Target.TrackingTarget = targetGroup != null ? targetGroup.transform : transform;
-
-            perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
-            if (perlin != null)
-            {
-                orgNoiseSettings = perlin.NoiseProfile;
-                orgAmplitudeGain = perlin.AmplitudeGain;
-                orgFrequencyGain = perlin.FrequencyGain;
-            }
-        }
-    }
-
-    private Camera GetActiveCamera()
-    {
-        if (mainCamera == null)
-        {
-            mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
-        }
-        return mainCamera;
-    }
-
     private void Start()
     {
         defaultFixedDeltaTime = Time.fixedDeltaTime;
@@ -781,7 +497,7 @@ public class PlayerController : MonoBehaviour
             isWallSliding = false;
             if (rb.linearVelocityY <= 0.25f && animator != null)
             {
-                animator.SetBool("isJump", false);
+                animator.SetBool(AnimIsJump, false);
             }
         }
         else
@@ -826,14 +542,15 @@ public class PlayerController : MonoBehaviour
             {
                 float targetSpeedX = inputValue.x * moveSpeed;
                 float currentSpeedX = rb.linearVelocityX;
+                bool grounded = IsGrounded();
 
                 // Preserve high-speed airborne momentum from grapple releases, dashes, or wall kicks
-                if (!IsGrounded() && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Sign(inputValue.x) == Mathf.Sign(currentSpeedX) && Mathf.Abs(inputValue.x) > 0.05f)
+                if (!grounded && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Sign(inputValue.x) == Mathf.Sign(currentSpeedX) && Mathf.Abs(inputValue.x) > 0.05f)
                 {
                     float decayedX = Mathf.MoveTowards(currentSpeedX, targetSpeedX, airMomentumDecay * Time.fixedDeltaTime);
                     rb.linearVelocity = new Vector2(decayedX, rb.linearVelocityY);
                 }
-                else if (!IsGrounded() && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Abs(inputValue.x) <= 0.05f)
+                else if (!grounded && Mathf.Abs(currentSpeedX) > moveSpeed && Mathf.Abs(inputValue.x) <= 0.05f)
                 {
                     float coastX = Mathf.MoveTowards(currentSpeedX, 0f, airMomentumDecay * 0.75f * Time.fixedDeltaTime);
                     rb.linearVelocity = new Vector2(coastX, rb.linearVelocityY);
@@ -850,7 +567,7 @@ public class PlayerController : MonoBehaviour
 
                 if (animator != null)
                 {
-                    animator.SetBool("isRunning", Mathf.Abs(rb.linearVelocityX) > 0.05f);
+                    animator.SetBool(AnimIsRunning, Mathf.Abs(rb.linearVelocityX) > 0.05f);
                 }
 
                 if (Mathf.Abs(inputValue.x) > 0.05f && !isDashing && !IsGrappling)
@@ -866,7 +583,152 @@ public class PlayerController : MonoBehaviour
         soundPlaying = 0;
     }
 
-    #region Health System Logic
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (Instance != this)
+        {
+            gameObject.SetActive(false);
+            Destroy(gameObject);
+            return;
+        }
+
+        EnforceSinglePlayerInstance();
+
+        // If returning to the Main Menu scene (Build Index 0 or MainMenu component present), clean up persistent Player instance
+        if (scene.buildIndex == 0 || FindFirstObjectByType<MainMenu>() != null)
+        {
+            Time.timeScale = 1f;
+            if (defaultFixedDeltaTime > 0f)
+            {
+                Time.fixedDeltaTime = defaultFixedDeltaTime;
+            }
+            Destroy(gameObject);
+            return;
+        }
+
+        ResetStateForLoadedScene();
+    }
+
+    #endregion
+
+    #region Health & Regen System
+
+    /// <summary>
+    /// Fully revives the player, restores full health & meter, enables colliders,
+    /// resets rigidbody physics & animator, restores visuals, and teleports to the safe spawn position.
+    /// </summary>
+    public void ReviveAndReset()
+    {
+        isDead = false;
+        CurrentHealth = maxHealth;
+        currentMeter = maxMeter;
+        pendingSpawnReset = true;
+
+        if (rb != null)
+        {
+            rb.simulated = true;
+            rb.bodyType = RigidbodyType2D.Dynamic;
+            rb.constraints = RigidbodyConstraints2D.FreezeRotation;
+            rb.gravityScale = defaultGravityScale;
+            rb.linearVelocity = Vector2.zero;
+        }
+
+        Collider2D[] colliders = GetComponentsInChildren<Collider2D>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (colliders[i] != null) colliders[i].enabled = true;
+        }
+
+        SpriteRenderer[] renderers = GetComponentsInChildren<SpriteRenderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            SpriteRenderer sr = renderers[i];
+            if (sr == null || sr == modeDimRenderer) continue;
+            sr.color = originalSpriteColor;
+            sr.sortingOrder = 5;
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = originalSpriteColor;
+            spriteRenderer.transform.localScale = originalSpriteScale;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+            spriteRenderer.transform.localRotation = Quaternion.identity;
+            spriteRenderer.sortingOrder = 5;
+        }
+
+        if (animator != null)
+        {
+            animator.SetBool(AnimIsInMode, false);
+            animator.SetBool(AnimIsDash, false);
+            animator.SetBool(AnimIsJump, false);
+            animator.SetBool(AnimIsRunning, false);
+        }
+
+        DetachGrappling();
+        isFocusing = false;
+        IsInMode = false;
+        isDashing = false;
+        canDash = true;
+        isWallSliding = false;
+        ResetIdleSquashBob();
+
+        if (insMouseTrail != null)
+        {
+            Destroy(insMouseTrail);
+            insMouseTrail = null;
+        }
+
+        if (insLineRendererObj != null)
+        {
+            Destroy(insLineRendererObj);
+            insLineRendererObj = null;
+            insLineRendererCom = null;
+            insLineRendererManager = null;
+        }
+
+        if (trailRenderer != null)
+        {
+            trailRenderer.emitting = false;
+            trailRenderer.Clear();
+        }
+
+        if (healthBarImage != null)
+        {
+            healthBarImage.color = originalHealthBarColor;
+            healthBarImage.fillAmount = 1f;
+        }
+        SetHealthAlpha(0f);
+
+        if (modeMeterImage != null)
+        {
+            modeMeterImage.fillAmount = 1f;
+        }
+        SetMeterAlpha(0f);
+        SetHealIndicatorActive(false);
+
+        // Restore AudioSource volumes so rapid restarts never decay audio
+        if (audioSource != null)
+        {
+            audioSource.volume = originalAudioSourceVolume;
+            audioSource.UnPause();
+        }
+        if (pitchedAudioSource != null)
+        {
+            pitchedAudioSource.volume = originalPitchedVolume;
+            pitchedAudioSource.UnPause();
+        }
+        if (shimmerAudioSource != null)
+        {
+            shimmerAudioSource.volume = originalShimmerVolume;
+            shimmerAudioSource.UnPause();
+        }
+
+        Vector3 targetSpawnPos = GetSceneSpawnPosition();
+        transform.position = ResolveSafePlayerPosition(targetSpawnPos);
+        Physics2D.SyncTransforms();
+        pendingSpawnReset = false;
+    }
 
     private void SetupHealthUI()
     {
@@ -942,8 +804,9 @@ public class PlayerController : MonoBehaviour
 
     private void SetHealthAlpha(float alpha)
     {
-        foreach (CanvasGroup cg in healthCanvasGroups)
+        for (int i = 0; i < healthCanvasGroups.Count; i++)
         {
+            CanvasGroup cg = healthCanvasGroups[i];
             if (cg != null) cg.alpha = alpha;
         }
     }
@@ -1037,7 +900,8 @@ public class PlayerController : MonoBehaviour
         SetHealIndicatorActive(true);
 
         float sparkSpawnTimer = 0f;
-        float sparkInterval = 0.22f;
+        const float sparkInterval = 0.22f;
+        WaitForSeconds tickWait = new WaitForSeconds(healthRegenTickInterval);
 
         while (CurrentHealth < maxHealth)
         {
@@ -1070,7 +934,7 @@ public class PlayerController : MonoBehaviour
                 }
             }
 
-            yield return new WaitForSeconds(healthRegenTickInterval);
+            yield return tickWait;
         }
 
         // Restore default colors
@@ -1089,12 +953,11 @@ public class PlayerController : MonoBehaviour
         activeHealthRegenCoroutine = null;
     }
 
-    private static Sprite cachedPixelHealCrossSprite;
     private static Sprite GetOrCreatePixelHealCrossSprite()
     {
         if (cachedPixelHealCrossSprite != null) return cachedPixelHealCrossSprite;
 
-        int size = 5;
+        const int size = 5;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Point;
         Color clear = new Color(0, 0, 0, 0);
@@ -1130,7 +993,7 @@ public class PlayerController : MonoBehaviour
     private IEnumerator HealSparkRoutine(GameObject spark, SpriteRenderer sr)
     {
         float timer = 0f;
-        float duration = 0.50f;
+        const float duration = 0.50f;
         float floatSpeed = Random.Range(0.9f, 1.5f);
         Vector3 startScale = Vector3.one * (0.65f * healSparkScale);
 
@@ -1174,22 +1037,22 @@ public class PlayerController : MonoBehaviour
         if (pulseOnFull)
         {
             float pulseTimer = 0f;
-            float pulseDuration = 0.15f;
+            const float pulseDuration = 0.15f;
             while (pulseTimer < pulseDuration)
             {
                 pulseTimer += Time.deltaTime;
                 float scale = Mathf.Lerp(1f, 1.15f, Mathf.Sin((pulseTimer / pulseDuration) * Mathf.PI));
 
-                foreach (CanvasGroup cg in healthCanvasGroups)
+                for (int i = 0; i < healthCanvasGroups.Count; i++)
                 {
-                    if (cg != null) cg.transform.localScale = Vector3.one * scale;
+                    if (healthCanvasGroups[i] != null) healthCanvasGroups[i].transform.localScale = Vector3.one * scale;
                 }
                 yield return null;
             }
 
-            foreach (CanvasGroup cg in healthCanvasGroups)
+            for (int i = 0; i < healthCanvasGroups.Count; i++)
             {
-                if (cg != null) cg.transform.localScale = Vector3.one;
+                if (healthCanvasGroups[i] != null) healthCanvasGroups[i].transform.localScale = Vector3.one;
             }
         }
 
@@ -1240,10 +1103,10 @@ public class PlayerController : MonoBehaviour
 
         if (animator != null)
         {
-            animator.SetBool("isInMode", false);
-            animator.SetBool("isDash", false);
-            animator.SetBool("isJump", false);
-            animator.SetBool("isRunning", false);
+            animator.SetBool(AnimIsInMode, false);
+            animator.SetBool(AnimIsDash, false);
+            animator.SetBool(AnimIsJump, false);
+            animator.SetBool(AnimIsRunning, false);
         }
 
         DetachGrappling();
@@ -1289,7 +1152,7 @@ public class PlayerController : MonoBehaviour
 
     #endregion
 
-    #region Movement & Jump Logic
+    #region Movement & Physics
 
     private void UpdateWallSlideState(bool grounded)
     {
@@ -1499,7 +1362,7 @@ public class PlayerController : MonoBehaviour
                 jumpBufferCounter = 0f;
                 coyoteTimeCounter = 0f;
                 PlayPitchedSFX(jumpSFX, 1.08f, 1f);
-                if (animator != null) animator.SetBool("isJump", true);
+                if (animator != null) animator.SetBool(AnimIsJump, true);
                 return;
             }
 
@@ -1517,7 +1380,7 @@ public class PlayerController : MonoBehaviour
                 coyoteTimeCounter = 0f;
                 jumpBufferCounter = 0f;
                 PlayPitchedSFX(jumpSFX, Random.Range(0.96f, 1.04f), 1f);
-                if (animator != null) animator.SetBool("isJump", true);
+                if (animator != null) animator.SetBool(AnimIsJump, true);
                 return;
             }
 
@@ -1535,7 +1398,7 @@ public class PlayerController : MonoBehaviour
                 {
                     spriteRenderer.flipX = kickDir < 0;
                 }
-                if (animator != null) animator.SetBool("isJump", true);
+                if (animator != null) animator.SetBool(AnimIsJump, true);
                 return;
             }
 
@@ -1547,7 +1410,7 @@ public class PlayerController : MonoBehaviour
                 AudioClip clipToPlay = doubleJumpSFX != null ? doubleJumpSFX : jumpSFX;
                 float pitchToPlay = doubleJumpSFX != null ? Random.Range(0.96f, 1.05f) : 1.15f;
                 PlayPitchedSFX(clipToPlay, pitchToPlay, 1f);
-                if (animator != null) animator.SetBool("isJump", true);
+                if (animator != null) animator.SetBool(AnimIsJump, true);
                 return;
             }
         }
@@ -1555,7 +1418,7 @@ public class PlayerController : MonoBehaviour
         if (jumpAction.WasReleasedThisFrame() && rb.linearVelocityY > 0f)
         {
             rb.linearVelocity = new Vector2(rb.linearVelocityX, rb.linearVelocityY * 0.5f);
-            if (animator != null) animator.SetBool("isJump", true);
+            if (animator != null) animator.SetBool(AnimIsJump, true);
         }
     }
 
@@ -1563,8 +1426,9 @@ public class PlayerController : MonoBehaviour
     {
         Vector2 checkPos = groundCheck != null ? (Vector2)groundCheck.position : (Vector2)transform.position;
         Collider2D[] hits = Physics2D.OverlapCircleAll(checkPos, 0.35f, groundLayer);
-        foreach (Collider2D hit in hits)
+        for (int i = 0; i < hits.Length; i++)
         {
+            Collider2D hit = hits[i];
             if (hit == null || hit.isTrigger) continue;
             Platformer platform = hit.GetComponentInParent<Platformer>();
             if (platform != null)
@@ -1595,7 +1459,7 @@ public class PlayerController : MonoBehaviour
         }
 
         PlaySFX(dashSFX);
-        if (animator != null) animator.SetBool("isDash", true);
+        if (animator != null) animator.SetBool(AnimIsDash, true);
 
         float originalGravity = rb.gravityScale;
         rb.gravityScale = 0f;
@@ -1618,7 +1482,7 @@ public class PlayerController : MonoBehaviour
         rb.gravityScale = originalGravity;
         isDashing = false;
 
-        if (animator != null) animator.SetBool("isDash", false);
+        if (animator != null) animator.SetBool(AnimIsDash, false);
 
         yield return new WaitForSeconds(dashingCooldown);
         canDash = true;
@@ -1695,7 +1559,7 @@ public class PlayerController : MonoBehaviour
 
     #endregion
 
-    #region Chain Slash Mode Logic
+    #region Chain Slash Mode & Targeting
 
     private void HandleCombatInput()
     {
@@ -1721,7 +1585,7 @@ public class PlayerController : MonoBehaviour
     private void EnterChainSlashMode()
     {
         IsInMode = true;
-        if (animator != null) animator.SetBool("isInMode", true);
+        if (animator != null) animator.SetBool(AnimIsInMode, true);
         FadeModeDimOverlay(modeDimAlpha);
 
         Time.timeScale = timeSpeed;
@@ -1735,6 +1599,7 @@ public class PlayerController : MonoBehaviour
         {
             insLineRendererObj = Instantiate(lineRendererObject);
             insLineRendererCom = insLineRendererObj.GetComponent<LineRenderer>();
+            insLineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
             if (insLineRendererCom != null)
             {
                 insLineRendererCom.positionCount = 1;
@@ -1757,7 +1622,7 @@ public class PlayerController : MonoBehaviour
     private void ExitChainSlashMode()
     {
         IsInMode = false;
-        if (animator != null) animator.SetBool("isInMode", false);
+        if (animator != null) animator.SetBool(AnimIsInMode, false);
         FadeModeDimOverlay(0f);
 
         if (targetGroup != null && targetGroup.Targets.Count > 1)
@@ -1771,10 +1636,13 @@ public class PlayerController : MonoBehaviour
 
         if (insLineRendererObj != null)
         {
-            LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
-            if (lineRendererManager != null && insLineRendererCom != null)
+            if (insLineRendererManager == null)
             {
-                lineRendererManager.activeCoroutine = StartCoroutine(AnimateKillLine(insLineRendererCom));
+                insLineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
+            }
+            if (insLineRendererManager != null && insLineRendererCom != null)
+            {
+                insLineRendererManager.activeCoroutine = StartCoroutine(AnimateKillLine(insLineRendererCom));
             }
         }
 
@@ -1797,6 +1665,7 @@ public class PlayerController : MonoBehaviour
 
         insLineRendererCom = null;
         insLineRendererObj = null;
+        insLineRendererManager = null;
 
         Time.timeScale = 1.0f;
         Time.fixedDeltaTime = defaultFixedDeltaTime;
@@ -1871,12 +1740,14 @@ public class PlayerController : MonoBehaviour
         if (!IsInMode || insLineRendererCom == null) return;
 
         Vector3 currentMousePos = GetMouseWorldPosition();
+        float minDistSqr = minPointDistance * minPointDistance;
 
-        if (drawnLinePoints.Count == 0 || Vector3.Distance(drawnLinePoints[drawnLinePoints.Count - 1], currentMousePos) >= minPointDistance)
+        if (drawnLinePoints.Count == 0 || (drawnLinePoints[drawnLinePoints.Count - 1] - currentMousePos).sqrMagnitude >= minDistSqr)
         {
             drawnLinePoints.Add(currentMousePos);
-            insLineRendererCom.positionCount = drawnLinePoints.Count;
-            insLineRendererCom.SetPositions(drawnLinePoints.ToArray());
+            int newCount = drawnLinePoints.Count;
+            insLineRendererCom.positionCount = newCount;
+            insLineRendererCom.SetPosition(newCount - 1, currentMousePos);
         }
     }
 
@@ -1909,16 +1780,19 @@ public class PlayerController : MonoBehaviour
             targetGroup.Targets[1].Object = enemyPos;
         }
 
-        LineRendererManager lineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
-        if (lineRendererManager == null) return;
-
-        if (!lineRendererManager.targets.Contains(enemyPos.gameObject))
+        if (insLineRendererManager == null)
         {
-            lineRendererManager.targets.Add(enemyPos.gameObject);
+            insLineRendererManager = insLineRendererObj.GetComponent<LineRendererManager>();
+        }
+        if (insLineRendererManager == null) return;
+
+        if (!insLineRendererManager.targets.Contains(enemyPos.gameObject))
+        {
+            insLineRendererManager.targets.Add(enemyPos.gameObject);
             currentMeter = Mathf.Clamp(currentMeter - (maxMeter / 40f), 0f, maxMeter);
             if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
 
-            int comboIndex = lineRendererManager.targets.Count - 1;
+            int comboIndex = insLineRendererManager.targets.Count - 1;
             PlayJuicyTargetSelectSFX(comboIndex);
             StartCoroutine(PunchTargetScaleRoutine(enemyPos));
         }
@@ -1929,7 +1803,7 @@ public class PlayerController : MonoBehaviour
         if (targetTransform == null) yield break;
 
         Vector3 baseScale = targetTransform.localScale;
-        float duration = 0.08f;
+        const float duration = 0.08f;
         float elapsed = 0f;
 
         while (elapsed < duration && targetTransform != null)
@@ -1946,6 +1820,10 @@ public class PlayerController : MonoBehaviour
             targetTransform.localScale = baseScale;
         }
     }
+
+    #endregion
+
+    #region Combat & Damage
 
     public IEnumerator AnimateKillLine(LineRenderer lineRenderer)
     {
@@ -1981,7 +1859,7 @@ public class PlayerController : MonoBehaviour
         if (drawGradient.colorKeys.Length > 0) lineRenderer.colorGradient = drawGradient;
 
         float drawTimer = 0f;
-        List<Vector3> drawPoints = new List<Vector3>();
+        List<Vector3> drawPoints = new List<Vector3>(pointCount);
 
         while (drawTimer < slashDrawDuration)
         {
@@ -2169,7 +2047,7 @@ public class PlayerController : MonoBehaviour
         if (flashGradient.colorKeys.Length > 0) lineRenderer.colorGradient = flashGradient;
 
         float orgWidth = lineRenderer.widthMultiplier;
-        float flashDuration = 0.18f;
+        const float flashDuration = 0.18f;
         float timer = 0f;
         Vector3[] jitteredPoints = new Vector3[pointCount];
 
@@ -2197,7 +2075,7 @@ public class PlayerController : MonoBehaviour
         if (dissolveGradient.colorKeys.Length > 0) lineRenderer.colorGradient = dissolveGradient;
 
         float disappearTimer = 0f;
-        List<Vector3> currentPoints = new List<Vector3>();
+        List<Vector3> currentPoints = drawPoints;
 
         while (disappearTimer < slashDisappearDuration)
         {
@@ -2241,7 +2119,7 @@ public class PlayerController : MonoBehaviour
             if (currentPoints.Count >= 2)
             {
                 lineRenderer.positionCount = currentPoints.Count;
-                lineRenderer.SetPositions(currentPoints.ToArray());
+                for (int p = 0; p < currentPoints.Count; p++) lineRenderer.SetPosition(p, currentPoints[p]);
             }
             else
             {
@@ -2254,10 +2132,6 @@ public class PlayerController : MonoBehaviour
         lineRenderer.enabled = false;
         Destroy(lineRendererManager.gameObject);
     }
-
-    #endregion
-
-    #region Dynamic Grappling Hook System
 
     private void SetupGrappleIndicator()
     {
@@ -2369,6 +2243,7 @@ public class PlayerController : MonoBehaviour
         isFocusing = false;
         isWallSliding = false;
         grappleTargetTransform = null;
+        cachedGrappleEnemyCollider = null;
 
         ConsumeMeter(maxMeter / 10f);
 
@@ -2387,6 +2262,10 @@ public class PlayerController : MonoBehaviour
         if (dir == Vector2.zero) dir = Vector2.right;
 
         RaycastHit2D rayHit = FindGrappleHit(fireOrigin, dir, out EnemyBase hitEnemy);
+        if (hitEnemy != null)
+        {
+            cachedGrappleEnemyCollider = hitEnemy.GetComponent<Collider2D>();
+        }
         grappleAnchorPoint = rayHit.collider != null ? rayHit.point : fireOrigin + (dir * maxGrappleRange);
 
         grappleLine.positionCount = ropeSegments;
@@ -2422,6 +2301,10 @@ public class PlayerController : MonoBehaviour
             if (hitEnemy == null)
             {
                 hitEnemy = rayHit.collider.GetComponentInParent<EnemyBase>();
+                if (hitEnemy != null)
+                {
+                    cachedGrappleEnemyCollider = hitEnemy.GetComponent<Collider2D>();
+                }
             }
 
             if (grappleImpactPrefab != null)
@@ -2444,19 +2327,20 @@ public class PlayerController : MonoBehaviour
                 canDash = true;
 
                 Rigidbody2D enemyRb = hitEnemy.GetComponent<Rigidbody2D>();
-                float maxReelDuration = 0.65f;
+                const float maxReelDuration = 0.65f;
                 float reelTimer = 0f;
-                float kickDistance = 1.55f;
+                const float kickDistance = 1.55f;
+                const float kickDistanceSqr = kickDistance * kickDistance;
 
                 while (IsGrappling && reelTimer < maxReelDuration && hitEnemy != null && !hitEnemy.IsDead)
                 {
                     reelTimer += Time.deltaTime;
                     Vector2 enemyCenter = GetEnemyGrapplePoint(hitEnemy);
                     Vector2 toPlayer = (Vector2)transform.position - enemyCenter;
-                    float distToPlayer = toPlayer.magnitude;
+                    float distToPlayerSqr = toPlayer.sqrMagnitude;
 
                     // 2. Once the enemy is pulled right up close to the player, kick them off far!
-                    if (distToPlayer <= kickDistance)
+                    if (distToPlayerSqr <= kickDistanceSqr)
                     {
                         ForceExecuteGrappleKick(hitEnemy, dir);
                         yield break;
@@ -2531,7 +2415,12 @@ public class PlayerController : MonoBehaviour
     private Vector2 GetEnemyGrapplePoint(EnemyBase enemy)
     {
         if (enemy == null) return Vector2.zero;
+        if (cachedGrappleEnemyCollider != null && cachedGrappleEnemyCollider.gameObject == enemy.gameObject)
+        {
+            return cachedGrappleEnemyCollider.bounds.center;
+        }
         Collider2D col = enemy.GetComponent<Collider2D>();
+        cachedGrappleEnemyCollider = col;
         return col != null ? (Vector2)col.bounds.center : (Vector2)enemy.transform.position;
     }
 
@@ -2551,8 +2440,9 @@ public class PlayerController : MonoBehaviour
         float closestEnemyDist = float.MaxValue;
         RaycastHit2D bestEnemyHit = default;
 
-        foreach (RaycastHit2D candidate in allHits)
+        for (int i = 0; i < allHits.Length; i++)
         {
+            RaycastHit2D candidate = allHits[i];
             if (candidate.collider == null || candidate.collider.isTrigger) continue;
             if (candidate.collider.gameObject == gameObject || candidate.collider.transform.IsChildOf(transform)) continue;
 
@@ -2589,7 +2479,7 @@ public class PlayerController : MonoBehaviour
 
         // Allow kick if actively grappling at speed, OR if this enemy is currently being reeled in by the grapple
         bool isBeingReeledIn = IsGrappling && enemy.IsGrappleStunned;
-        bool isSwingingFast = IsGrappling && rb.linearVelocity.magnitude >= grappleKickSpeedThreshold;
+        bool isSwingingFast = IsGrappling && rb.linearVelocity.sqrMagnitude >= grappleKickSpeedThreshold * grappleKickSpeedThreshold;
 
         if (!isBeingReeledIn && !isSwingingFast) return false;
 
@@ -2726,13 +2616,14 @@ public class PlayerController : MonoBehaviour
         IsGrappling = false;
         isThrowingHook = false;
         grappleTargetTransform = null;
+        cachedGrappleEnemyCollider = null;
         if (grappleLine != null) grappleLine.enabled = false;
         if (springJoint != null) springJoint.enabled = false;
     }
 
     #endregion
 
-    #region Dynamic UI Auto-Hide & Visuals
+    #region Audio & VFX
 
     private void SetupMeterUI()
     {
@@ -2759,8 +2650,9 @@ public class PlayerController : MonoBehaviour
 
     private void SetMeterAlpha(float alpha)
     {
-        foreach (CanvasGroup cg in meterCanvasGroups)
+        for (int i = 0; i < meterCanvasGroups.Count; i++)
         {
+            CanvasGroup cg = meterCanvasGroups[i];
             if (cg != null) cg.alpha = alpha;
         }
     }
@@ -2784,22 +2676,22 @@ public class PlayerController : MonoBehaviour
         if (pulseOnFull)
         {
             float pulseTimer = 0f;
-            float pulseDuration = 0.15f;
+            const float pulseDuration = 0.15f;
             while (pulseTimer < pulseDuration)
             {
                 pulseTimer += Time.deltaTime;
                 float scale = Mathf.Lerp(1f, 1.15f, Mathf.Sin((pulseTimer / pulseDuration) * Mathf.PI));
 
-                foreach (CanvasGroup cg in meterCanvasGroups)
+                for (int i = 0; i < meterCanvasGroups.Count; i++)
                 {
-                    if (cg != null) cg.transform.localScale = Vector3.one * scale;
+                    if (meterCanvasGroups[i] != null) meterCanvasGroups[i].transform.localScale = Vector3.one * scale;
                 }
                 yield return null;
             }
 
-            foreach (CanvasGroup cg in meterCanvasGroups)
+            for (int i = 0; i < meterCanvasGroups.Count; i++)
             {
-                if (cg != null) cg.transform.localScale = Vector3.one;
+                if (meterCanvasGroups[i] != null) meterCanvasGroups[i].transform.localScale = Vector3.one;
             }
         }
 
@@ -2819,13 +2711,13 @@ public class PlayerController : MonoBehaviour
 
     private IEnumerator MeterRegenerate()
     {
-        yield return new WaitForSeconds(currentMeter == 0 ? 1f : 0.5f);
+        yield return currentMeter == 0 ? WaitOneSecond : WaitHalfSecond;
 
         while (currentMeter < maxMeter)
         {
             currentMeter = Mathf.Clamp(currentMeter + 1f, 0f, maxMeter);
             if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
-            yield return new WaitForSeconds(0.03f);
+            yield return WaitMeterRegenTick;
         }
 
         HideMeterBarWithPulse();
@@ -2834,11 +2726,12 @@ public class PlayerController : MonoBehaviour
 
     private IEnumerator MeterDegeneration(float amount, float interval)
     {
+        WaitForSeconds wait = Mathf.Approximately(interval, 0.005f) ? WaitMeterDegenTick : new WaitForSeconds(interval);
         while (currentMeter > 0f)
         {
             currentMeter = Mathf.Clamp(currentMeter - amount, 0f, maxMeter);
             if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
-            yield return new WaitForSeconds(interval);
+            yield return wait;
         }
 
         activeMeterCoroutine = null;
@@ -2939,12 +2832,197 @@ public class PlayerController : MonoBehaviour
 
     private IEnumerator TargetShimmerEchoRoutine(float shimmerPitch)
     {
-        yield return new WaitForSecondsRealtime(0.022f);
+        yield return WaitShimmerEcho;
         if (shimmerAudioSource != null && targetSelectSFX != null)
         {
             shimmerAudioSource.pitch = Mathf.Min(shimmerPitch, 2.4f);
             shimmerAudioSource.PlayOneShot(targetSelectSFX, 0.35f);
         }
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private void ResetStateForLoadedScene()
+    {
+        ReviveAndReset();
+
+        if (defaultFixedDeltaTime > 0f)
+        {
+            Time.timeScale = 1f;
+            Time.fixedDeltaTime = defaultFixedDeltaTime;
+        }
+
+        BindSceneCameraAndTargets();
+        SetupGrappleIndicator();
+        SetupModeDimOverlay();
+    }
+
+    private Vector3 GetSceneSpawnPosition()
+    {
+        GameManager gm = GameManager.Instance != null ? GameManager.Instance : FindFirstObjectByType<GameManager>();
+        if (gm != null && gm.PlayerSpawnPoint != null)
+        {
+            return gm.PlayerSpawnPoint.position;
+        }
+
+        if (pendingSpawnReset)
+        {
+            return initialSpawnPosition;
+        }
+
+        GameObject namedSpawn = GameObject.Find("PlayerSpawnPoint");
+        if (namedSpawn == null)
+        {
+            namedSpawn = GameObject.Find("SpawnPoint");
+        }
+        if (namedSpawn != null)
+        {
+            return namedSpawn.transform.position;
+        }
+
+        return initialSpawnPosition;
+    }
+
+    private Vector3 ResolveSafePlayerPosition(Vector3 desiredPos)
+    {
+        Vector2 boxSize = new Vector2(0.9f, 1.4f);
+        float halfHeight = 0.75f;
+
+        if (playerCollider is BoxCollider2D boxCol)
+        {
+            boxSize = Vector2.Scale(boxCol.size, transform.localScale) * 0.92f;
+            halfHeight = (boxCol.size.y * Mathf.Abs(transform.localScale.y)) * 0.5f;
+        }
+        else if (playerCollider != null && playerCollider.bounds.size.sqrMagnitude > 0.01f)
+        {
+            boxSize = (Vector2)playerCollider.bounds.size * 0.92f;
+            halfHeight = playerCollider.bounds.extents.y;
+        }
+
+        // 1. If desiredPos is already free of ground/wall colliders and has ground beneath it, use it directly
+        if (Physics2D.OverlapBox(desiredPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(desiredPos))
+        {
+            return desiredPos;
+        }
+
+        // 2. Try stepping straight up out of any embedded floor at desiredPos.x
+        for (float upOffset = 0.25f; upOffset <= 8f; upOffset += 0.25f)
+        {
+            Vector3 liftedPos = desiredPos + Vector3.up * upOffset;
+            if (Physics2D.OverlapBox(liftedPos, boxSize, 0f, groundLayer) == null && HasGroundBelow(liftedPos))
+            {
+                return liftedPos;
+            }
+        }
+
+        // 3. Scan horizontal offsets around desiredPos (and world origin) from open air to find a clean floor surface
+        for (int c = 0; c < 2; c++)
+        {
+            Vector3 center = c == 0 ? desiredPos : Vector3.zero;
+            for (int xIdx = 0; xIdx < SafeSpawnXOffsets.Length; xIdx++)
+            {
+                float xOffset = SafeSpawnXOffsets[xIdx];
+                for (int yIdx = 0; yIdx < SafeSpawnYProbes.Length; yIdx++)
+                {
+                    float yProbe = SafeSpawnYProbes[yIdx];
+                    Vector2 rayOrigin = new Vector2(center.x + xOffset, center.y + yProbe);
+                    if (Physics2D.OverlapPoint(rayOrigin, groundLayer) != null)
+                    {
+                        continue;
+                    }
+
+                    RaycastHit2D hit = Physics2D.Raycast(rayOrigin, Vector2.down, 25f, groundLayer);
+                    if (hit.collider != null && hit.distance > 0.02f && hit.normal.y >= 0.7f)
+                    {
+                        Vector2 candidatePos = hit.point + Vector2.up * (halfHeight + 0.1f);
+                        if (Physics2D.OverlapBox(candidatePos, boxSize, 0f, groundLayer) == null)
+                        {
+                            return new Vector3(candidatePos.x, candidatePos.y, desiredPos.z);
+                        }
+                    }
+                }
+            }
+        }
+
+        return desiredPos;
+    }
+
+    private bool HasGroundBelow(Vector3 checkPos)
+    {
+        RaycastHit2D hit = Physics2D.Raycast(checkPos + Vector3.up * 0.5f, Vector2.down, 25f, groundLayer);
+        return hit.collider != null;
+    }
+
+    private void BindSceneCameraAndTargets()
+    {
+        // 1. Automatically detect the Main Camera in the active scene
+        mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (mainCamera != null)
+        {
+            if (mainCamera.GetComponent<CinemachineBrain>() == null)
+            {
+                mainCamera.gameObject.AddComponent<CinemachineBrain>();
+            }
+
+            Canvas playerCanvas = GetComponentInChildren<Canvas>(true);
+            if (playerCanvas != null && playerCanvas.renderMode == RenderMode.WorldSpace)
+            {
+                playerCanvas.worldCamera = mainCamera;
+            }
+        }
+
+        // 2. Automatically detect the CinemachineTargetGroup in the active scene and bind the Player
+        if (targetGroup == null)
+        {
+            targetGroup = FindFirstObjectByType<CinemachineTargetGroup>();
+        }
+
+        if (targetGroup != null)
+        {
+            if (targetGroup.Targets.Count == 0)
+            {
+                targetGroup.AddMember(transform, 5f, 5f);
+            }
+            else
+            {
+                targetGroup.Targets[0].Object = transform;
+            }
+
+            if (targetGroup.Targets.Count < 2)
+            {
+                targetGroup.AddMember(null, 5f, 5f);
+            }
+            else
+            {
+                targetGroup.Targets[1].Object = null;
+            }
+        }
+
+        // 3. Automatically detect CinemachineCamera and assign Target Group as its Tracking Target
+        cinemachineCamera = FindFirstObjectByType<CinemachineCamera>();
+        if (cinemachineCamera != null)
+        {
+            cinemachineCamera.Target.TrackingTarget = targetGroup != null ? targetGroup.transform : transform;
+
+            perlin = cinemachineCamera.GetComponent<CinemachineBasicMultiChannelPerlin>();
+            if (perlin != null)
+            {
+                orgNoiseSettings = perlin.NoiseProfile;
+                orgAmplitudeGain = perlin.AmplitudeGain;
+                orgFrequencyGain = perlin.FrequencyGain;
+            }
+        }
+    }
+
+    private Camera GetActiveCamera()
+    {
+        if (mainCamera == null)
+        {
+            mainCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        }
+        return mainCamera;
     }
 
     #endregion

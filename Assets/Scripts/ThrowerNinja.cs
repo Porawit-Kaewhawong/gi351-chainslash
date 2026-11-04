@@ -3,6 +3,8 @@ using UnityEngine;
 
 public class ThrowerNinja : EnemyBase
 {
+    #region Serialized Fields
+
     [Header("Thrower Ninja Settings")]
     [SerializeField] private GameObject shurikenPrefab;
     [SerializeField] private float throwInterval = 3f;
@@ -19,8 +21,18 @@ public class ThrowerNinja : EnemyBase
     [SerializeField] private int deathProjectileCount = 2;
     [SerializeField] private float deathProjectileSpeed = 13.5f;
 
+    #endregion
+
+    #region Protected & Private State
+
     private float nextThrowTime;
     private bool isThrowing;
+    private WaitForSeconds cachedWindupWait;
+    private float cachedWindupDuration = -1f;
+
+    #endregion
+
+    #region Unity Lifecycle
 
     protected override void Start()
     {
@@ -48,6 +60,34 @@ public class ThrowerNinja : EnemyBase
         }
     }
 
+    #endregion
+
+    #region Combat & Targeting
+
+    public override void OnDeath(Vector2 deathImpulse = default)
+    {
+        if (IsDead) return;
+        IsDead = true;
+
+        SpawnDeathShurikens();
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.UnregisterEnemy(gameObject);
+        }
+
+        if (deathImpulse != default && rb != null)
+        {
+            rb.AddForce(deathImpulse * 15f, ForceMode2D.Impulse);
+        }
+
+        Destroy(gameObject);
+    }
+
+    #endregion
+
+    #region Helpers
+
     private IEnumerator ThrowShurikenRoutine()
     {
         isThrowing = true;
@@ -59,7 +99,13 @@ public class ThrowerNinja : EnemyBase
             spriteRenderer.color = throwTelegraphColor;
         }
 
-        yield return new WaitForSeconds(throwWindup);
+        if (!Mathf.Approximately(cachedWindupDuration, throwWindup))
+        {
+            cachedWindupDuration = throwWindup;
+            cachedWindupWait = new WaitForSeconds(throwWindup);
+        }
+
+        yield return cachedWindupWait;
 
         if (spriteRenderer != null && !isTarget)
         {
@@ -99,26 +145,6 @@ public class ThrowerNinja : EnemyBase
         isThrowing = false;
     }
 
-    public override void OnDeath(Vector2 deathImpulse = default)
-    {
-        if (IsDead) return;
-        IsDead = true;
-
-        SpawnDeathShurikens();
-
-        if (GameManager.Instance != null)
-        {
-            GameManager.Instance.UnregisterEnemy(gameObject);
-        }
-
-        if (deathImpulse != default && rb != null)
-        {
-            rb.AddForce(deathImpulse * 15f, ForceMode2D.Impulse);
-        }
-
-        Destroy(gameObject);
-    }
-
     private void SpawnDeathShurikens()
     {
         Vector2 spawnOrigin = throwPoint != null ? (Vector2)throwPoint.position : (Vector2)transform.position + Vector2.up * 0.5f;
@@ -129,18 +155,12 @@ public class ThrowerNinja : EnemyBase
 
         for (int i = 0; i < deathProjectileCount; i++)
         {
-            float angle = baseAngle + (i * angleStep) + Random.Range(-25f, 25f);
-            Vector2 randomDir = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)).normalized;
+            float rad = (baseAngle + (i * angleStep) + Random.Range(-25f, 25f)) * Mathf.Deg2Rad;
+            Vector2 randomDir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad)).normalized;
 
-            GameObject proj = null;
-            if (shurikenPrefab != null)
-            {
-                proj = Instantiate(shurikenPrefab, spawnOrigin, Quaternion.identity);
-            }
-            else
-            {
-                proj = Shuriken.CreateDefaultShuriken(spawnOrigin, randomDir, deathProjectileSpeed, shurikenDamage, groundLayer);
-            }
+            GameObject proj = shurikenPrefab != null
+                ? Instantiate(shurikenPrefab, spawnOrigin, Quaternion.identity)
+                : Shuriken.CreateDefaultShuriken(spawnOrigin, randomDir, deathProjectileSpeed, shurikenDamage, groundLayer);
 
             if (proj != null && proj.TryGetComponent<Shuriken>(out Shuriken shurikenComp))
             {
@@ -154,5 +174,6 @@ public class ThrowerNinja : EnemyBase
             playerController.PlaySFX(throwSFX);
         }
     }
-}
 
+    #endregion
+}

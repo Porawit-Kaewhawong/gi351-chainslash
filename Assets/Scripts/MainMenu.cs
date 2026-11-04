@@ -7,6 +7,30 @@ using UnityEngine.UI;
 
 public class MainMenu : MonoBehaviour
 {
+    #region Constants
+
+    private const string DefaultFallbackSceneName = "LevelScene";
+    private const string DynamicTransitionOverlayName = "DynamicTransitionOverlay";
+    private const string DynamicSlashWipeFXName = "DynamicSlashWipeFX";
+    private const string CrossfadeOverlayName = "BGCrossfadeOverlay";
+    private const float DuplicateSfxCooldown = 0.2f;
+
+#if UNITY_EDITOR
+    private static readonly string[] EditorCandidateSlidePaths =
+    {
+        "Assets/Textures/BG.png",
+        "Assets/Textures/MapBG1.png",
+        "Assets/Textures/MAP2_2.png",
+        "Assets/FreeAssets/RockyWorld/background1.png",
+        "Assets/FreeAssets/RockyWorld/background2.png",
+        "Assets/FreeAssets/RockyWorld/background3.png"
+    };
+#endif
+
+    #endregion
+
+    #region Serialized Fields
+
     [Header("Scene Transition Settings")]
     [SerializeField] private string gameSceneName = "LevelScene";
     [SerializeField] private CanvasGroup transitionCanvasGroup; // Optional fullscreen panel with CanvasGroup
@@ -39,6 +63,10 @@ public class MainMenu : MonoBehaviour
     [SerializeField] private AudioClip buttonHoverSFX;
     [SerializeField] [Range(0f, 1f)] private float sfxVolume = 1f;
 
+    #endregion
+
+    #region Private State
+
     private bool isTransitioning = false;
     private float lastPlayedSFXTime = -10f;
     private AudioClip lastPlayedSFXClip;
@@ -52,40 +80,27 @@ public class MainMenu : MonoBehaviour
     private Coroutine slideshowCoroutine;
     private Coroutine crossfadeCoroutine;
     private bool isCrossfading = false;
+    private WaitForSecondsRealtime cachedSlideWait;
+    private float cachedSlideWaitDuration = -1f;
 
+    // Transition UI state
     private RectTransform topShutter;
     private RectTransform bottomShutter;
     private RectTransform slashLineRect;
     private Image slashLineImage;
-    private List<RectTransform> menuUIElements = new List<RectTransform>();
-    private List<Vector2> menuUIInitialPositions = new List<Vector2>();
-    private List<CanvasGroup> menuUICanvasGroups = new List<CanvasGroup>();
+    private readonly List<RectTransform> menuUIElements = new List<RectTransform>();
+    private readonly List<Vector2> menuUIInitialPositions = new List<Vector2>();
+    private readonly List<CanvasGroup> menuUICanvasGroups = new List<CanvasGroup>();
+
+    #endregion
+
+    #region Unity Lifecycle
 
     private void Awake()
     {
         EnsureAudioSources();
         EnsureTransitionUI();
         CacheMenuUIElements();
-    }
-
-    private void EnsureAudioSources()
-    {
-        if (sfxAudioSource == null)
-        {
-            AudioSource existingSource = GetComponent<AudioSource>();
-            if (existingSource != null && existingSource != bgmAudioSource)
-            {
-                sfxAudioSource = existingSource;
-            }
-            else
-            {
-                GameObject sfxObj = new GameObject("MenuSFXAudioSource");
-                sfxObj.transform.SetParent(transform, false);
-                sfxAudioSource = sfxObj.AddComponent<AudioSource>();
-                sfxAudioSource.playOnAwake = false;
-                sfxAudioSource.spatialBlend = 0f;
-            }
-        }
     }
 
     private void Start()
@@ -114,22 +129,33 @@ public class MainMenu : MonoBehaviour
         }
     }
 
+    #endregion
+
+    #region Background Parallax
+
     private void HandleParallax()
     {
         if (parallaxBackground == null) return;
 
-        Vector2 mousePos = Vector2.zero;
-        if (Mouse.current != null)
-        {
-            mousePos = Mouse.current.position.ReadValue();
-        }
+        Vector2 mousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
 
         float normalizedX = (mousePos.x / Mathf.Max(1f, Screen.width) - 0.5f) * 2f;
         float normalizedY = (mousePos.y / Mathf.Max(1f, Screen.height) - 0.5f) * 2f;
 
-        Vector3 targetPos = initialBackgroundPos + new Vector3(normalizedX * parallaxAmount, normalizedY * parallaxAmount, 0f);
-        parallaxBackground.anchoredPosition = Vector3.Lerp(parallaxBackground.anchoredPosition, targetPos, Time.unscaledDeltaTime * parallaxSmoothSpeed);
+        Vector3 targetPos = new Vector3(
+            initialBackgroundPos.x + normalizedX * parallaxAmount,
+            initialBackgroundPos.y + normalizedY * parallaxAmount,
+            initialBackgroundPos.z
+        );
+
+        parallaxBackground.anchoredPosition = Vector3.Lerp(
+            parallaxBackground.anchoredPosition,
+            targetPos,
+            Time.unscaledDeltaTime * parallaxSmoothSpeed
+        );
     }
+
+    #endregion
 
     #region Background Slideshow System
 
@@ -137,8 +163,7 @@ public class MainMenu : MonoBehaviour
     {
         if (parallaxBackground == null) return;
 
-        mainBgImage = parallaxBackground.GetComponent<Image>();
-        if (mainBgImage == null)
+        if (!parallaxBackground.TryGetComponent(out mainBgImage))
         {
             mainBgImage = parallaxBackground.GetComponentInChildren<Image>();
         }
@@ -156,19 +181,9 @@ public class MainMenu : MonoBehaviour
                 backgroundSlideshow.Add(mainBgImage.sprite);
             }
 
-            string[] candidatePaths = new string[]
+            for (int i = 0; i < EditorCandidateSlidePaths.Length; i++)
             {
-                "Assets/Textures/BG.png",
-                "Assets/Textures/MapBG1.png",
-                "Assets/Textures/MAP2_2.png",
-                "Assets/FreeAssets/RockyWorld/background1.png",
-                "Assets/FreeAssets/RockyWorld/background2.png",
-                "Assets/FreeAssets/RockyWorld/background3.png"
-            };
-
-            foreach (string path in candidatePaths)
-            {
-                Sprite sp = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(path);
+                Sprite sp = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(EditorCandidateSlidePaths[i]);
                 if (sp != null && !backgroundSlideshow.Contains(sp))
                 {
                     backgroundSlideshow.Add(sp);
@@ -195,7 +210,7 @@ public class MainMenu : MonoBehaviour
     {
         if (parallaxBackground == null) return;
 
-        Transform existing = parallaxBackground.Find("BGCrossfadeOverlay");
+        Transform existing = parallaxBackground.Find(CrossfadeOverlayName);
         if (existing != null)
         {
             crossfadeBgImage = existing.GetComponent<Image>();
@@ -203,7 +218,7 @@ public class MainMenu : MonoBehaviour
 
         if (crossfadeBgImage == null)
         {
-            GameObject overlayObj = new GameObject("BGCrossfadeOverlay");
+            GameObject overlayObj = new GameObject(CrossfadeOverlayName);
             overlayObj.transform.SetParent(parallaxBackground, false);
 
             RectTransform rt = overlayObj.AddComponent<RectTransform>();
@@ -229,22 +244,29 @@ public class MainMenu : MonoBehaviour
     {
         while (autoCycleSlideshow && backgroundSlideshow.Count > 1)
         {
-            yield return new WaitForSecondsRealtime(slideDuration);
+            if (cachedSlideWait == null || !Mathf.Approximately(cachedSlideWaitDuration, slideDuration))
+            {
+                cachedSlideWaitDuration = slideDuration;
+                cachedSlideWait = new WaitForSecondsRealtime(slideDuration);
+            }
+
+            yield return cachedSlideWait;
 
             if (isTransitioning) yield break;
 
+            int count = backgroundSlideshow.Count;
             int nextIndex;
             if (randomizeOrder)
             {
-                nextIndex = Random.Range(0, backgroundSlideshow.Count);
-                if (nextIndex == currentSlideIndex && backgroundSlideshow.Count > 1)
+                nextIndex = Random.Range(0, count);
+                if (nextIndex == currentSlideIndex && count > 1)
                 {
-                    nextIndex = (nextIndex + 1) % backgroundSlideshow.Count;
+                    nextIndex = (nextIndex + 1) % count;
                 }
             }
             else
             {
-                nextIndex = (currentSlideIndex + 1) % backgroundSlideshow.Count;
+                nextIndex = (currentSlideIndex + 1) % count;
             }
 
             currentSlideIndex = nextIndex;
@@ -267,10 +289,11 @@ public class MainMenu : MonoBehaviour
         crossfadeBgImage.gameObject.SetActive(true);
 
         float elapsed = 0f;
-        while (elapsed < crossfadeDuration)
+        float duration = Mathf.Max(0.01f, crossfadeDuration);
+        while (elapsed < duration)
         {
             elapsed += Time.unscaledDeltaTime;
-            float t = Mathf.Clamp01(elapsed / crossfadeDuration);
+            float t = Mathf.Clamp01(elapsed / duration);
             float smoothT = Mathf.SmoothStep(0f, 1f, t);
 
             crossfadeBgImage.color = new Color(1f, 1f, 1f, smoothT);
@@ -288,9 +311,7 @@ public class MainMenu : MonoBehaviour
     public void NextSlide()
     {
         if (backgroundSlideshow.Count <= 1 || isCrossfading) return;
-        currentSlideIndex = (currentSlideIndex + 1) % backgroundSlideshow.Count;
-        if (crossfadeCoroutine != null) StopCoroutine(crossfadeCoroutine);
-        crossfadeCoroutine = StartCoroutine(CrossfadeToSpriteRoutine(backgroundSlideshow[currentSlideIndex]));
+        TransitionToSlide((currentSlideIndex + 1) % backgroundSlideshow.Count);
     }
 
     /// <summary>
@@ -299,9 +320,7 @@ public class MainMenu : MonoBehaviour
     public void PreviousSlide()
     {
         if (backgroundSlideshow.Count <= 1 || isCrossfading) return;
-        currentSlideIndex = (currentSlideIndex - 1 + backgroundSlideshow.Count) % backgroundSlideshow.Count;
-        if (crossfadeCoroutine != null) StopCoroutine(crossfadeCoroutine);
-        crossfadeCoroutine = StartCoroutine(CrossfadeToSpriteRoutine(backgroundSlideshow[currentSlideIndex]));
+        TransitionToSlide((currentSlideIndex - 1 + backgroundSlideshow.Count) % backgroundSlideshow.Count);
     }
 
     /// <summary>
@@ -310,12 +329,19 @@ public class MainMenu : MonoBehaviour
     public void SetSlide(int index)
     {
         if (backgroundSlideshow.Count == 0 || index < 0 || index >= backgroundSlideshow.Count || isCrossfading) return;
+        TransitionToSlide(index);
+    }
+
+    private void TransitionToSlide(int index)
+    {
         currentSlideIndex = index;
         if (crossfadeCoroutine != null) StopCoroutine(crossfadeCoroutine);
         crossfadeCoroutine = StartCoroutine(CrossfadeToSpriteRoutine(backgroundSlideshow[currentSlideIndex]));
     }
 
     #endregion
+
+    #region Menu Actions & Transitions
 
     public void StartGame()
     {
@@ -329,111 +355,21 @@ public class MainMenu : MonoBehaviour
         StartCoroutine(TransitionAndQuit());
     }
 
-    private void EnsureTransitionUI()
-    {
-        Canvas rootCanvas = GetComponentInParent<Canvas>();
-        if (rootCanvas == null) rootCanvas = FindFirstObjectByType<Canvas>();
-        if (rootCanvas == null) return;
-
-        if (transitionCanvasGroup == null)
-        {
-            GameObject overlayObj = new GameObject("DynamicTransitionOverlay");
-            overlayObj.transform.SetParent(rootCanvas.transform, false);
-
-            RectTransform overlayRect = overlayObj.AddComponent<RectTransform>();
-            overlayRect.anchorMin = Vector2.zero;
-            overlayRect.anchorMax = Vector2.one;
-            overlayRect.offsetMin = Vector2.zero;
-            overlayRect.offsetMax = Vector2.zero;
-
-            Image fadeImg = overlayObj.AddComponent<Image>();
-            fadeImg.color = Color.black;
-            fadeImg.raycastTarget = true;
-
-            transitionCanvasGroup = overlayObj.AddComponent<CanvasGroup>();
-            transitionCanvasGroup.alpha = 1f;
-        }
-
-        transitionCanvasGroup.transform.SetAsLastSibling();
-
-        // Create diagonal slash & shutter container on the root canvas for the dynamic slash-wipe transition
-        GameObject fxContainer = new GameObject("DynamicSlashWipeFX");
-        fxContainer.transform.SetParent(rootCanvas.transform, false);
-        RectTransform fxRect = fxContainer.AddComponent<RectTransform>();
-        fxRect.anchorMin = new Vector2(0.5f, 0.5f);
-        fxRect.anchorMax = new Vector2(0.5f, 0.5f);
-        fxRect.sizeDelta = new Vector2(3200f, 3200f);
-        fxRect.localRotation = Quaternion.Euler(0f, 0f, -18f);
-
-        topShutter = CreateShutterPanel(fxRect, "TopShutter", new Vector2(0f, 1600f), new Vector2(3600f, 1800f));
-        bottomShutter = CreateShutterPanel(fxRect, "BottomShutter", new Vector2(0f, -1600f), new Vector2(3600f, 1800f));
-
-        GameObject slashObj = new GameObject("SlashBeam");
-        slashObj.transform.SetParent(fxRect, false);
-        slashLineRect = slashObj.AddComponent<RectTransform>();
-        slashLineRect.anchoredPosition = Vector2.zero;
-        slashLineRect.sizeDelta = new Vector2(0f, 18f);
-        slashLineImage = slashObj.AddComponent<Image>();
-        slashLineImage.color = slashFlashColor;
-        slashLineImage.raycastTarget = false;
-
-        // Keep fade overlay on top of everything when fading
-        transitionCanvasGroup.transform.SetAsLastSibling();
-    }
-
-    private RectTransform CreateShutterPanel(RectTransform parent, string name, Vector2 startAnchoredPos, Vector2 size)
-    {
-        GameObject panelObj = new GameObject(name);
-        panelObj.transform.SetParent(parent, false);
-        RectTransform rt = panelObj.AddComponent<RectTransform>();
-        rt.anchoredPosition = startAnchoredPos;
-        rt.sizeDelta = size;
-        Image img = panelObj.AddComponent<Image>();
-        img.color = Color.black;
-        img.raycastTarget = false;
-        return rt;
-    }
-
-    private void CacheMenuUIElements()
-    {
-        Canvas rootCanvas = GetComponentInParent<Canvas>();
-        if (rootCanvas == null) return;
-
-        menuUIElements.Clear();
-        menuUIInitialPositions.Clear();
-        menuUICanvasGroups.Clear();
-
-        foreach (Transform child in rootCanvas.transform)
-        {
-            if (child == null) continue;
-            if (parallaxBackground != null && child == parallaxBackground.transform) continue;
-            if (transitionCanvasGroup != null && child == transitionCanvasGroup.transform) continue;
-            if (child.name == "DynamicSlashWipeFX" || child.name == "DynamicTransitionOverlay") continue;
-
-            RectTransform rt = child as RectTransform;
-            if (rt == null) continue;
-
-            CanvasGroup cg = rt.GetComponent<CanvasGroup>();
-            if (cg == null) cg = rt.gameObject.AddComponent<CanvasGroup>();
-
-            menuUIElements.Add(rt);
-            menuUIInitialPositions.Add(rt.anchoredPosition);
-            menuUICanvasGroups.Add(cg);
-        }
-    }
-
     private IEnumerator MenuIntroRoutine()
     {
+        Vector2 startOffset = new Vector2(0f, -35f);
+
         // Stagger menu UI elements slightly on intro while fading in from black
         for (int i = 0; i < menuUIElements.Count; i++)
         {
-            menuUIElements[i].anchoredPosition = menuUIInitialPositions[i] + new Vector2(0f, -35f);
+            menuUIElements[i].anchoredPosition = menuUIInitialPositions[i] + startOffset;
             menuUICanvasGroups[i].alpha = 0f;
         }
 
+        Vector3 introStartScale = initialBackgroundScale * 1.08f;
         if (parallaxBackground != null)
         {
-            parallaxBackground.localScale = initialBackgroundScale * 1.08f;
+            parallaxBackground.localScale = introStartScale;
         }
 
         float duration = Mathf.Max(0.35f, fadeDuration);
@@ -443,7 +379,8 @@ public class MainMenu : MonoBehaviour
         {
             timer += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(timer / duration);
-            float easeOut = 1f - Mathf.Pow(1f - t, 3f);
+            float invT = 1f - t;
+            float easeOut = 1f - (invT * invT * invT);
 
             if (transitionCanvasGroup != null)
             {
@@ -452,15 +389,16 @@ public class MainMenu : MonoBehaviour
 
             if (parallaxBackground != null)
             {
-                parallaxBackground.localScale = Vector3.Lerp(initialBackgroundScale * 1.08f, initialBackgroundScale, easeOut);
+                parallaxBackground.localScale = Vector3.Lerp(introStartScale, initialBackgroundScale, easeOut);
             }
 
             for (int i = 0; i < menuUIElements.Count; i++)
             {
                 float delay = i * 0.06f;
                 float itemT = Mathf.Clamp01((timer - delay) / Mathf.Max(0.15f, duration - delay));
-                float itemEase = 1f - Mathf.Pow(1f - itemT, 3f);
-                menuUIElements[i].anchoredPosition = Vector2.Lerp(menuUIInitialPositions[i] + new Vector2(0f, -35f), menuUIInitialPositions[i], itemEase);
+                float invItemT = 1f - itemT;
+                float itemEase = 1f - (invItemT * invItemT * invItemT);
+                menuUIElements[i].anchoredPosition = Vector2.Lerp(menuUIInitialPositions[i] + startOffset, menuUIInitialPositions[i], itemEase);
                 menuUICanvasGroups[i].alpha = itemEase;
             }
 
@@ -498,6 +436,7 @@ public class MainMenu : MonoBehaviour
 
         Vector3 startBgPos = parallaxBackground != null ? (Vector3)parallaxBackground.anchoredPosition : Vector3.zero;
         Vector3 startBgScale = parallaxBackground != null ? parallaxBackground.localScale : Vector3.one;
+        Vector3 targetZoomScale = initialBackgroundScale * zoomScaleOnEnter;
         float startBgmVol = bgmAudioSource != null ? bgmAudioSource.volume : 1f;
 
         // Phase 1: Dynamic UI dispersal + camera zoom-in + diagonal slash beam across the screen
@@ -509,12 +448,13 @@ public class MainMenu : MonoBehaviour
             timer += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(timer / slashDuration);
             float easeIn = t * t;
-            float easeOut = 1f - Mathf.Pow(1f - t, 3f);
+            float invT = 1f - t;
+            float easeOut = 1f - (invT * invT * invT);
 
             if (parallaxBackground != null)
             {
                 parallaxBackground.anchoredPosition = Vector3.Lerp(startBgPos, initialBackgroundPos, easeOut);
-                parallaxBackground.localScale = Vector3.Lerp(startBgScale, initialBackgroundScale * zoomScaleOnEnter, easeIn * 0.6f);
+                parallaxBackground.localScale = Vector3.Lerp(startBgScale, targetZoomScale, easeIn * 0.6f);
             }
 
             // Slide and fade menu buttons/title outward
@@ -544,27 +484,24 @@ public class MainMenu : MonoBehaviour
 
         // Phase 2: Diagonal shutters slam shut along the slash line + final zoom & fade to black
         float shutterDuration = Mathf.Max(0.25f, fadeDuration * 0.55f);
+        Vector3 midZoomScale = initialBackgroundScale * Mathf.Lerp(1f, zoomScaleOnEnter, 0.6f);
         timer = 0f;
 
         while (timer < shutterDuration)
         {
             timer += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(timer / shutterDuration);
-            float easeInOut = t < 0.5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) / 2f;
+            float easeInOut = t < 0.5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) * 0.5f;
 
             if (parallaxBackground != null)
             {
-                parallaxBackground.localScale = Vector3.Lerp(
-                    initialBackgroundScale * Mathf.Lerp(1f, zoomScaleOnEnter, 0.6f),
-                    initialBackgroundScale * zoomScaleOnEnter,
-                    t
-                );
+                parallaxBackground.localScale = Vector3.Lerp(midZoomScale, targetZoomScale, t);
             }
 
             if (topShutter != null && bottomShutter != null)
             {
-                topShutter.anchoredPosition = Vector2.Lerp(new Vector2(0f, 1600f), new Vector2(0f, 895f), easeInOut);
-                bottomShutter.anchoredPosition = Vector2.Lerp(new Vector2(0f, -1600f), new Vector2(0f, -895f), easeInOut);
+                topShutter.anchoredPosition = new Vector2(0f, Mathf.Lerp(1600f, 895f, easeInOut));
+                bottomShutter.anchoredPosition = new Vector2(0f, Mathf.Lerp(-1600f, -895f, easeInOut));
             }
 
             if (slashLineRect != null && slashLineImage != null)
@@ -610,48 +547,14 @@ public class MainMenu : MonoBehaviour
             return;
         }
 
-        if (Application.CanStreamedLevelBeLoaded("LevelScene"))
+        if (Application.CanStreamedLevelBeLoaded(DefaultFallbackSceneName))
         {
-            SceneManager.LoadScene("LevelScene");
+            SceneManager.LoadScene(DefaultFallbackSceneName);
             return;
         }
 
         // Fallback to index 0 in Build Settings
         SceneManager.LoadScene(0);
-    }
-
-    private void SpawnCrossSceneFadeIn(float duration, AudioSource activeSfxSource)
-    {
-        GameObject fadeCarryObj = new GameObject("CrossSceneFadeIn");
-        DontDestroyOnLoad(fadeCarryObj);
-
-        if (activeSfxSource != null && activeSfxSource.isPlaying && activeSfxSource.gameObject != gameObject)
-        {
-            activeSfxSource.transform.SetParent(fadeCarryObj.transform, false);
-        }
-
-        Canvas canvas = fadeCarryObj.AddComponent<Canvas>();
-        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 999;
-
-        GameObject panelObj = new GameObject("BlackFadePanel");
-        panelObj.transform.SetParent(fadeCarryObj.transform, false);
-        RectTransform rt = panelObj.AddComponent<RectTransform>();
-        rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.one;
-        rt.offsetMin = Vector2.zero;
-        rt.offsetMax = Vector2.zero;
-
-        Image img = panelObj.AddComponent<Image>();
-        img.color = Color.black;
-        img.raycastTarget = false;
-
-        CanvasGroup cg = fadeCarryObj.AddComponent<CanvasGroup>();
-        cg.alpha = 1f;
-        cg.blocksRaycasts = false;
-
-        CrossSceneFadeRunner runner = fadeCarryObj.AddComponent<CrossSceneFadeRunner>();
-        runner.BeginFadeIn(cg, duration, activeSfxSource);
     }
 
     private IEnumerator TransitionAndQuit()
@@ -677,17 +580,19 @@ public class MainMenu : MonoBehaviour
     private IEnumerator FadeRoutine(float startAlpha, float targetAlpha, System.Action onComplete)
     {
         float timer = 0f;
-        while (timer < fadeDuration)
+        float duration = Mathf.Max(0.01f, fadeDuration);
+        while (timer < duration)
         {
             timer += Time.unscaledDeltaTime;
+            float t = timer / duration;
             if (transitionCanvasGroup != null)
             {
-                transitionCanvasGroup.alpha = Mathf.Lerp(startAlpha, targetAlpha, timer / fadeDuration);
+                transitionCanvasGroup.alpha = Mathf.Lerp(startAlpha, targetAlpha, t);
             }
 
-            if (bgmAudioSource != null && targetAlpha == 1f)
+            if (bgmAudioSource != null && Mathf.Approximately(targetAlpha, 1f))
             {
-                bgmAudioSource.volume = Mathf.Lerp(1f, 0f, timer / fadeDuration);
+                bgmAudioSource.volume = Mathf.Lerp(1f, 0f, t);
             }
 
             yield return null;
@@ -701,12 +606,16 @@ public class MainMenu : MonoBehaviour
         onComplete?.Invoke();
     }
 
+    #endregion
+
+    #region UI & Audio Logic
+
     public void PlaySFX(AudioClip clip)
     {
         if (clip == null) return;
 
         // Avoid double-playing the exact same clip on pointer-down + button-click release within the same press
-        if (clip == lastPlayedSFXClip && Time.unscaledTime - lastPlayedSFXTime < 0.2f)
+        if (clip == lastPlayedSFXClip && Time.unscaledTime - lastPlayedSFXTime < DuplicateSfxCooldown)
         {
             return;
         }
@@ -740,6 +649,161 @@ public class MainMenu : MonoBehaviour
                 sfxAudioSource.PlayOneShot(clipToPlay, sfxVolume * 0.7f);
             }
         }
+    }
+
+    private void EnsureAudioSources()
+    {
+        if (sfxAudioSource == null)
+        {
+            AudioSource existingSource = GetComponent<AudioSource>();
+            if (existingSource != null && existingSource != bgmAudioSource)
+            {
+                sfxAudioSource = existingSource;
+            }
+            else
+            {
+                GameObject sfxObj = new GameObject("MenuSFXAudioSource");
+                sfxObj.transform.SetParent(transform, false);
+                sfxAudioSource = sfxObj.AddComponent<AudioSource>();
+                sfxAudioSource.playOnAwake = false;
+                sfxAudioSource.spatialBlend = 0f;
+            }
+        }
+    }
+
+    private void EnsureTransitionUI()
+    {
+        Canvas rootCanvas = GetComponentInParent<Canvas>();
+        if (rootCanvas == null) rootCanvas = FindFirstObjectByType<Canvas>();
+        if (rootCanvas == null) return;
+
+        if (transitionCanvasGroup == null)
+        {
+            GameObject overlayObj = new GameObject(DynamicTransitionOverlayName);
+            overlayObj.transform.SetParent(rootCanvas.transform, false);
+
+            RectTransform overlayRect = overlayObj.AddComponent<RectTransform>();
+            overlayRect.anchorMin = Vector2.zero;
+            overlayRect.anchorMax = Vector2.one;
+            overlayRect.offsetMin = Vector2.zero;
+            overlayRect.offsetMax = Vector2.zero;
+
+            Image fadeImg = overlayObj.AddComponent<Image>();
+            fadeImg.color = Color.black;
+            fadeImg.raycastTarget = true;
+
+            transitionCanvasGroup = overlayObj.AddComponent<CanvasGroup>();
+            transitionCanvasGroup.alpha = 1f;
+        }
+
+        transitionCanvasGroup.transform.SetAsLastSibling();
+
+        // Create diagonal slash & shutter container on the root canvas for the dynamic slash-wipe transition
+        GameObject fxContainer = new GameObject(DynamicSlashWipeFXName);
+        fxContainer.transform.SetParent(rootCanvas.transform, false);
+        RectTransform fxRect = fxContainer.AddComponent<RectTransform>();
+        fxRect.anchorMin = new Vector2(0.5f, 0.5f);
+        fxRect.anchorMax = new Vector2(0.5f, 0.5f);
+        fxRect.sizeDelta = new Vector2(3200f, 3200f);
+        fxRect.localRotation = Quaternion.Euler(0f, 0f, -18f);
+
+        topShutter = CreateShutterPanel(fxRect, "TopShutter", new Vector2(0f, 1600f), new Vector2(3600f, 1800f));
+        bottomShutter = CreateShutterPanel(fxRect, "BottomShutter", new Vector2(0f, -1600f), new Vector2(3600f, 1800f));
+
+        GameObject slashObj = new GameObject("SlashBeam");
+        slashObj.transform.SetParent(fxRect, false);
+        slashLineRect = slashObj.AddComponent<RectTransform>();
+        slashLineRect.anchoredPosition = Vector2.zero;
+        slashLineRect.sizeDelta = new Vector2(0f, 18f);
+        slashLineImage = slashObj.AddComponent<Image>();
+        slashLineImage.color = slashFlashColor;
+        slashLineImage.raycastTarget = false;
+
+        // Keep fade overlay on top of everything when fading
+        transitionCanvasGroup.transform.SetAsLastSibling();
+    }
+
+    private RectTransform CreateShutterPanel(RectTransform parent, string name, Vector2 startAnchoredPos, Vector2 size)
+    {
+        GameObject panelObj = new GameObject(name);
+        panelObj.transform.SetParent(parent, false);
+        RectTransform rt = panelObj.AddComponent<RectTransform>();
+        rt.anchoredPosition = startAnchoredPos;
+        rt.sizeDelta = size;
+        Image img = panelObj.AddComponent<Image>();
+        img.color = Color.black;
+        img.raycastTarget = false;
+        return rt;
+    }
+
+    private void CacheMenuUIElements()
+    {
+        Canvas rootCanvas = GetComponentInParent<Canvas>();
+        if (rootCanvas == null) return;
+
+        menuUIElements.Clear();
+        menuUIInitialPositions.Clear();
+        menuUICanvasGroups.Clear();
+
+        Transform rootTransform = rootCanvas.transform;
+        int childCount = rootTransform.childCount;
+        for (int i = 0; i < childCount; i++)
+        {
+            Transform child = rootTransform.GetChild(i);
+            if (child == null) continue;
+            if (parallaxBackground != null && child == parallaxBackground.transform) continue;
+            if (transitionCanvasGroup != null && child == transitionCanvasGroup.transform) continue;
+            if (child.name == DynamicSlashWipeFXName || child.name == DynamicTransitionOverlayName) continue;
+
+            if (!(child is RectTransform rt)) continue;
+
+            if (!rt.TryGetComponent(out CanvasGroup cg))
+            {
+                cg = rt.gameObject.AddComponent<CanvasGroup>();
+            }
+
+            menuUIElements.Add(rt);
+            menuUIInitialPositions.Add(rt.anchoredPosition);
+            menuUICanvasGroups.Add(cg);
+        }
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private void SpawnCrossSceneFadeIn(float duration, AudioSource activeSfxSource)
+    {
+        GameObject fadeCarryObj = new GameObject("CrossSceneFadeIn");
+        DontDestroyOnLoad(fadeCarryObj);
+
+        if (activeSfxSource != null && activeSfxSource.isPlaying && activeSfxSource.gameObject != gameObject)
+        {
+            activeSfxSource.transform.SetParent(fadeCarryObj.transform, false);
+        }
+
+        Canvas canvas = fadeCarryObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 999;
+
+        GameObject panelObj = new GameObject("BlackFadePanel");
+        panelObj.transform.SetParent(fadeCarryObj.transform, false);
+        RectTransform rt = panelObj.AddComponent<RectTransform>();
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.one;
+        rt.offsetMin = Vector2.zero;
+        rt.offsetMax = Vector2.zero;
+
+        Image img = panelObj.AddComponent<Image>();
+        img.color = Color.black;
+        img.raycastTarget = false;
+
+        CanvasGroup cg = fadeCarryObj.AddComponent<CanvasGroup>();
+        cg.alpha = 1f;
+        cg.blocksRaycasts = false;
+
+        CrossSceneFadeRunner runner = fadeCarryObj.AddComponent<CrossSceneFadeRunner>();
+        runner.BeginFadeIn(cg, duration, activeSfxSource);
     }
 
     private class CrossSceneFadeRunner : MonoBehaviour
@@ -776,4 +840,6 @@ public class MainMenu : MonoBehaviour
             Destroy(gameObject);
         }
     }
+
+    #endregion
 }

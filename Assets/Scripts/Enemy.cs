@@ -6,12 +6,22 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class Enemy : EnemyBase
 {
+    #region Serialized Fields
+
     [Header("Flanking / Dodge Settings")]
     [SerializeField] private float dodgeTriggerDistance = 3.5f;
     [SerializeField] private float dodgeForce = 9f;
     [SerializeField] private float dodgeCooldown = 3f;
 
+    #endregion
+
+    #region Protected & Private State
+
     private float nextDodgeTime;
+
+    #endregion
+
+    #region Unity Lifecycle
 
     protected override void Update()
     {
@@ -23,14 +33,19 @@ public class Enemy : EnemyBase
         }
     }
 
+    #endregion
+
+    #region Movement & AI
+
     private void CheckPlayerProximityDodge()
     {
         if (playerController == null || Time.time < nextDodgeTime) return;
 
         Vector2 toPlayer = (Vector2)playerController.transform.position - (Vector2)transform.position;
+        float distSq = toPlayer.sqrMagnitude;
         float triggerDistSq = dodgeTriggerDistance * dodgeTriggerDistance;
 
-        if (toPlayer.sqrMagnitude <= triggerDistSq && toPlayer.sqrMagnitude > 0.0001f)
+        if (distSq <= triggerDistSq && distSq > 0.0001f)
         {
             nextDodgeTime = Time.time + dodgeCooldown;
             Vector2 awayDir = -toPlayer.normalized;
@@ -43,6 +58,10 @@ public class Enemy : EnemyBase
             }
         }
     }
+
+    #endregion
+
+    #region Combat & Targeting
 
     public override void OnDeath(Vector2 deathImpulse = default)
     {
@@ -61,4 +80,6 @@ public class Enemy : EnemyBase
 
         Destroy(gameObject);
     }
+
+    #endregion
 }

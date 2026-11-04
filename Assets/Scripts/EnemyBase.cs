@@ -6,6 +6,8 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Rigidbody2D), typeof(Collider2D))]
 public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashable
 {
+    #region Enums & Constants
+
     public enum State
     {
         Normal,
@@ -15,6 +17,26 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         Diving,
         Dodging
     }
+
+    protected static readonly ContactFilter2D FlockingFilter = new ContactFilter2D { useTriggers = false };
+    protected static readonly Collider2D[] FlockingBuffer = new Collider2D[8];
+    private static readonly Collider2D[] PlatformOverlapBuffer = new Collider2D[8];
+
+    private static readonly Vector2[] OutlineDirections = new Vector2[]
+    {
+        new Vector2( 1f,  0f),
+        new Vector2(-1f,  0f),
+        new Vector2( 0f,  1f),
+        new Vector2( 0f, -1f),
+        new Vector2( 0.707f,  0.707f),
+        new Vector2(-0.707f,  0.707f),
+        new Vector2( 0.707f, -0.707f),
+        new Vector2(-0.707f, -0.707f)
+    };
+
+    #endregion
+
+    #region Serialized Fields
 
     [Header("Base Movement Settings")]
     [SerializeField] protected float moveSpeed = 2.5f;
@@ -74,11 +96,33 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     [SerializeField] protected float targetableOutlineThickness = 0.055f;
     [SerializeField] protected float targetJitterStrength = 0.03f;
 
+    #endregion
+
+    #region Public Properties
+
     public bool IsDead { get; protected set; }
     public bool IsHeavyEnemy => isHeavyEnemy;
     public bool IsGrappleStunned => grappleStunTimer > 0f;
     public bool IsTarget => isTarget;
     public State CurrentState => currentState;
+
+    protected virtual float CurrentMoveSpeed => moveSpeed;
+
+    protected static Camera MainCamera
+    {
+        get
+        {
+            if (cachedMainCamera == null)
+            {
+                cachedMainCamera = Camera.main;
+            }
+            return cachedMainCamera;
+        }
+    }
+
+    #endregion
+
+    #region Protected & Private State
 
     protected State currentState = State.Normal;
     protected int jumpsLeft;
@@ -95,8 +139,6 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     protected bool wasCeilingRunning;
     protected float defaultGravityScale = 1f;
     protected float stuckTimer = 0f;
-    protected static readonly ContactFilter2D FlockingFilter = new ContactFilter2D { useTriggers = false };
-    protected static readonly Collider2D[] FlockingBuffer = new Collider2D[8];
 
     protected Rigidbody2D rb;
     protected Collider2D col;
@@ -104,37 +146,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     protected PixelSpriteEffect pixelEffect;
     protected PlayerController playerController;
     protected Color originalColor = Color.white;
+
     private Material originalSpriteMaterial;
     private Vector3 originalSpriteLocalPos;
-
     private GameObject outlineContainer;
     private SpriteRenderer[] outlineRenderers;
+
     private static Material sharedOutlineMaterial;
     private static Camera cachedMainCamera;
-    protected static Camera MainCamera
-    {
-        get
-        {
-            if (cachedMainCamera == null)
-            {
-                cachedMainCamera = Camera.main;
-            }
-            return cachedMainCamera;
-        }
-    }
-    private static readonly Vector2[] OutlineDirections = new Vector2[]
-    {
-        new Vector2( 1f,  0f),
-        new Vector2(-1f,  0f),
-        new Vector2( 0f,  1f),
-        new Vector2( 0f, -1f),
-        new Vector2( 0.707f,  0.707f),
-        new Vector2(-0.707f,  0.707f),
-        new Vector2( 0.707f, -0.707f),
-        new Vector2(-0.707f, -0.707f)
-    };
 
-    protected virtual float CurrentMoveSpeed => moveSpeed;
+    #endregion
+
+    #region Unity Lifecycle
 
     protected virtual void Awake()
     {
@@ -143,9 +166,11 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         {
             defaultGravityScale = rb.gravityScale;
         }
+
         Collider2D[] colliders = GetComponents<Collider2D>();
-        foreach (var c in colliders)
+        for (int i = 0; i < colliders.Length; i++)
         {
+            Collider2D c = colliders[i];
             if (c != null && !c.isTrigger)
             {
                 col = c;
@@ -166,8 +191,9 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
 
         // Find the main enemy SpriteRenderer (excluding any legacy targetIndicator object)
         SpriteRenderer[] allRenderers = GetComponentsInChildren<SpriteRenderer>(true);
-        foreach (SpriteRenderer sr in allRenderers)
+        for (int i = 0; i < allRenderers.Length; i++)
         {
+            SpriteRenderer sr = allRenderers[i];
             if (targetIndicator != null && (sr.gameObject == targetIndicator || sr.transform.IsChildOf(targetIndicator.transform)))
             {
                 continue;
@@ -185,6 +211,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             {
                 pixelEffect = spriteRenderer.gameObject.AddComponent<PixelSpriteEffect>();
             }
+
             if (pixelEffect != null)
             {
                 pixelEffect.OutlineColor = targetableOutlineColor;
@@ -200,54 +227,6 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         {
             telegraphColor = Color.red;
         }
-    }
-
-    private void CreateSpriteOutlineIndicator()
-    {
-        if (spriteRenderer == null) return;
-
-        if (sharedOutlineMaterial == null)
-        {
-            Shader solidShader = Shader.Find("GUI/Text Shader");
-            if (solidShader != null)
-            {
-                sharedOutlineMaterial = new Material(solidShader);
-            }
-        }
-
-        outlineContainer = new GameObject("SpriteOutlineIndicator");
-        outlineContainer.transform.SetParent(spriteRenderer.transform, false);
-        outlineContainer.transform.localPosition = Vector3.zero;
-        outlineContainer.transform.localRotation = Quaternion.identity;
-        outlineContainer.transform.localScale = Vector3.one;
-
-        outlineRenderers = new SpriteRenderer[OutlineDirections.Length];
-        for (int i = 0; i < OutlineDirections.Length; i++)
-        {
-            GameObject partObj = new GameObject($"Outline_{i}");
-            partObj.transform.SetParent(outlineContainer.transform, false);
-            partObj.transform.localPosition = (Vector3)(OutlineDirections[i] * targetableOutlineThickness);
-            partObj.transform.localRotation = Quaternion.identity;
-            partObj.transform.localScale = Vector3.one;
-
-            SpriteRenderer sr = partObj.AddComponent<SpriteRenderer>();
-            if (sharedOutlineMaterial != null)
-            {
-                sr.sharedMaterial = sharedOutlineMaterial;
-            }
-            else
-            {
-                sr.sharedMaterial = spriteRenderer.sharedMaterial;
-            }
-
-            sr.sprite = spriteRenderer.sprite;
-            sr.color = targetableOutlineColor;
-            sr.sortingLayerID = spriteRenderer.sortingLayerID;
-            sr.sortingOrder = spriteRenderer.sortingOrder - 1;
-            outlineRenderers[i] = sr;
-        }
-
-        outlineContainer.SetActive(false);
     }
 
     protected virtual void Start()
@@ -280,159 +259,30 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         Movement();
     }
 
-    #region Attack & Collision Logic
-
-    protected virtual void OnCollisionEnter2D(Collision2D collision)
+    protected virtual void LateUpdate()
     {
-        if (IsDead) return;
-
-        if (HandleThrownImpact(collision))
+        if (IsDead || outlineContainer == null || !outlineContainer.activeSelf || spriteRenderer == null || outlineRenderers == null)
         {
             return;
         }
 
-        HandlePlayerContact(collision);
-    }
-
-    protected virtual void OnCollisionStay2D(Collision2D collision)
-    {
-        HandlePlayerContact(collision);
-    }
-
-    protected virtual bool HandleThrownImpact(Collision2D collision)
-    {
-        if (!IsGrappleStunned || !wasKickedByPlayer) return false;
-
-        float impactSpeed = collision.relativeVelocity.magnitude;
-        if (impactSpeed < wallSlamSpeedThreshold) return false;
-
-        // Domino impact into another enemy
-        if (collision.gameObject.TryGetComponent<EnemyBase>(out EnemyBase otherEnemy) && !otherEnemy.IsDead)
+        for (int i = 0; i < outlineRenderers.Length; i++)
         {
-            Vector2 dominoDir = (otherEnemy.transform.position - transform.position).normalized;
-            otherEnemy.OnDeath(dominoDir);
-            OnDeath(-dominoDir);
-            return true;
-        }
+            SpriteRenderer sr = outlineRenderers[i];
+            if (sr == null) continue;
 
-        // High-speed wall/ground slam after being Grapple-Kicked
-        if (dieOnHighSpeedWallSlam && ((1 << collision.gameObject.layer) & groundLayer) != 0)
-        {
-            Vector2 bounceNormal = collision.contactCount > 0 ? collision.GetContact(0).normal : Vector2.up;
-            OnDeath(bounceNormal);
-            return true;
-        }
-
-        return false;
-    }
-
-    protected virtual void HandlePlayerContact(Collision2D collision)
-    {
-        if (IsDead) return;
-
-        if (collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
-        {
-            // Check if the player is executing a high-speed Grapple Swing Kick / Momentum Bash
-            if (player.TryExecuteGrappleKick(this))
-            {
-                return;
-            }
-
-            // Do not deal contact damage while stunned from being yanked/kicked or while player has immunity frames
-            if (IsGrappleStunned || player.IsImmune) return;
-
-            if (Time.time >= lastAttackTime + attackCooldown)
-            {
-                lastAttackTime = Time.time;
-
-                // Deal extra damage if in Diving state
-                float damageToDeal = (currentState == State.Diving) ? contactDamage * 1.5f : contactDamage;
-                player.TakeDamage(damageToDeal);
-
-                // Apply physical knockback push to the player
-                if (collision.gameObject.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
-                {
-                    Vector2 knockbackDir = (player.transform.position - transform.position).normalized;
-                    if (knockbackDir == Vector2.zero) knockbackDir = Vector2.up;
-                    playerRb.AddForce(knockbackDir * knockbackForce, ForceMode2D.Impulse);
-                }
-
-                // Reset dive state back to normal after landing a hit
-                if (currentState == State.Diving)
-                {
-                    currentState = State.Normal;
-                }
-            }
+            sr.sprite = spriteRenderer.sprite;
+            sr.flipX = spriteRenderer.flipX;
+            sr.flipY = spriteRenderer.flipY;
+            sr.color = targetableOutlineColor;
+            sr.sortingLayerID = spriteRenderer.sortingLayerID;
+            sr.sortingOrder = spriteRenderer.sortingOrder - 1;
         }
     }
 
     #endregion
 
-    public virtual void OnPointerEnter(PointerEventData eventData)
-    {
-        TrySelectTarget();
-    }
-
-    protected virtual void CheckMouseHover()
-    {
-        if (isTarget || PlayerController.Instance == null || !PlayerController.Instance.IsInMode) return;
-
-        Camera cam = MainCamera;
-        if (cam != null && Mouse.current != null && col != null)
-        {
-            Vector2 mouseWorldPos = cam.ScreenToWorldPoint(Mouse.current.position.ReadValue());
-            if (col.OverlapPoint(mouseWorldPos))
-            {
-                TrySelectTarget();
-            }
-        }
-    }
-
-    public virtual void TrySelectTarget()
-    {
-        if (IsDead || isTarget) return;
-
-        if (PlayerController.Instance != null && PlayerController.Instance.IsInMode)
-        {
-            PlayerController.Instance.TargetSetup(transform);
-            isTarget = true;
-
-            if (pixelEffect != null)
-            {
-                pixelEffect.SetOutline(true, targetableOutlineColor, 2f, PixelSpriteEffect.OutlineMode.Both);
-                pixelEffect.Flash(0.08f, Color.white);
-            }
-            else
-
-            if (spriteRenderer != null)
-            {
-                if (sharedOutlineMaterial != null)
-                {
-                    spriteRenderer.sharedMaterial = sharedOutlineMaterial;
-                }
-                spriteRenderer.color = targetableOutlineColor;
-            }
-
-            if (outlineContainer != null)
-            {
-                outlineContainer.SetActive(false);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Triggers an arcade damage or impact flash using the Pixel2D shader.
-    /// </summary>
-    public virtual void TriggerHitFlash(float duration = 0.12f, Color? flashColor = null)
-    {
-        if (pixelEffect != null)
-        {
-            pixelEffect.Flash(duration, flashColor ?? Color.white);
-        }
-    }
-
-    public abstract void OnDeath(Vector2 deathImpulse = default);
-    public virtual void OnSlashed(Vector2 slashVector) => OnDeath(slashVector);
+    #region Movement & AI
 
     protected virtual void Movement()
     {
@@ -477,7 +327,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
                 if (rb != null)
                 {
                     rb.gravityScale = defaultGravityScale;
-                    rb.AddForce(dir * speed * 2.5f);
+                    rb.AddForce(dir * (speed * 2.5f));
                 }
                 break;
 
@@ -837,11 +687,22 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     public virtual bool TryDropThroughPlatform()
     {
         if (col == null) return false;
-        Vector2 checkPos = new Vector2(col.bounds.center.x, col.bounds.min.y - 0.05f);
-        Collider2D[] hits = Physics2D.OverlapCircleAll(checkPos, 0.25f, groundLayer);
-        foreach (Collider2D hit in hits)
+
+        Bounds bounds = col.bounds;
+        Vector2 checkPos = new Vector2(bounds.center.x, bounds.min.y - 0.05f);
+        ContactFilter2D platformFilter = new ContactFilter2D
         {
+            useTriggers = false,
+            useLayerMask = true,
+            layerMask = groundLayer
+        };
+
+        int hitCount = Physics2D.OverlapCircle(checkPos, 0.25f, platformFilter, PlatformOverlapBuffer);
+        for (int i = 0; i < hitCount; i++)
+        {
+            Collider2D hit = PlatformOverlapBuffer[i];
             if (hit == null || hit.isTrigger) continue;
+
             Platformer platform = hit.GetComponentInParent<Platformer>();
             if (platform != null)
             {
@@ -974,7 +835,6 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         }
     }
 
-    
     protected virtual IEnumerator TelegraphAndDive()
     {
         currentState = State.Telegraphing;
@@ -1009,7 +869,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         {
             Vector2 diveDir = (playerController.transform.position - transform.position).normalized;
             if (diveDir.sqrMagnitude < 0.01f) diveDir = new Vector2(-wallRunDirection, 0.5f).normalized;
-            rb.linearVelocity = diveDir * jumpForce * 1.5f;
+            rb.linearVelocity = diveDir * (jumpForce * 1.5f);
 
             if (diveDir.y < -0.2f)
             {
@@ -1031,113 +891,73 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         lastJumpTime = Time.time;
     }
 
-    protected virtual void LateUpdate()
+    #endregion
+
+    #region Combat & Targeting
+
+    public virtual void OnPointerEnter(PointerEventData eventData)
     {
-        if (IsDead || outlineContainer == null || !outlineContainer.activeSelf || spriteRenderer == null || outlineRenderers == null)
+        TrySelectTarget();
+    }
+
+    protected virtual void CheckMouseHover()
+    {
+        if (isTarget || PlayerController.Instance == null || !PlayerController.Instance.IsInMode) return;
+
+        Camera cam = MainCamera;
+        if (cam != null && Mouse.current != null && col != null)
         {
-            return;
-        }
-
-        for (int i = 0; i < outlineRenderers.Length; i++)
-        {
-            SpriteRenderer sr = outlineRenderers[i];
-            if (sr == null) continue;
-
-            sr.sprite = spriteRenderer.sprite;
-            sr.flipX = spriteRenderer.flipX;
-            sr.flipY = spriteRenderer.flipY;
-            sr.color = targetableOutlineColor;
-            sr.sortingLayerID = spriteRenderer.sortingLayerID;
-            sr.sortingOrder = spriteRenderer.sortingOrder - 1;
-
+            Vector2 mouseWorldPos = cam.ScreenToWorldPoint(Mouse.current.position.ReadValue());
+            if (col.OverlapPoint(mouseWorldPos))
+            {
+                TrySelectTarget();
+            }
         }
     }
 
-    protected virtual void UpdateTargetIndicator()
+    public virtual void TrySelectTarget()
     {
-        bool inCombatMode = PlayerController.Instance != null && PlayerController.Instance.IsInMode;
+        if (IsDead || isTarget) return;
 
-        if (!inCombatMode && isTarget)
+        if (PlayerController.Instance != null && PlayerController.Instance.IsInMode)
         {
-            isTarget = false;
-            if (pixelEffect != null)
-            {
-                pixelEffect.SetOutline(false);
-            }
-            if (spriteRenderer != null)
-            {
-                if (originalSpriteMaterial != null)
-                {
-                    spriteRenderer.sharedMaterial = originalSpriteMaterial;
-                }
-                spriteRenderer.color = originalColor;
-                spriteRenderer.transform.localPosition = originalSpriteLocalPos;
-            }
-        }
-        else if (inCombatMode && isTarget && spriteRenderer != null)
-        {
+            PlayerController.Instance.TargetSetup(transform);
+            isTarget = true;
+
             if (pixelEffect != null)
             {
                 pixelEffect.SetOutline(true, targetableOutlineColor, 2f, PixelSpriteEffect.OutlineMode.Both);
+                pixelEffect.Flash(0.08f, Color.white);
             }
-            else
-            if (sharedOutlineMaterial != null && spriteRenderer.sharedMaterial != sharedOutlineMaterial)
+            else if (spriteRenderer != null)
             {
-                spriteRenderer.sharedMaterial = sharedOutlineMaterial;
+                if (sharedOutlineMaterial != null)
+                {
+                    spriteRenderer.sharedMaterial = sharedOutlineMaterial;
+                }
+                spriteRenderer.color = targetableOutlineColor;
             }
-            spriteRenderer.color = targetableOutlineColor;
 
-            Vector2 jitterOffset = Random.insideUnitCircle * targetJitterStrength;
-            spriteRenderer.transform.localPosition = originalSpriteLocalPos + new Vector3(jitterOffset.x, jitterOffset.y, 0f);
+            if (outlineContainer != null)
+            {
+                outlineContainer.SetActive(false);
+            }
         }
+    }
 
-        bool showOutline = inCombatMode && !isTarget;
+    /// <summary>
+    /// Triggers an arcade damage or impact flash using the Pixel2D shader.
+    /// </summary>
+    public virtual void TriggerHitFlash(float duration = 0.12f, Color? flashColor = null)
+    {
         if (pixelEffect != null)
         {
-            if (pixelEffect.OutlineEnabled != showOutline)
-            {
-                pixelEffect.SetOutline(showOutline, targetableOutlineColor, 1.2f, PixelSpriteEffect.OutlineMode.Outer);
-            }
-        }
-        else
-        if (outlineContainer != null && outlineContainer.activeSelf != showOutline)
-        {
-            outlineContainer.SetActive(showOutline);
+            pixelEffect.Flash(duration, flashColor ?? Color.white);
         }
     }
 
-    protected virtual void FlipAndRotate()
-    {
-        if (spriteRenderer == null) return;
-
-        if (currentState == State.WallSticking || currentState == State.Telegraphing)
-        {
-            // Rotate only the child SpriteRenderer (not the root Collider2D) so feet press against the wall and the ninja runs upward
-            transform.rotation = Quaternion.identity;
-            spriteRenderer.flipX = wallRunDirection < 0;
-            spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, wallRunDirection * 90f);
-        }
-        else if (currentState == State.CeilingRunning)
-        {
-            transform.rotation = Quaternion.identity;
-            spriteRenderer.flipX = ceilingRunDirection < 0;
-            spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, 180f);
-        }
-        else
-        {
-            transform.rotation = Quaternion.identity;
-            spriteRenderer.transform.localRotation = Quaternion.identity;
-
-            if (rb.linearVelocityX < -0.1f)
-            {
-                spriteRenderer.flipX = true;
-            }
-            else if (rb.linearVelocityX > 0.1f)
-            {
-                spriteRenderer.flipX = false;
-            }
-        }
-    }
+    public abstract void OnDeath(Vector2 deathImpulse = default);
+    public virtual void OnSlashed(Vector2 slashVector) => OnDeath(slashVector);
 
     public virtual void OnGrappled(Vector2 pullForce)
     {
@@ -1148,6 +968,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         if (rb != null)
         {
             rb.gravityScale = defaultGravityScale;
+            rb.linearVelocity = pullForce;
         }
 
         if (spriteRenderer != null)
@@ -1160,7 +981,6 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         }
 
         TriggerHitFlash(0.12f, Color.white);
-        rb.linearVelocity = pullForce;
     }
 
     public virtual void OnGrappleKicked(Vector2 kickImpulse)
@@ -1172,6 +992,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         if (rb != null)
         {
             rb.gravityScale = defaultGravityScale;
+            rb.linearVelocity = kickImpulse;
         }
 
         if (spriteRenderer != null)
@@ -1184,7 +1005,27 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         }
 
         TriggerHitFlash(0.18f, new Color(1f, 0.9f, 0.35f, 1f));
-        rb.linearVelocity = kickImpulse;
+    }
+
+    #endregion
+
+    #region Collision & Physics
+
+    protected virtual void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (IsDead) return;
+
+        if (HandleThrownImpact(collision))
+        {
+            return;
+        }
+
+        HandlePlayerContact(collision);
+    }
+
+    protected virtual void OnCollisionStay2D(Collision2D collision)
+    {
+        HandlePlayerContact(collision);
     }
 
     // Add these alongside OnCollisionEnter2D inside EnemyBase.cs to support Trigger Colliders:
@@ -1196,6 +1037,73 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     protected virtual void OnTriggerStay2D(Collider2D other)
     {
         HandlePlayerTriggerContact(other);
+    }
+
+    protected virtual bool HandleThrownImpact(Collision2D collision)
+    {
+        if (!IsGrappleStunned || !wasKickedByPlayer) return false;
+
+        float impactSpeedSq = collision.relativeVelocity.sqrMagnitude;
+        if (impactSpeedSq < wallSlamSpeedThreshold * wallSlamSpeedThreshold) return false;
+
+        // Domino impact into another enemy
+        if (collision.gameObject.TryGetComponent<EnemyBase>(out EnemyBase otherEnemy) && !otherEnemy.IsDead)
+        {
+            Vector2 dominoDir = (otherEnemy.transform.position - transform.position).normalized;
+            otherEnemy.OnDeath(dominoDir);
+            OnDeath(-dominoDir);
+            return true;
+        }
+
+        // High-speed wall/ground slam after being Grapple-Kicked
+        if (dieOnHighSpeedWallSlam && ((1 << collision.gameObject.layer) & groundLayer) != 0)
+        {
+            Vector2 bounceNormal = collision.contactCount > 0 ? collision.GetContact(0).normal : Vector2.up;
+            OnDeath(bounceNormal);
+            return true;
+        }
+
+        return false;
+    }
+
+    protected virtual void HandlePlayerContact(Collision2D collision)
+    {
+        if (IsDead) return;
+
+        if (collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
+        {
+            // Check if the player is executing a high-speed Grapple Swing Kick / Momentum Bash
+            if (player.TryExecuteGrappleKick(this))
+            {
+                return;
+            }
+
+            // Do not deal contact damage while stunned from being yanked/kicked or while player has immunity frames
+            if (IsGrappleStunned || player.IsImmune) return;
+
+            if (Time.time >= lastAttackTime + attackCooldown)
+            {
+                lastAttackTime = Time.time;
+
+                // Deal extra damage if in Diving state
+                float damageToDeal = (currentState == State.Diving) ? contactDamage * 1.5f : contactDamage;
+                player.TakeDamage(damageToDeal);
+
+                // Apply physical knockback push to the player
+                if (collision.gameObject.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
+                {
+                    Vector2 knockbackDir = (player.transform.position - transform.position).normalized;
+                    if (knockbackDir == Vector2.zero) knockbackDir = Vector2.up;
+                    playerRb.AddForce(knockbackDir * knockbackForce, ForceMode2D.Impulse);
+                }
+
+                // Reset dive state back to normal after landing a hit
+                if (currentState == State.Diving)
+                {
+                    currentState = State.Normal;
+                }
+            }
+        }
     }
 
     protected virtual void HandlePlayerTriggerContact(Collider2D other)
@@ -1232,4 +1140,137 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             }
         }
     }
+
+    #endregion
+
+    #region Visuals & Helpers
+
+    private void CreateSpriteOutlineIndicator()
+    {
+        if (spriteRenderer == null) return;
+
+        if (sharedOutlineMaterial == null)
+        {
+            Shader solidShader = Shader.Find("GUI/Text Shader");
+            if (solidShader != null)
+            {
+                sharedOutlineMaterial = new Material(solidShader);
+            }
+        }
+
+        outlineContainer = new GameObject("SpriteOutlineIndicator");
+        outlineContainer.transform.SetParent(spriteRenderer.transform, false);
+        outlineContainer.transform.localPosition = Vector3.zero;
+        outlineContainer.transform.localRotation = Quaternion.identity;
+        outlineContainer.transform.localScale = Vector3.one;
+
+        outlineRenderers = new SpriteRenderer[OutlineDirections.Length];
+        for (int i = 0; i < OutlineDirections.Length; i++)
+        {
+            GameObject partObj = new GameObject($"Outline_{i}");
+            partObj.transform.SetParent(outlineContainer.transform, false);
+            partObj.transform.localPosition = (Vector3)(OutlineDirections[i] * targetableOutlineThickness);
+            partObj.transform.localRotation = Quaternion.identity;
+            partObj.transform.localScale = Vector3.one;
+
+            SpriteRenderer sr = partObj.AddComponent<SpriteRenderer>();
+            sr.sharedMaterial = sharedOutlineMaterial != null ? sharedOutlineMaterial : spriteRenderer.sharedMaterial;
+            sr.sprite = spriteRenderer.sprite;
+            sr.color = targetableOutlineColor;
+            sr.sortingLayerID = spriteRenderer.sortingLayerID;
+            sr.sortingOrder = spriteRenderer.sortingOrder - 1;
+            outlineRenderers[i] = sr;
+        }
+
+        outlineContainer.SetActive(false);
+    }
+
+    protected virtual void UpdateTargetIndicator()
+    {
+        bool inCombatMode = PlayerController.Instance != null && PlayerController.Instance.IsInMode;
+
+        if (!inCombatMode && isTarget)
+        {
+            isTarget = false;
+            if (pixelEffect != null)
+            {
+                pixelEffect.SetOutline(false);
+            }
+            if (spriteRenderer != null)
+            {
+                if (originalSpriteMaterial != null)
+                {
+                    spriteRenderer.sharedMaterial = originalSpriteMaterial;
+                }
+                spriteRenderer.color = originalColor;
+                spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+            }
+        }
+        else if (inCombatMode && isTarget && spriteRenderer != null)
+        {
+            if (pixelEffect != null)
+            {
+                pixelEffect.SetOutline(true, targetableOutlineColor, 2f, PixelSpriteEffect.OutlineMode.Both);
+            }
+            else if (sharedOutlineMaterial != null && spriteRenderer.sharedMaterial != sharedOutlineMaterial)
+            {
+                spriteRenderer.sharedMaterial = sharedOutlineMaterial;
+            }
+            spriteRenderer.color = targetableOutlineColor;
+
+            Vector2 jitterOffset = Random.insideUnitCircle * targetJitterStrength;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos + new Vector3(jitterOffset.x, jitterOffset.y, 0f);
+        }
+
+        bool showOutline = inCombatMode && !isTarget;
+        if (pixelEffect != null)
+        {
+            if (pixelEffect.OutlineEnabled != showOutline)
+            {
+                pixelEffect.SetOutline(showOutline, targetableOutlineColor, 1.2f, PixelSpriteEffect.OutlineMode.Outer);
+            }
+        }
+        else if (outlineContainer != null && outlineContainer.activeSelf != showOutline)
+        {
+            outlineContainer.SetActive(showOutline);
+        }
+    }
+
+    protected virtual void FlipAndRotate()
+    {
+        if (spriteRenderer == null) return;
+
+        if (currentState == State.WallSticking || currentState == State.Telegraphing)
+        {
+            // Rotate only the child SpriteRenderer (not the root Collider2D) so feet press against the wall and the ninja runs upward
+            transform.rotation = Quaternion.identity;
+            spriteRenderer.flipX = wallRunDirection < 0;
+            spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, wallRunDirection * 90f);
+        }
+        else if (currentState == State.CeilingRunning)
+        {
+            transform.rotation = Quaternion.identity;
+            spriteRenderer.flipX = ceilingRunDirection < 0;
+            spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, 180f);
+        }
+        else
+        {
+            transform.rotation = Quaternion.identity;
+            spriteRenderer.transform.localRotation = Quaternion.identity;
+
+            if (rb != null)
+            {
+                if (rb.linearVelocityX < -0.1f)
+                {
+                    spriteRenderer.flipX = true;
+                }
+                else if (rb.linearVelocityX > 0.1f)
+                {
+                    spriteRenderer.flipX = false;
+                }
+            }
+        }
+    }
+
+    #endregion
 }

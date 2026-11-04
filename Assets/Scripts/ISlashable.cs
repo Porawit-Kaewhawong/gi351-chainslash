@@ -5,10 +5,13 @@ using UnityEngine;
 /// </summary>
 public interface ISlashable
 {
+    #region Interface Methods
+
     /// <summary>
     /// Invoked when the slash line passes through this object upon exiting Chain Slash mode.
     /// </summary>
     /// <param name="slashVector">The direction of the slash trajectory.</param>
     void OnSlashed(Vector2 slashVector);
-}
 
+    #endregion
+}

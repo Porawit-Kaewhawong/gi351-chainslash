@@ -4,6 +4,15 @@ using UnityEngine;
 [RequireComponent(typeof(Collider2D))]
 public class Shuriken : MonoBehaviour
 {
+    #region Enums & Constants
+
+    private const float MaxAutoAimDistSq = 20f * 20f;
+    private const float MinAutoAimDistSq = 0.1f * 0.1f;
+
+    #endregion
+
+    #region Serialized Fields
+
     [Header("Shuriken Properties")]
     [SerializeField] private float speed = 11f;
     [SerializeField] private float damage = 12f;
@@ -29,8 +38,19 @@ public class Shuriken : MonoBehaviour
     [SerializeField] private float reflectDamageMultiplier = 2.5f;
     [SerializeField] private float reflectRadius = 0.85f;
 
+    #endregion
+
+    #region Public Properties
+
+    public bool IsReflected => isReflected;
+
+    #endregion
+
+    #region Protected & Private State
+
     private Vector2 moveDirection = Vector2.right;
     private Rigidbody2D rb;
+    private SpriteRenderer spriteRenderer;
     private TrailRenderer trailRenderer;
     private GameObject sourceEnemy;
     private float spawnTime;
@@ -41,9 +61,13 @@ public class Shuriken : MonoBehaviour
     private Vector3 baseScale = Vector3.one;
     private Coroutine punchScaleCoroutine;
     private Camera cachedCamera;
-    private static Material sharedTrailMaterial;
 
-    public bool IsReflected => isReflected;
+    private static Material sharedTrailMaterial;
+    private static Sprite cachedSprite;
+
+    #endregion
+
+    #region Unity Lifecycle
 
     private void Awake()
     {
@@ -56,6 +80,8 @@ public class Shuriken : MonoBehaviour
             rb.gravityScale = 0f;
             rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         }
+
+        spriteRenderer = GetComponent<SpriteRenderer>();
 
         Collider2D col = GetComponent<Collider2D>();
         if (col != null)
@@ -71,95 +97,6 @@ public class Shuriken : MonoBehaviour
         spawnTime = Time.time;
     }
 
-    public void SetCanDamageEnemies(bool enable, GameObject source = null)
-    {
-        canDamageEnemies = enable;
-        sourceEnemy = source;
-
-        SpriteRenderer sr = GetComponent<SpriteRenderer>();
-        if (sr != null && enable && !isReflected)
-        {
-            sr.color = new Color(1f, 0.65f, 0.25f, 1f);
-        }
-
-        SetupTrail();
-    }
-
-    public void SetupTrail()
-    {
-        if (!enableTrail) return;
-
-        if (trailRenderer == null)
-        {
-            trailRenderer = GetComponent<TrailRenderer>();
-            if (trailRenderer == null)
-            {
-                trailRenderer = gameObject.AddComponent<TrailRenderer>();
-            }
-        }
-
-        trailRenderer.time = trailTime;
-        trailRenderer.startWidth = trailStartWidth;
-        trailRenderer.endWidth = 0f;
-        trailRenderer.minVertexDistance = 0.04f;
-        trailRenderer.autodestruct = false;
-
-        if (trailRenderer.material == null || trailRenderer.material.shader.name == "Standard")
-        {
-            Shader spriteShader = Shader.Find("Sprites/Default");
-            if (spriteShader != null)
-            {
-                if (sharedTrailMaterial == null) sharedTrailMaterial = new Material(spriteShader);
-                trailRenderer.material = sharedTrailMaterial;
-            }
-        }
-
-        Color headColor;
-        Color tailColor;
-
-        if (isReflected)
-        {
-            headColor = reflectColor;
-            tailColor = new Color(reflectColor.r * 0.4f, reflectColor.g * 0.8f, 1f, 0f);
-        }
-        else if (canDamageEnemies)
-        {
-            headColor = new Color(1f, 0.5f, 0.1f, 0.95f);
-            tailColor = new Color(1f, 0.15f, 0.05f, 0f);
-        }
-        else
-        {
-            headColor = trailColor;
-            tailColor = new Color(trailColor.r, trailColor.g, trailColor.b, 0f);
-        }
-
-        Gradient grad = new Gradient();
-        grad.SetKeys(
-            new GradientColorKey[] { new GradientColorKey(headColor, 0f), new GradientColorKey(tailColor, 1f) },
-            new GradientAlphaKey[] { new GradientAlphaKey(headColor.a, 0f), new GradientAlphaKey(0f, 1f) }
-        );
-        trailRenderer.colorGradient = grad;
-
-        SpriteRenderer mainSr = GetComponent<SpriteRenderer>();
-        if (mainSr != null)
-        {
-            trailRenderer.sortingLayerID = mainSr.sortingLayerID;
-            trailRenderer.sortingOrder = mainSr.sortingOrder - 1;
-        }
-    }
-
-    public void Launch(Vector2 direction, float customSpeed = -1f, float customDamage = -1f)
-    {
-        moveDirection = direction.sqrMagnitude > 0.0001f ? direction.normalized : Vector2.right;
-        if (customSpeed > 0f) speed = customSpeed;
-        if (customDamage > 0f) damage = customDamage;
-
-        if (rb != null)
-        {
-            rb.linearVelocity = moveDirection * speed;
-        }
-    }
-
     private void Update()
     {
         // Check mouse swipe reflection during Chain Slash mode
@@ -171,7 +108,7 @@ public class Shuriken : MonoBehaviour
         // Backup movement if no Rigidbody2D or non-dynamic
         if (rb == null || rb.bodyType != RigidbodyType2D.Dynamic)
         {
-            transform.position += (Vector3)(moveDirection * speed * Time.deltaTime);
+            transform.position += (Vector3)(moveDirection * (speed * Time.deltaTime));
         }
 
         // Lifetime expiry
@@ -184,6 +121,36 @@ public class Shuriken : MonoBehaviour
     private void FixedUpdate()
     {
         if (rb != null && rb.bodyType == RigidbodyType2D.Dynamic)
+        {
+            rb.linearVelocity = moveDirection * speed;
+        }
+    }
+
+    #endregion
+
+    #region Movement & Combat
+
+    public void SetCanDamageEnemies(bool enable, GameObject source = null)
+    {
+        canDamageEnemies = enable;
+        sourceEnemy = source;
+
+        if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer != null && enable && !isReflected)
+        {
+            spriteRenderer.color = new Color(1f, 0.65f, 0.25f, 1f);
+        }
+
+        SetupTrail();
+    }
+
+    public void Launch(Vector2 direction, float customSpeed = -1f, float customDamage = -1f)
+    {
+        moveDirection = direction.sqrMagnitude > 0.0001f ? direction.normalized : Vector2.right;
+        if (customSpeed > 0f) speed = customSpeed;
+        if (customDamage > 0f) damage = customDamage;
+
+        if (rb != null)
         {
             rb.linearVelocity = moveDirection * speed;
         }
@@ -211,9 +178,10 @@ public class Shuriken : MonoBehaviour
         Vector2 shurikenPos = transform.position;
         bool isHit = false;
         Vector2 swipeVector = Vector2.zero;
+        float reflectRadiusSq = reflectRadius * reflectRadius;
 
         // Direct proximity check
-        if (Vector2.Distance(shurikenPos, currentMouse) <= reflectRadius)
+        if ((shurikenPos - currentMouse).sqrMagnitude <= reflectRadiusSq)
         {
             isHit = true;
             if (hasLastMousePos)
@@ -224,7 +192,7 @@ public class Shuriken : MonoBehaviour
         // Continuous line sweep check so fast mouse flicks are never missed
         else if (hasLastMousePos)
         {
-            if (DistancePointToSegment(shurikenPos, lastMouseWorld, currentMouse) <= reflectRadius)
+            if (DistancePointToSegmentSq(shurikenPos, lastMouseWorld, currentMouse) <= reflectRadiusSq)
             {
                 isHit = true;
                 swipeVector = currentMouse - lastMouseWorld;
@@ -273,7 +241,7 @@ public class Shuriken : MonoBehaviour
 
         // Boost speed, damage, and spin
         speed = Mathf.Max(speed * reflectSpeedMultiplier, 16f);
-        damage = damage * reflectDamageMultiplier;
+        damage *= reflectDamageMultiplier;
         spinSpeed = -spinSpeed * 1.5f;
         spawnTime = Time.time; // Refresh lifetime
 
@@ -306,15 +274,21 @@ public class Shuriken : MonoBehaviour
         EnemyBase bestTarget = null;
         float bestScore = -1f;
 
+        Vector2 currentPos = transform.position;
+
         for (int i = 0; i < totalCandidates; i++)
         {
-            EnemyBase enemy = (activeCount > 0) ? (activeList[i] != null ? activeList[i].GetComponent<EnemyBase>() : null) : allEnemies[i];
+            EnemyBase enemy = (activeCount > 0)
+                ? (activeList[i] != null ? activeList[i].GetComponent<EnemyBase>() : null)
+                : allEnemies[i];
+
             if (enemy == null || enemy.IsDead || enemy is ArmoredNinjaWeakPoint) continue;
 
-            Vector2 toEnemy = (Vector2)enemy.transform.position - (Vector2)transform.position;
-            float dist = toEnemy.magnitude;
-            if (dist < 0.1f || dist > 20f) continue;
+            Vector2 toEnemy = (Vector2)enemy.transform.position - currentPos;
+            float distSq = toEnemy.sqrMagnitude;
+            if (distSq < MinAutoAimDistSq || distSq > MaxAutoAimDistSq) continue;
 
+            float dist = Mathf.Sqrt(distSq);
             Vector2 dirToEnemy = toEnemy / dist;
             float dot = Vector2.Dot(defaultDir, dirToEnemy);
 
@@ -332,79 +306,15 @@ public class Shuriken : MonoBehaviour
 
         if (bestTarget != null)
         {
-            return ((Vector2)bestTarget.transform.position - (Vector2)transform.position).normalized;
+            return ((Vector2)bestTarget.transform.position - currentPos).normalized;
         }
 
         return defaultDir;
     }
 
-    private void ApplyReflectVisuals()
-    {
-        SpriteRenderer sr = GetComponent<SpriteRenderer>();
-        if (sr != null)
-        {
-            sr.color = reflectColor;
-        }
+    #endregion
 
-        if (trailRenderer != null)
-        {
-            Gradient grad = new Gradient();
-            Color headColor = reflectColor;
-            Color tailColor = new Color(reflectColor.r * 0.4f, reflectColor.g * 0.8f, 1f, 0f);
-
-            grad.SetKeys(
-                new GradientColorKey[] { new GradientColorKey(headColor, 0f), new GradientColorKey(tailColor, 1f) },
-                new GradientAlphaKey[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(0f, 1f) }
-            );
-
-            trailRenderer.colorGradient = grad;
-            trailRenderer.startWidth = trailStartWidth * 1.4f;
-        }
-
-        if (hitEffectPrefab != null)
-        {
-            Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
-        }
-    }
-
-    private void PlayReflectAudio()
-    {
-        AudioClip clipToPlay = reflectSFX != null ? reflectSFX : hitSFX;
-
-        if (PlayerController.Instance != null && clipToPlay != null)
-        {
-            PlayerController.Instance.PlayPitchedSFX(clipToPlay, Random.Range(1.15f, 1.35f), 1f);
-        }
-    }
-
-    private IEnumerator PunchScaleRoutine()
-    {
-        float elapsed = 0f;
-        float duration = 0.15f;
-        Vector3 targetScale = baseScale * 1.5f;
-
-        while (elapsed < duration)
-        {
-            elapsed += Time.unscaledDeltaTime;
-            float t = elapsed / duration;
-            transform.localScale = Vector3.Lerp(targetScale, baseScale, t);
-            yield return null;
-        }
-
-        transform.localScale = baseScale;
-        punchScaleCoroutine = null;
-    }
-
-    private static float DistancePointToSegment(Vector2 point, Vector2 a, Vector2 b)
-    {
-        Vector2 ab = b - a;
-        float lenSq = ab.sqrMagnitude;
-        if (lenSq < 0.0001f) return Vector2.Distance(point, a);
-
-        float t = Mathf.Clamp01(Vector2.Dot(point - a, ab) / lenSq);
-        Vector2 projection = a + t * ab;
-        return Vector2.Distance(point, projection);
-    }
+    #region Collision & Physics
 
     private void OnMouseEnter()
     {
@@ -479,7 +389,7 @@ public class Shuriken : MonoBehaviour
             }
 
             EnemyBase hitEnemy = other.GetComponentInParent<EnemyBase>();
-            if (hitEnemy != null && !hitEnemy.IsDead && (!isReflected && sourceEnemy != null && hitEnemy.gameObject == sourceEnemy ? false : true))
+            if (hitEnemy != null && !hitEnemy.IsDead && (isReflected || sourceEnemy == null || hitEnemy.gameObject != sourceEnemy))
             {
                 hasHit = true;
                 if (hitEnemy is LegendarySamurai bossTarget)
@@ -525,6 +435,142 @@ public class Shuriken : MonoBehaviour
         }
     }
 
+    #endregion
+
+    #region Visuals, Audio & Helpers
+
+    public void SetupTrail()
+    {
+        if (!enableTrail) return;
+
+        if (trailRenderer == null && !TryGetComponent<TrailRenderer>(out trailRenderer))
+        {
+            trailRenderer = gameObject.AddComponent<TrailRenderer>();
+        }
+
+        trailRenderer.time = trailTime;
+        trailRenderer.startWidth = trailStartWidth;
+        trailRenderer.endWidth = 0f;
+        trailRenderer.minVertexDistance = 0.04f;
+        trailRenderer.autodestruct = false;
+
+        if (trailRenderer.material == null || trailRenderer.material.shader.name == "Standard")
+        {
+            Shader spriteShader = Shader.Find("Sprites/Default");
+            if (spriteShader != null)
+            {
+                if (sharedTrailMaterial == null) sharedTrailMaterial = new Material(spriteShader);
+                trailRenderer.material = sharedTrailMaterial;
+            }
+        }
+
+        Color headColor;
+        Color tailColor;
+
+        if (isReflected)
+        {
+            headColor = reflectColor;
+            tailColor = new Color(reflectColor.r * 0.4f, reflectColor.g * 0.8f, 1f, 0f);
+        }
+        else if (canDamageEnemies)
+        {
+            headColor = new Color(1f, 0.5f, 0.1f, 0.95f);
+            tailColor = new Color(1f, 0.15f, 0.05f, 0f);
+        }
+        else
+        {
+            headColor = trailColor;
+            tailColor = new Color(trailColor.r, trailColor.g, trailColor.b, 0f);
+        }
+
+        Gradient grad = new Gradient();
+        grad.SetKeys(
+            new GradientColorKey[] { new GradientColorKey(headColor, 0f), new GradientColorKey(tailColor, 1f) },
+            new GradientAlphaKey[] { new GradientAlphaKey(headColor.a, 0f), new GradientAlphaKey(0f, 1f) }
+        );
+        trailRenderer.colorGradient = grad;
+
+        if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer != null)
+        {
+            trailRenderer.sortingLayerID = spriteRenderer.sortingLayerID;
+            trailRenderer.sortingOrder = spriteRenderer.sortingOrder - 1;
+        }
+    }
+
+    private void ApplyReflectVisuals()
+    {
+        if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.color = reflectColor;
+        }
+
+        if (trailRenderer != null)
+        {
+            Gradient grad = new Gradient();
+            Color headColor = reflectColor;
+            Color tailColor = new Color(reflectColor.r * 0.4f, reflectColor.g * 0.8f, 1f, 0f);
+
+            grad.SetKeys(
+                new GradientColorKey[] { new GradientColorKey(headColor, 0f), new GradientColorKey(tailColor, 1f) },
+                new GradientAlphaKey[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(0f, 1f) }
+            );
+
+            trailRenderer.colorGradient = grad;
+            trailRenderer.startWidth = trailStartWidth * 1.4f;
+        }
+
+        if (hitEffectPrefab != null)
+        {
+            Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
+        }
+    }
+
+    private void PlayReflectAudio()
+    {
+        AudioClip clipToPlay = reflectSFX != null ? reflectSFX : hitSFX;
+
+        if (PlayerController.Instance != null && clipToPlay != null)
+        {
+            PlayerController.Instance.PlayPitchedSFX(clipToPlay, Random.Range(1.15f, 1.35f), 1f);
+        }
+    }
+
+    private IEnumerator PunchScaleRoutine()
+    {
+        float elapsed = 0f;
+        const float duration = 0.15f;
+        Vector3 targetScale = baseScale * 1.5f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = elapsed / duration;
+            transform.localScale = Vector3.Lerp(targetScale, baseScale, t);
+            yield return null;
+        }
+
+        transform.localScale = baseScale;
+        punchScaleCoroutine = null;
+    }
+
+    private static float DistancePointToSegmentSq(Vector2 point, Vector2 a, Vector2 b)
+    {
+        Vector2 ab = b - a;
+        float lenSq = ab.sqrMagnitude;
+        if (lenSq < 0.0001f) return (point - a).sqrMagnitude;
+
+        float t = Mathf.Clamp01(Vector2.Dot(point - a, ab) / lenSq);
+        Vector2 projection = a + t * ab;
+        return (point - projection).sqrMagnitude;
+    }
+
+    private static float DistancePointToSegment(Vector2 point, Vector2 a, Vector2 b)
+    {
+        return Mathf.Sqrt(DistancePointToSegmentSq(point, a, b));
+    }
+
     private void PlayHitFeedback(Vector3 position)
     {
         if (hitEffectPrefab != null)
@@ -538,12 +584,11 @@ public class Shuriken : MonoBehaviour
         }
     }
 
-    private static Sprite cachedSprite;
     public static Sprite GetOrCreateShurikenSprite()
     {
         if (cachedSprite != null) return cachedSprite;
 
-        int size = 16;
+        const int size = 16;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Point;
         Color clear = new Color(0, 0, 0, 0);
@@ -559,7 +604,7 @@ public class Shuriken : MonoBehaviour
             }
         }
 
-        int center = size / 2;
+        const int center = size / 2;
 
         // Central hub
         for (int y = center - 1; y <= center; y++)
@@ -619,5 +664,6 @@ public class Shuriken : MonoBehaviour
 
         return obj;
     }
-}
 
+    #endregion
+}

@@ -17,7 +17,26 @@ using TMPro;
 [DisallowMultipleComponent]
 public class GameOverPanel : MonoBehaviour
 {
+    #region Singleton & Constants
+
     public static GameOverPanel Instance { get; private set; }
+
+    private const string MainMenuSceneName = "Stage0";
+    private const string DynamicTransitionOverlayName = "DynamicTransitionOverlay";
+    private const string DynamicSlashWipeFXName = "DynamicSlashWipeFX";
+    private const float DuplicateSfxCooldown = 0.2f;
+    private const int BlackoutSortingOrder = 900;
+    private const int SpotlightSortingOrder = 920;
+    private const int PlayerBoostedSortingOrder = 950;
+    private const int GameOverCanvasSortingOrder = 1000;
+
+    private static Sprite cachedSolidWhiteSprite;
+    private static Sprite cachedSpotlightSprite;
+    private static TMP_FontAsset cachedFontAsset;
+
+    #endregion
+
+    #region Serialized Fields
 
     [Header("UI References (Optional - Auto Generated if not assigned)")]
     [Tooltip("Root Canvas for Game Over display.")]
@@ -109,6 +128,10 @@ public class GameOverPanel : MonoBehaviour
     [SerializeField] private Color shortcutHintColor = new Color(0.55f, 0.62f, 0.72f, 0.8f);
 #pragma warning restore CS0414
 
+    #endregion
+
+    #region Private State
+
     // Runtime state
     private bool isGameOverActive = false;
     private bool isTransitioning = false;
@@ -135,9 +158,9 @@ public class GameOverPanel : MonoBehaviour
     private float lastPlayedSFXTime = -10f;
     private AudioClip lastPlayedSFXClip;
 
-    private static Sprite cachedSolidWhiteSprite;
-    private static Sprite cachedSpotlightSprite;
-    private static TMP_FontAsset cachedFontAsset;
+    #endregion
+
+    #region Unity Lifecycle
 
     public static GameOverPanel GetOrCreateInstance()
     {
@@ -202,6 +225,10 @@ public class GameOverPanel : MonoBehaviour
         // Interaction is strictly via UI button clicks.
     }
 
+    #endregion
+
+    #region Public API & Scene Actions
+
     [ContextMenu("Preview Game Over in Play Mode")]
     private void PreviewGameOver()
     {
@@ -211,9 +238,13 @@ public class GameOverPanel : MonoBehaviour
             return;
         }
 
-        PlayerController player = PlayerController.Instance != null ? PlayerController.Instance : FindFirstObjectByType<PlayerController>();
+        PlayerController player = PlayerController.Instance != null
+            ? PlayerController.Instance
+            : FindFirstObjectByType<PlayerController>();
         Transform pTransform = player != null ? player.transform : transform;
-        SpriteRenderer pSprite = player != null ? player.GetComponentInChildren<SpriteRenderer>() : GetComponentInChildren<SpriteRenderer>();
+        SpriteRenderer pSprite = player != null
+            ? player.GetComponentInChildren<SpriteRenderer>()
+            : GetComponentInChildren<SpriteRenderer>();
 
         ShowGameOver(pTransform, pSprite);
     }
@@ -229,8 +260,7 @@ public class GameOverPanel : MonoBehaviour
         isTransitioning = false;
 
         // Ensure cursor is usable
-        Cursor.visible = true;
-        Cursor.lockState = CursorLockMode.None;
+        UnlockCursor();
 
         // Cache player renderers and boost sorting order so player sits above the blackout quad
         CacheAndBoostPlayerRenderers(playerTransform);
@@ -261,16 +291,115 @@ public class GameOverPanel : MonoBehaviour
         StartCoroutine(GameOverSequenceRoutine());
     }
 
+    /// <summary>
+    /// Executes the signature MainMenu diagonal slash-wipe transition, deletes the dead player in DontDestroyOnLoad,
+    /// and reloads the current scene so the new player starts completely fresh with meter, health, and UI intact.
+    /// </summary>
+    public void RestartGame()
+    {
+        if (isTransitioning) return;
+        PlayButtonClickSFX();
+
+        StartCoroutine(TransitionAndExecute(() =>
+        {
+            ResetStateBeforeSceneLoad();
+
+            Scene activeScene = SceneManager.GetActiveScene();
+            if (activeScene.buildIndex >= 0)
+            {
+                SceneManager.LoadScene(activeScene.buildIndex);
+            }
+            else
+            {
+                SceneManager.LoadScene(activeScene.name);
+            }
+        }));
+    }
+
+    /// <summary>
+    /// Executes the signature MainMenu diagonal slash-wipe transition, destroys the persistent player,
+    /// and returns to Main Menu (Stage0).
+    /// </summary>
+    public void ReturnToMainMenu()
+    {
+        if (isTransitioning) return;
+        PlayButtonClickSFX();
+
+        StartCoroutine(TransitionAndExecute(() =>
+        {
+            ResetStateBeforeSceneLoad();
+            UnlockCursor();
+
+            // Load Stage0 (First scene in Build Settings / Main Menu)
+            if (Application.CanStreamedLevelBeLoaded(MainMenuSceneName))
+            {
+                SceneManager.LoadScene(MainMenuSceneName);
+            }
+            else
+            {
+                SceneManager.LoadScene(0);
+            }
+        }));
+    }
+
+    /// <summary>
+    /// Quit button behavior: Returns to Main Menu (Stage0).
+    /// </summary>
+    public void QuitGame()
+    {
+        ReturnToMainMenu();
+    }
+
+    public void CleanupGameOverVisuals()
+    {
+        isGameOverActive = false;
+        isTransitioning = false;
+
+        RestoreGameplayAudio();
+
+        if (blackoutObject != null)
+        {
+            Destroy(blackoutObject);
+            blackoutObject = null;
+            blackoutRenderer = null;
+        }
+
+        if (spotlightObject != null)
+        {
+            Destroy(spotlightObject);
+            spotlightObject = null;
+            spotlightRenderer = null;
+        }
+
+        if (uiCanvasGroup != null)
+        {
+            uiCanvasGroup.alpha = 0f;
+            uiCanvasGroup.blocksRaycasts = false;
+            uiCanvasGroup.interactable = false;
+            if (gameOverCanvas != null)
+            {
+                gameOverCanvas.gameObject.SetActive(false);
+            }
+        }
+
+        RestorePlayerRenderers();
+    }
+
+    #endregion
+
+    #region Game Over Sequence & Transitions
+
     private IEnumerator GameOverSequenceRoutine()
     {
         // Phase 1: Everything fades into pitch black while time slows down
         float elapsed = 0f;
         float initialTimeScale = Time.timeScale;
+        float fadeDur = Mathf.Max(0.01f, blackoutFadeDuration);
 
-        while (elapsed < blackoutFadeDuration)
+        while (elapsed < fadeDur)
         {
             elapsed += Time.unscaledDeltaTime;
-            float t = Mathf.Clamp01(elapsed / blackoutFadeDuration);
+            float t = Mathf.Clamp01(elapsed / fadeDur);
             float smoothT = t * t * (3f - 2f * t);
 
             if (blackoutRenderer != null)
@@ -302,12 +431,13 @@ public class GameOverPanel : MonoBehaviour
         {
             uiCanvasGroup.gameObject.SetActive(true);
             elapsed = 0f;
+            float uiDur = Mathf.Max(0.01f, uiFadeDuration);
             Vector3 initialTitleScale = new Vector3(1.12f, 1.12f, 1f);
 
-            while (elapsed < uiFadeDuration)
+            while (elapsed < uiDur)
             {
                 elapsed += Time.unscaledDeltaTime;
-                float t = Mathf.Clamp01(elapsed / uiFadeDuration);
+                float t = Mathf.Clamp01(elapsed / uiDur);
                 float smoothT = t * t * (3f - 2f * t);
 
                 uiCanvasGroup.alpha = smoothT;
@@ -327,88 +457,7 @@ public class GameOverPanel : MonoBehaviour
         }
 
         CacheTransitionUIElements();
-
-        Cursor.visible = true;
-        Cursor.lockState = CursorLockMode.None;
-    }
-
-    /// <summary>
-    /// Executes the signature MainMenu diagonal slash-wipe transition, deletes the dead player in DontDestroyOnLoad,
-    /// and reloads the current scene so the new player starts completely fresh with meter, health, and UI intact.
-    /// </summary>
-    public void RestartGame()
-    {
-        if (isTransitioning) return;
-        PlayButtonClickSFX();
-
-        StartCoroutine(TransitionAndExecute(() =>
-        {
-            Time.timeScale = 1f;
-            isGameOverActive = false;
-            isTransitioning = false;
-
-            CleanupGameOverVisuals();
-
-            // Destroy the dead player in DontDestroyOnLoad so the new scene instantiates a fresh player with all UI bound
-            PlayerController.DestroyCurrentInstance();
-
-            ChainEnemy.isExploding = false;
-
-            Scene activeScene = SceneManager.GetActiveScene();
-            if (activeScene.buildIndex >= 0)
-            {
-                SceneManager.LoadScene(activeScene.buildIndex);
-            }
-            else
-            {
-                SceneManager.LoadScene(activeScene.name);
-            }
-        }));
-    }
-
-    /// <summary>
-    /// Executes the signature MainMenu diagonal slash-wipe transition, destroys the persistent player,
-    /// and returns to Main Menu (Stage0).
-    /// </summary>
-    public void ReturnToMainMenu()
-    {
-        if (isTransitioning) return;
-        PlayButtonClickSFX();
-
-        StartCoroutine(TransitionAndExecute(() =>
-        {
-            Time.timeScale = 1f;
-            isGameOverActive = false;
-            isTransitioning = false;
-
-            CleanupGameOverVisuals();
-
-            // Destroy persistent player before entering Main Menu so it starts completely fresh
-            PlayerController.DestroyCurrentInstance();
-
-            ChainEnemy.isExploding = false;
-
-            Cursor.visible = true;
-            Cursor.lockState = CursorLockMode.None;
-
-            // Load Stage0 (First scene in Build Settings / Main Menu)
-            if (Application.CanStreamedLevelBeLoaded("Stage0"))
-            {
-                SceneManager.LoadScene("Stage0");
-            }
-            else
-            {
-                SceneManager.LoadScene(0);
-            }
-        }));
-    }
-
-    /// <summary>
-    /// Quit button behavior: Returns to Main Menu (Stage0).
-    /// </summary>
-    public void QuitGame()
-    {
-        ReturnToMainMenu();
+        UnlockCursor();
     }
 
     /// <summary>
@@ -436,14 +485,16 @@ public class GameOverPanel : MonoBehaviour
             timer += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(timer / slashDuration);
             float easeIn = t * t;
-            float easeOut = 1f - Mathf.Pow(1f - t, 3f);
+            float invT = 1f - t;
+            float easeOut = 1f - (invT * invT * invT);
 
             // Disperse UI elements to the left and right
             for (int i = 0; i < transitionUIElements.Count; i++)
             {
-                if (transitionUIElements[i] == null) continue;
+                RectTransform elem = transitionUIElements[i];
+                if (elem == null) continue;
                 Vector2 dir = (i % 2 == 0) ? new Vector2(160f, 0f) : new Vector2(-160f, 0f);
-                transitionUIElements[i].anchoredPosition = Vector2.Lerp(transitionUIInitialPositions[i], transitionUIInitialPositions[i] + dir, easeIn);
+                elem.anchoredPosition = Vector2.Lerp(transitionUIInitialPositions[i], transitionUIInitialPositions[i] + dir, easeIn);
             }
 
             if (uiCanvasGroup != null)
@@ -471,12 +522,12 @@ public class GameOverPanel : MonoBehaviour
         {
             timer += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(timer / shutterDuration);
-            float easeInOut = t < 0.5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) / 2f;
+            float easeInOut = t < 0.5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) * 0.5f;
 
             if (topShutter != null && bottomShutter != null)
             {
-                topShutter.anchoredPosition = Vector2.Lerp(new Vector2(0f, 1600f), new Vector2(0f, 895f), easeInOut);
-                bottomShutter.anchoredPosition = Vector2.Lerp(new Vector2(0f, -1600f), new Vector2(0f, -895f), easeInOut);
+                topShutter.anchoredPosition = new Vector2(0f, Mathf.Lerp(1600f, 895f, easeInOut));
+                bottomShutter.anchoredPosition = new Vector2(0f, Mathf.Lerp(-1600f, -895f, easeInOut));
             }
 
             if (slashLineRect != null && slashLineImage != null)
@@ -504,6 +555,25 @@ public class GameOverPanel : MonoBehaviour
         SpawnCrossSceneFadeIn(0.45f, audioSource);
 
         onTransitionComplete?.Invoke();
+    }
+
+    private void ResetStateBeforeSceneLoad()
+    {
+        Time.timeScale = 1f;
+        isGameOverActive = false;
+        isTransitioning = false;
+
+        CleanupGameOverVisuals();
+
+        // Destroy the dead player in DontDestroyOnLoad so the new scene starts fresh
+        PlayerController.DestroyCurrentInstance();
+        ChainEnemy.isExploding = false;
+    }
+
+    private static void UnlockCursor()
+    {
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.None;
     }
 
     private void SpawnCrossSceneFadeIn(float duration, AudioSource activeSfxSource)
@@ -574,47 +644,16 @@ public class GameOverPanel : MonoBehaviour
         }
     }
 
-    public void CleanupGameOverVisuals()
-    {
-        isGameOverActive = false;
-        isTransitioning = false;
+    #endregion
 
-        RestoreGameplayAudio();
-
-        if (blackoutObject != null)
-        {
-            Destroy(blackoutObject);
-            blackoutObject = null;
-            blackoutRenderer = null;
-        }
-
-        if (spotlightObject != null)
-        {
-            Destroy(spotlightObject);
-            spotlightObject = null;
-            spotlightRenderer = null;
-        }
-
-        if (uiCanvasGroup != null)
-        {
-            uiCanvasGroup.alpha = 0f;
-            uiCanvasGroup.blocksRaycasts = false;
-            uiCanvasGroup.interactable = false;
-            if (gameOverCanvas != null)
-            {
-                gameOverCanvas.gameObject.SetActive(false);
-            }
-        }
-
-        RestorePlayerRenderers();
-    }
+    #region UI & Audio Logic
 
     public void PlaySFX(AudioClip clip)
     {
         if (clip == null) return;
 
         // Avoid double-playing identical clip within the same frame
-        if (clip == lastPlayedSFXClip && Time.unscaledTime - lastPlayedSFXTime < 0.2f)
+        if (clip == lastPlayedSFXClip && Time.unscaledTime - lastPlayedSFXTime < DuplicateSfxCooldown)
         {
             return;
         }
@@ -659,12 +698,83 @@ public class GameOverPanel : MonoBehaviour
     {
         if (audioSource == null)
         {
-            audioSource = GetComponent<AudioSource>();
-            if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
+            if (!TryGetComponent(out audioSource))
+            {
+                audioSource = gameObject.AddComponent<AudioSource>();
+            }
             audioSource.playOnAwake = false;
             audioSource.spatialBlend = 0f;
             audioSource.ignoreListenerPause = true;
         }
+    }
+
+    private void FadeOutGameplayAudio()
+    {
+        RestoreGameplayAudio();
+
+        AudioSource[] sources = Object.FindObjectsByType<AudioSource>(FindObjectsSortMode.None);
+        PlayerController playerInstance = PlayerController.Instance;
+
+        for (int i = 0; i < sources.Length; i++)
+        {
+            AudioSource src = sources[i];
+            if (src == null || src == audioSource || !src.isPlaying) continue;
+
+            // Never fade out the player's own AudioSources so SFX volume never decays
+            if (playerInstance != null && (src.gameObject == playerInstance.gameObject || src.transform.IsChildOf(playerInstance.transform)))
+            {
+                continue;
+            }
+
+            if (!originalAudioVolumes.ContainsKey(src))
+            {
+                originalAudioVolumes[src] = src.volume;
+            }
+
+            Coroutine c = StartCoroutine(FadeOutAudioSource(src, blackoutFadeDuration));
+            activeAudioFadeCoroutines.Add(c);
+        }
+    }
+
+    private IEnumerator FadeOutAudioSource(AudioSource src, float duration)
+    {
+        if (src == null) yield break;
+        float startVol = src.volume;
+        float elapsed = 0f;
+        float fadeDur = Mathf.Max(0.01f, duration);
+        while (elapsed < fadeDur && src != null)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            src.volume = Mathf.Lerp(startVol, 0f, elapsed / fadeDur);
+            yield return null;
+        }
+        if (src != null)
+        {
+            src.volume = 0f;
+            src.Pause();
+        }
+    }
+
+    public void RestoreGameplayAudio()
+    {
+        for (int i = 0; i < activeAudioFadeCoroutines.Count; i++)
+        {
+            if (activeAudioFadeCoroutines[i] != null)
+            {
+                StopCoroutine(activeAudioFadeCoroutines[i]);
+            }
+        }
+        activeAudioFadeCoroutines.Clear();
+
+        foreach (KeyValuePair<AudioSource, float> kvp in originalAudioVolumes)
+        {
+            if (kvp.Key != null)
+            {
+                kvp.Key.volume = kvp.Value;
+                kvp.Key.UnPause();
+            }
+        }
+        originalAudioVolumes.Clear();
     }
 
     private void EnsureBlackoutOverlay()
@@ -691,7 +801,7 @@ public class GameOverPanel : MonoBehaviour
         blackoutRenderer.sprite = GetSolidWhiteSprite();
         blackoutRenderer.color = new Color(blackoutColor.r, blackoutColor.g, blackoutColor.b, 0f);
         // SortingOrder 900 sits above world backgrounds, tilemaps, enemies, and boss (<= 10)
-        blackoutRenderer.sortingOrder = 900;
+        blackoutRenderer.sortingOrder = BlackoutSortingOrder;
     }
 
     private void EnsurePlayerSpotlight(Transform playerTransform)
@@ -708,7 +818,7 @@ public class GameOverPanel : MonoBehaviour
         spotlightRenderer.sprite = GetRadialSpotlightSprite();
         spotlightRenderer.color = new Color(spotlightColor.r, spotlightColor.g, spotlightColor.b, 0f);
         // SortingOrder 920 sits between the blackout quad (900) and player sprite (950)
-        spotlightRenderer.sortingOrder = 920;
+        spotlightRenderer.sortingOrder = SpotlightSortingOrder;
     }
 
     private void CacheAndBoostPlayerRenderers(Transform playerTransform)
@@ -718,19 +828,19 @@ public class GameOverPanel : MonoBehaviour
         cachedPlayerSortingOrders.Clear();
         SpriteRenderer[] renderers = playerTransform.GetComponentsInChildren<SpriteRenderer>(true);
 
-        foreach (var sr in renderers)
+        for (int i = 0; i < renderers.Length; i++)
         {
-            if (sr == null) continue;
-            if (sr == blackoutRenderer || sr == spotlightRenderer) continue;
+            SpriteRenderer sr = renderers[i];
+            if (sr == null || sr == blackoutRenderer || sr == spotlightRenderer) continue;
 
             cachedPlayerSortingOrders[sr] = sr.sortingOrder;
-            sr.sortingOrder = 950;
+            sr.sortingOrder = PlayerBoostedSortingOrder;
         }
     }
 
     private void RestorePlayerRenderers()
     {
-        foreach (var kvp in cachedPlayerSortingOrders)
+        foreach (KeyValuePair<SpriteRenderer, int> kvp in cachedPlayerSortingOrders)
         {
             if (kvp.Key != null)
             {
@@ -744,13 +854,16 @@ public class GameOverPanel : MonoBehaviour
     {
         fadedOtherCanvases.Clear();
         Canvas[] canvases = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None);
-        foreach (var c in canvases)
+        for (int i = 0; i < canvases.Length; i++)
         {
+            Canvas c = canvases[i];
             if (c == null) continue;
             if (gameOverCanvas != null && (c == gameOverCanvas || c.transform.IsChildOf(gameOverCanvas.transform))) continue;
 
-            CanvasGroup cg = c.GetComponent<CanvasGroup>();
-            if (cg == null) cg = c.gameObject.AddComponent<CanvasGroup>();
+            if (!c.TryGetComponent(out CanvasGroup cg))
+            {
+                cg = c.gameObject.AddComponent<CanvasGroup>();
+            }
 
             cg.blocksRaycasts = false;
             fadedOtherCanvases.Add(cg);
@@ -789,77 +902,18 @@ public class GameOverPanel : MonoBehaviour
         }
     }
 
-    private void FadeOutGameplayAudio()
-    {
-        RestoreGameplayAudio();
+    #endregion
 
-        AudioSource[] sources = Object.FindObjectsByType<AudioSource>(FindObjectsSortMode.None);
-        foreach (var src in sources)
-        {
-            if (src == null || src == audioSource || !src.isPlaying) continue;
-
-            // Never fade out the player's own AudioSources so SFX volume never decays
-            if (PlayerController.Instance != null && (src.gameObject == PlayerController.Instance.gameObject || src.transform.IsChildOf(PlayerController.Instance.transform)))
-            {
-                continue;
-            }
-
-            if (!originalAudioVolumes.ContainsKey(src))
-            {
-                originalAudioVolumes[src] = src.volume;
-            }
-
-            Coroutine c = StartCoroutine(FadeOutAudioSource(src, blackoutFadeDuration));
-            activeAudioFadeCoroutines.Add(c);
-        }
-    }
-
-    private IEnumerator FadeOutAudioSource(AudioSource src, float duration)
-    {
-        if (src == null) yield break;
-        float startVol = src.volume;
-        float elapsed = 0f;
-        while (elapsed < duration && src != null)
-        {
-            elapsed += Time.unscaledDeltaTime;
-            src.volume = Mathf.Lerp(startVol, 0f, elapsed / duration);
-            yield return null;
-        }
-        if (src != null)
-        {
-            src.volume = 0f;
-            src.Pause();
-        }
-    }
-
-    public void RestoreGameplayAudio()
-    {
-        for (int i = 0; i < activeAudioFadeCoroutines.Count; i++)
-        {
-            if (activeAudioFadeCoroutines[i] != null)
-            {
-                StopCoroutine(activeAudioFadeCoroutines[i]);
-            }
-        }
-        activeAudioFadeCoroutines.Clear();
-
-        foreach (var kvp in originalAudioVolumes)
-        {
-            if (kvp.Key != null)
-            {
-                kvp.Key.volume = kvp.Value;
-                kvp.Key.UnPause();
-            }
-        }
-        originalAudioVolumes.Clear();
-    }
+    #region Procedural UI & Sprite Generation
 
     private void EnsureGameOverUI()
     {
         if (gameOverCanvas != null)
         {
-            if (uiCanvasGroup == null) uiCanvasGroup = gameOverCanvas.GetComponent<CanvasGroup>();
-            if (uiCanvasGroup == null) uiCanvasGroup = gameOverCanvas.gameObject.AddComponent<CanvasGroup>();
+            if (uiCanvasGroup == null && !gameOverCanvas.TryGetComponent(out uiCanvasGroup))
+            {
+                uiCanvasGroup = gameOverCanvas.gameObject.AddComponent<CanvasGroup>();
+            }
             uiCanvasGroup.alpha = 0f;
             uiCanvasGroup.blocksRaycasts = false;
             uiCanvasGroup.interactable = false;
@@ -875,7 +929,7 @@ public class GameOverPanel : MonoBehaviour
 
         gameOverCanvas = canvasGo.AddComponent<Canvas>();
         gameOverCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        gameOverCanvas.sortingOrder = 1000;
+        gameOverCanvas.sortingOrder = GameOverCanvasSortingOrder;
 
         CanvasScaler scaler = canvasGo.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
@@ -1037,13 +1091,12 @@ public class GameOverPanel : MonoBehaviour
 
     private void EnsureTransitionUI()
     {
-        Canvas rootCanvas = gameOverCanvas;
-        if (rootCanvas == null) rootCanvas = GetComponentInChildren<Canvas>();
+        Canvas rootCanvas = gameOverCanvas != null ? gameOverCanvas : GetComponentInChildren<Canvas>();
         if (rootCanvas == null) return;
 
         if (transitionCanvasGroup == null)
         {
-            GameObject overlayObj = new GameObject("DynamicTransitionOverlay");
+            GameObject overlayObj = new GameObject(DynamicTransitionOverlayName);
             overlayObj.transform.SetParent(rootCanvas.transform, false);
 
             RectTransform overlayRect = overlayObj.AddComponent<RectTransform>();
@@ -1064,13 +1117,13 @@ public class GameOverPanel : MonoBehaviour
         transitionCanvasGroup.transform.SetAsLastSibling();
 
         // Create diagonal slash & shutter container on the root canvas for the dynamic slash-wipe transition (-18 deg)
-        Transform existingFX = rootCanvas.transform.Find("DynamicSlashWipeFX");
+        Transform existingFX = rootCanvas.transform.Find(DynamicSlashWipeFXName);
         if (existingFX != null)
         {
             Destroy(existingFX.gameObject);
         }
 
-        GameObject fxContainer = new GameObject("DynamicSlashWipeFX");
+        GameObject fxContainer = new GameObject(DynamicSlashWipeFXName);
         fxContainer.transform.SetParent(rootCanvas.transform, false);
         RectTransform fxRect = fxContainer.AddComponent<RectTransform>();
         fxRect.anchorMin = new Vector2(0.5f, 0.5f);
@@ -1178,37 +1231,28 @@ public class GameOverPanel : MonoBehaviour
             shortcutHintText.gameObject.SetActive(false);
         }
 
-        if (restartButton != null)
-        {
-            restartButton.onClick.RemoveListener(RestartGame);
-            restartButton.onClick.AddListener(RestartGame);
-            if (restartButton.GetComponent<MenuButtonFX>() == null)
-            {
-                MenuButtonFX fx = restartButton.gameObject.AddComponent<MenuButtonFX>();
-                fx.SetGameOverPanel(this);
-            }
-        }
-        if (mainMenuButton != null)
-        {
-            mainMenuButton.onClick.RemoveListener(ReturnToMainMenu);
-            mainMenuButton.onClick.AddListener(ReturnToMainMenu);
-            if (mainMenuButton.GetComponent<MenuButtonFX>() == null)
-            {
-                MenuButtonFX fx = mainMenuButton.gameObject.AddComponent<MenuButtonFX>();
-                fx.SetGameOverPanel(this);
-            }
-        }
+        BindSingleButton(restartButton, RestartGame);
+        BindSingleButton(mainMenuButton, ReturnToMainMenu);
+
         if (quitButton != null)
         {
             quitButton.onClick.RemoveListener(QuitGame);
-            quitButton.onClick.RemoveListener(ReturnToMainMenu);
-            quitButton.onClick.AddListener(ReturnToMainMenu);
-            if (quitButton.GetComponent<MenuButtonFX>() == null)
-            {
-                MenuButtonFX fx = quitButton.gameObject.AddComponent<MenuButtonFX>();
-                fx.SetGameOverPanel(this);
-            }
+            BindSingleButton(quitButton, ReturnToMainMenu);
         }
+    }
+
+    private void BindSingleButton(Button button, UnityEngine.Events.UnityAction action)
+    {
+        if (button == null) return;
+
+        button.onClick.RemoveListener(action);
+        button.onClick.AddListener(action);
+
+        if (!button.TryGetComponent(out MenuButtonFX fx))
+        {
+            fx = button.gameObject.AddComponent<MenuButtonFX>();
+        }
+        fx.SetGameOverPanel(this);
     }
 
     private void EnsureEventSystem()
@@ -1223,18 +1267,20 @@ public class GameOverPanel : MonoBehaviour
 
     private Sprite CreateButtonBoxSprite(Color borderColor, Color innerColor)
     {
-        int width = 32;
-        int height = 32;
+        const int width = 32;
+        const int height = 32;
         Texture2D tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Point;
 
         Color[] pixels = new Color[width * height];
         for (int y = 0; y < height; y++)
         {
+            int rowOffset = y * width;
+            bool yBorder = y < 2 || y >= height - 2;
             for (int x = 0; x < width; x++)
             {
-                bool isBorder = (x < 2 || x >= width - 2 || y < 2 || y >= height - 2);
-                pixels[y * width + x] = isBorder ? borderColor : innerColor;
+                bool isBorder = yBorder || x < 2 || x >= width - 2;
+                pixels[rowOffset + x] = isBorder ? borderColor : innerColor;
             }
         }
         tex.SetPixels(pixels);
@@ -1248,7 +1294,7 @@ public class GameOverPanel : MonoBehaviour
         if (cachedSolidWhiteSprite != null) return cachedSolidWhiteSprite;
 
         Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-        tex.SetPixels(new Color[] { Color.white, Color.white, Color.white, Color.white });
+        tex.SetPixels(new[] { Color.white, Color.white, Color.white, Color.white });
         tex.Apply();
 
         cachedSolidWhiteSprite = Sprite.Create(tex, new Rect(0, 0, 2, 2), new Vector2(0.5f, 0.5f), 2f);
@@ -1259,7 +1305,7 @@ public class GameOverPanel : MonoBehaviour
     {
         if (cachedSpotlightSprite != null) return cachedSpotlightSprite;
 
-        int size = 64;
+        const int size = 64;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Bilinear;
         Vector2 center = new Vector2((size - 1) * 0.5f, (size - 1) * 0.5f);
@@ -1268,12 +1314,13 @@ public class GameOverPanel : MonoBehaviour
         Color[] pixels = new Color[size * size];
         for (int y = 0; y < size; y++)
         {
+            int rowOffset = y * size;
             for (int x = 0; x < size; x++)
             {
                 float dist = Vector2.Distance(new Vector2(x, y), center) / maxDist;
                 float alpha = Mathf.Clamp01(1f - dist);
-                alpha = alpha * alpha;
-                pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
+                alpha *= alpha;
+                pixels[rowOffset + x] = new Color(1f, 1f, 1f, alpha);
             }
         }
         tex.SetPixels(pixels);
@@ -1293,8 +1340,9 @@ public class GameOverPanel : MonoBehaviour
 #endif
 
         TMP_FontAsset[] fonts = Resources.FindObjectsOfTypeAll<TMP_FontAsset>();
-        foreach (var f in fonts)
+        for (int i = 0; i < fonts.Length; i++)
         {
+            TMP_FontAsset f = fonts[i];
             if (f != null && f.name.Contains("PixelifySans"))
             {
                 cachedFontAsset = f;
@@ -1305,5 +1353,6 @@ public class GameOverPanel : MonoBehaviour
         cachedFontAsset = TMP_Settings.defaultFontAsset;
         return cachedFontAsset;
     }
-}
 
+    #endregion
+}

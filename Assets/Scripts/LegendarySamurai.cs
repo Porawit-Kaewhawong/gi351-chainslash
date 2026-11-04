@@ -7,6 +7,8 @@ using TMPro;
 
 public class LegendarySamurai : EnemyBase
 {
+    #region Enums & Constants
+
     public enum BossActionState
     {
         Idle,
@@ -43,6 +45,33 @@ public class LegendarySamurai : EnemyBase
         WindSlash
     }
 
+    public enum IaiPatternType
+    {
+        Ichimonji,       // Phase 1: Horizontal Draw (Ichimonji)
+        KesaGiri,        // Phase 2: Diagonal Crescent Slash (Kesa-Giri)
+        Jumonji,         // Phase 3: Cross Slash (Jumonji)
+        Zantetsu,        // Phase 4: Z-Cut Slash (Zantetsu-ken)
+        GorinStar        // Phase 5: Star Flurry / Five Rings (Gorin-no-sho)
+    }
+
+    private const float MIN_HIT_DAMAGE_INTERVAL = 0.20f;
+    private const float MIN_WEAK_POINT_SPACING_SQR = 0.85f * 0.85f;
+
+    private static readonly float[] GorinStarAngles = { 90f, 306f, 162f, 18f, 234f };
+    private static readonly WaitForSeconds WaitInitialDelay = new WaitForSeconds(1.0f);
+    private static readonly WaitForSeconds WaitDeflectReset = new WaitForSeconds(0.2f);
+    private static readonly WaitForSeconds WaitHitFlash = new WaitForSeconds(0.12f);
+    private static readonly WaitForSeconds WaitWindSlashActive = new WaitForSeconds(0.16f);
+    private static readonly WaitForSeconds WaitMinionWaveInitial = new WaitForSeconds(0.35f);
+    private static readonly WaitForSeconds WaitMinionSpawnInterval = new WaitForSeconds(0.12f);
+    private static readonly WaitForSeconds WaitAfterImageFadeStep = new WaitForSeconds(0.055f);
+
+    private static Shader cachedDefaultSpriteShader;
+
+    #endregion
+
+    #region Serialized Fields
+
     [Header("Boss Health & Weak Points")]
     [Tooltip("Number of hits before death (Default: 20 hits)")]
     [SerializeField] private int bossMaxHits = 20;
@@ -54,6 +83,18 @@ public class LegendarySamurai : EnemyBase
     [SerializeField] private AudioClip hitDamageSFX;
     [SerializeField] private AudioClip deflectSFX;
     [SerializeField] private GameObject hitVFX;
+
+    [Header("Sequential Iai Cutting Patterns")]
+    [Tooltip("Enable samurai sequential Iai cutting patterns (Ichimonji, Kesa-Giri, Jumonji, Zantetsu, Gorin-Star)")]
+    [SerializeField] private bool useSequentialIaiPatterns = true;
+    [Tooltip("Spread multiplier for the Iai cutting points")]
+    [SerializeField] private float iaiPatternSpread = 1.0f;
+    [Tooltip("Custom font for weak point order numbers")]
+    [SerializeField] private TMP_FontAsset weakPointFontAsset;
+    [Tooltip("Font size of the sequential order number inside each weak point circle")]
+    [SerializeField] private float weakPointNumberFontSize = 2.0f;
+    [Tooltip("Audio clip played when each sequential weak point is selected")]
+    [SerializeField] private AudioClip pointSelectChimeSFX;
 
     [Header("Boss General Stats")]
     [SerializeField] private float bossPatrolSpeed = 3.2f;
@@ -228,6 +269,10 @@ public class LegendarySamurai : EnemyBase
     public UnityEvent<int, int> onBossHealthChanged;
     public UnityEvent onBossDefeated;
 
+    #endregion
+
+    #region Public Properties
+
     public int CurrentBossHealth => currentHits;
     public int MaxBossHealth => bossMaxHits;
     public int CurrentPhase => GetCurrentPhase();
@@ -235,19 +280,34 @@ public class LegendarySamurai : EnemyBase
     public bool WasHitLandedInCurrentSlash => hitDeductedInCurrentSlash;
     public BossAnimState CurrentAnimationState => currentAnimState;
     public int CurrentAnimationFrame => currentAnimFrame;
+    public bool UseSequentialIaiPatterns => useSequentialIaiPatterns;
+    public int CurrentSequenceIndex => currentSequenceIndex;
+
+    public float BossMasterVolume
+    {
+        get => bossMasterVolume;
+        set => SetBossMasterVolume(value);
+    }
+
+    #endregion
+
+    #region Private State
 
     private int currentHits;
     private BossActionState bossState = BossActionState.Idle;
     private bool areWeakPointsActive = false;
     private int slashedCirclesCount = 0;
+    private int currentSequenceIndex = 0;
     private float modeExitTimer = 0f;
     private bool isDashingSlash = false;
     private bool hitDeductedInCurrentSlash = false;
     private bool isStompSlamming = false;
     private bool stompHasHitGround = false;
     private float lastHitDamageTime = -10f;
-    private const float MIN_HIT_DAMAGE_INTERVAL = 0.20f;
+
     private readonly List<GameObject> activeSpawnedMinions = new List<GameObject>();
+    private readonly List<BossAttackPattern> availablePatternsBuffer = new List<BossAttackPattern>(5);
+    private readonly List<Vector2> randomWeakPointOffsetsBuffer = new List<Vector2>(8);
 
     // Sprite Animation State
     private BossAnimState currentAnimState = BossAnimState.Idle;
@@ -257,6 +317,7 @@ public class LegendarySamurai : EnemyBase
     private bool actionAnimLoop = false;
     private Sprite defaultBaseSprite;
 
+    // Weak Points & AI Coroutines
     private readonly List<BossTargetPoint> targetPoints = new List<BossTargetPoint>();
     private Transform weakPointContainer;
     private Coroutine aiLoopCoroutine;
@@ -264,13 +325,27 @@ public class LegendarySamurai : EnemyBase
     private Coroutine flashCoroutine;
     private BossAttackPattern lastAttackPattern = (BossAttackPattern)(-1);
 
+    // Audio & BGM State
+    private AudioSource bossAudioSource;
+    private AudioSource bgmSourceA;
+    private AudioSource bgmSourceB;
+    private bool isSourceAPlaying = false;
+    private bool isPhase2BGMActive = false;
+    private Coroutine bgmCrossfadeCoroutine;
+
+    #endregion
+
+    #region Unity Lifecycle
+
     protected override void Awake()
     {
         base.Awake();
 
         // Disable Animator if present so code sprite animation has full control
-        Animator anim = GetComponent<Animator>();
-        if (anim != null) anim.enabled = false;
+        if (TryGetComponent<Animator>(out Animator anim))
+        {
+            anim.enabled = false;
+        }
 
         if (spriteRenderer != null && spriteRenderer.sprite != null)
         {
@@ -288,6 +363,11 @@ public class LegendarySamurai : EnemyBase
         SetupBossBGM();
 
 #if UNITY_EDITOR
+        if (weakPointFontAsset == null)
+        {
+            weakPointFontAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>("Assets/Fonts/PixelifySans-VariableFont_wght SDF.asset");
+        }
+
         if (minionPrefabs == null || minionPrefabs.Count == 0)
         {
             minionPrefabs = new List<GameObject>();
@@ -338,52 +418,73 @@ public class LegendarySamurai : EnemyBase
         aiLoopCoroutine = StartCoroutine(BossAILoop());
     }
 
-    private void CreateWeakPointContainer()
+    protected override void Update()
     {
-        targetPoints.Clear();
+        if (IsDead) return;
 
-        GameObject containerObj = new GameObject("BossWeakPointContainer");
-        weakPointContainer = containerObj.transform;
-        weakPointContainer.SetParent(transform, false);
-        weakPointContainer.localPosition = new Vector3(0f, 0.65f, 0f);
-
-        for (int i = 0; i < requiredWeakPoints; i++)
+        if (currentHits <= 0)
         {
-            BossTargetPoint point;
-
-            if (weakPointPrefab != null)
-            {
-                GameObject obj = Instantiate(weakPointPrefab, weakPointContainer);
-                point = obj.GetComponent<BossTargetPoint>();
-                if (point == null) point = obj.AddComponent<BossTargetPoint>();
-            }
-            else
-            {
-                GameObject obj = new GameObject($"BossTargetPoint_{i}");
-                obj.transform.SetParent(weakPointContainer, false);
-                obj.layer = gameObject.layer;
-                obj.tag = gameObject.tag;
-
-                CircleCollider2D circleCol = obj.AddComponent<CircleCollider2D>();
-                circleCol.radius = 0.45f;
-                circleCol.isTrigger = true;
-
-                Rigidbody2D kinematicRb = obj.AddComponent<Rigidbody2D>();
-                kinematicRb.bodyType = RigidbodyType2D.Kinematic;
-                kinematicRb.gravityScale = 0f;
-
-                SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
-                sr.sprite = BossTargetPoint.GetOrCreateTargetPointSprite();
-                sr.sortingOrder = 7;
-
-                point = obj.AddComponent<BossTargetPoint>();
-            }
-
-            point.Initialize(this, i);
-            point.DeactivatePoint();
-            targetPoints.Add(point);
+            Die();
+            return;
         }
+
+        base.Update();
+
+        UpdateSpriteAnimation(Time.deltaTime);
+
+        // Reset circles if the player leaves Chain Slash mode without slashing
+        if (areWeakPointsActive && (PlayerController.Instance == null || !PlayerController.Instance.IsInMode))
+        {
+            modeExitTimer += Time.unscaledDeltaTime;
+            if (modeExitTimer > 0.45f)
+            {
+                ResetWeakPoints();
+            }
+        }
+        else
+        {
+            modeExitTimer = 0f;
+        }
+
+#if ENABLE_INPUT_SYSTEM
+        if (UnityEngine.InputSystem.Keyboard.current != null && UnityEngine.InputSystem.Keyboard.current.f8Key.wasPressedThisFrame)
+        {
+            showOnScreenSlider = !showOnScreenSlider;
+        }
+#endif
     }
+
+    private void OnDestroy()
+    {
+        DestroyAllTargetPoints();
+    }
+
+    protected override void OnCollisionEnter2D(Collision2D collision)
+    {
+        base.OnCollisionEnter2D(collision);
+        CheckStompGroundContacts(collision);
+    }
+
+    protected override void OnCollisionStay2D(Collision2D collision)
+    {
+        CheckStompGroundContacts(collision);
+    }
+
+    private void OnGUI()
+    {
+        if (!showOnScreenSlider || IsDead || currentHits <= 0) return;
+
+        GUILayout.BeginArea(new Rect(15, Screen.height - 95, 230, 80), GUI.skin.box);
+        GUILayout.Label($"<b>Boss Master Volume:</b> {bossMasterVolume:F1}x");
+        float newVol = GUILayout.HorizontalSlider(bossMasterVolume, 0f, 3f);
+        if (Mathf.Abs(newVol - bossMasterVolume) > 0.01f)
+        {
+            SetBossMasterVolume(newVol);
+        }
+        GUILayout.EndArea();
+    }
+
+    #endregion
 
     #region Phase & Difficulty Scaling
 
@@ -411,17 +512,15 @@ public class LegendarySamurai : EnemyBase
     private List<BossAttackPattern> GetAvailablePatterns()
     {
         int phase = GetCurrentPhase();
-        List<BossAttackPattern> patterns = new List<BossAttackPattern>
-        {
-            BossAttackPattern.DashSlash // Always available (Phase 1+)
-        };
+        availablePatternsBuffer.Clear();
+        availablePatternsBuffer.Add(BossAttackPattern.DashSlash); // Always available (Phase 1+)
 
-        if (phase >= 2) patterns.Add(BossAttackPattern.Stomp);       // Unlocked at 80%
-        if (phase >= 3) patterns.Add(BossAttackPattern.Shuriken360); // Unlocked at 60%
-        if (phase >= 4) patterns.Add(BossAttackPattern.WindSlash);   // Unlocked at 40%
-        if (phase >= 5) patterns.Add(BossAttackPattern.HiddenStab);  // Unlocked at 20%
+        if (phase >= 2) availablePatternsBuffer.Add(BossAttackPattern.Stomp);       // Unlocked at 80%
+        if (phase >= 3) availablePatternsBuffer.Add(BossAttackPattern.Shuriken360); // Unlocked at 60%
+        if (phase >= 4) availablePatternsBuffer.Add(BossAttackPattern.WindSlash);   // Unlocked at 40%
+        if (phase >= 5) availablePatternsBuffer.Add(BossAttackPattern.HiddenStab);  // Unlocked at 20%
 
-        return patterns;
+        return availablePatternsBuffer;
     }
 
     /// <summary>
@@ -442,11 +541,17 @@ public class LegendarySamurai : EnemyBase
 
     #endregion
 
-    #region Boss AI Loop
+    #region AI State Machine & Patrol
+
+    protected override void Movement()
+    {
+        if (IsDead || currentHits <= 0 || bossState != BossActionState.Moving) return;
+        base.Movement();
+    }
 
     private IEnumerator BossAILoop()
     {
-        yield return new WaitForSeconds(1.0f);
+        yield return WaitInitialDelay;
 
         while (!IsDead && currentHits > 0)
         {
@@ -505,7 +610,11 @@ public class LegendarySamurai : EnemyBase
 
     #endregion
 
-    #region Pattern 1: Dash-Slash (Phase 1 / 100%)
+    #region Attack Patterns
+
+    // -------------------------------------------------------------------------
+    // Pattern 1: Dash-Slash (Phase 1 / 100%)
+    // -------------------------------------------------------------------------
 
     private IEnumerator DashSlashRoutine()
     {
@@ -564,13 +673,14 @@ public class LegendarySamurai : EnemyBase
             timer += Time.deltaTime;
             rb.linearVelocity = dashDir * activeSpeed;
 
+            Bounds baseBounds = col != null ? col.bounds : new Bounds(transform.position, Vector3.one * 1.6f);
+
             // Damage player if they are in the way during the dash
             if (!hasHitPlayerInDash && playerController != null)
             {
-                Collider2D col = GetComponent<Collider2D>();
-                Bounds b = col != null ? col.bounds : new Bounds(transform.position, Vector3.one * 1.6f);
-                b.Expand(0.5f);
-                if (b.Contains(playerController.transform.position))
+                Bounds playerCheckBounds = baseBounds;
+                playerCheckBounds.Expand(0.5f);
+                if (playerCheckBounds.Contains(playerController.transform.position))
                 {
                     hasHitPlayerInDash = true;
                     playerController.TakeDamage(slashDashDamage);
@@ -583,18 +693,19 @@ public class LegendarySamurai : EnemyBase
             }
 
             // Boss Collateral: If boss dashes into Suicide Ninjas or other minions, trigger them!
-            Collider2D bossCol = GetComponent<Collider2D>();
-            Bounds dashBounds = bossCol != null ? bossCol.bounds : new Bounds(transform.position, Vector3.one * 1.6f);
+            Bounds dashBounds = baseBounds;
             dashBounds.Expand(0.6f);
             Collider2D[] hitMinions = Physics2D.OverlapBoxAll(dashBounds.center, dashBounds.size, 0f);
             for (int mIdx = 0; mIdx < hitMinions.Length; mIdx++)
             {
-                if (hitMinions[mIdx] == null || hitMinions[mIdx].gameObject == gameObject) continue;
-                if (hitMinions[mIdx].TryGetComponent<ChainEnemy>(out ChainEnemy suicideBomb) && !suicideBomb.IsDead)
+                Collider2D hitMinion = hitMinions[mIdx];
+                if (hitMinion == null || hitMinion.gameObject == gameObject) continue;
+
+                if (hitMinion.TryGetComponent<ChainEnemy>(out ChainEnemy suicideBomb) && !suicideBomb.IsDead)
                 {
                     suicideBomb.OnDeath(); // Detonates on impact!
                 }
-                else if (hitMinions[mIdx].TryGetComponent<EnemyBase>(out EnemyBase minion) && !minion.IsDead && !(minion is BossTargetPoint))
+                else if (hitMinion.TryGetComponent<EnemyBase>(out EnemyBase minion) && !minion.IsDead && !(minion is BossTargetPoint))
                 {
                     minion.OnDeath(dashDir);
                 }
@@ -661,52 +772,48 @@ public class LegendarySamurai : EnemyBase
 
     private void CheckStraightSlashHit(Vector2 origin, Vector2 direction, float range, float width, float damage)
     {
-        if (playerController == null) return;
-
         Vector2 end = origin + direction * range;
-        Vector2 playerPos = playerController.transform.position;
 
-        float distToLine = DistancePointToLineSegment(playerPos, origin, end);
-        Vector2 toPlayer = playerPos - origin;
-        float proj = Vector2.Dot(toPlayer, direction);
-
-        if (distToLine <= width * 0.5f && proj >= -0.2f && proj <= range + 0.5f)
+        if (playerController != null)
         {
-            playerController.TakeDamage(damage);
-            if (playerController.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
-            {
-                Vector2 knockbackDir = (direction + Vector2.up * 0.35f).normalized;
-                playerRb.AddForce(knockbackDir * 14f, ForceMode2D.Impulse);
-            }
+            Vector2 playerPos = playerController.transform.position;
+            float distToLine = DistancePointToLineSegment(playerPos, origin, end);
+            Vector2 toPlayer = playerPos - origin;
+            float proj = Vector2.Dot(toPlayer, direction);
 
-            if (hitVFX != null)
+            if (distToLine <= width * 0.5f && proj >= -0.2f && proj <= range + 0.5f)
             {
-                Instantiate(hitVFX, playerPos, Quaternion.identity);
-            }
-            else
-            {
-                BossHitVFX.Spawn(playerPos);
+                playerController.TakeDamage(damage);
+                if (playerController.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
+                {
+                    Vector2 knockbackDir = (direction + Vector2.up * 0.35f).normalized;
+                    playerRb.AddForce(knockbackDir * 14f, ForceMode2D.Impulse);
+                }
+
+                SpawnHitEffect(playerPos);
             }
         }
 
         // Boss Collateral: Straight slash cuts through any minions in the line!
         Collider2D[] slashHits = Physics2D.OverlapCircleAll(origin + direction * (range * 0.5f), range * 0.6f);
+        float maxCollateralDist = width * 0.75f;
         for (int i = 0; i < slashHits.Length; i++)
         {
-            if (slashHits[i] == null || slashHits[i].gameObject == gameObject) continue;
+            Collider2D hitCol = slashHits[i];
+            if (hitCol == null || hitCol.gameObject == gameObject) continue;
 
-            Vector2 hitPos = slashHits[i].transform.position;
+            Vector2 hitPos = hitCol.transform.position;
             float dist = DistancePointToLineSegment(hitPos, origin, end);
             Vector2 toHit = hitPos - origin;
             float lineProj = Vector2.Dot(toHit, direction);
 
-            if (dist <= width * 0.75f && lineProj >= -0.2f && lineProj <= range + 0.5f)
+            if (dist <= maxCollateralDist && lineProj >= -0.2f && lineProj <= range + 0.5f)
             {
-                if (slashHits[i].TryGetComponent<ChainEnemy>(out ChainEnemy bomb) && !bomb.IsDead)
+                if (hitCol.TryGetComponent<ChainEnemy>(out ChainEnemy bomb) && !bomb.IsDead)
                 {
                     bomb.OnDeath(direction);
                 }
-                else if (slashHits[i].TryGetComponent<EnemyBase>(out EnemyBase eb) && !eb.IsDead && !(eb is BossTargetPoint))
+                else if (hitCol.TryGetComponent<EnemyBase>(out EnemyBase eb) && !eb.IsDead && !(eb is BossTargetPoint))
                 {
                     eb.OnDeath(direction);
                 }
@@ -714,19 +821,9 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
-    private float DistancePointToLineSegment(Vector2 point, Vector2 start, Vector2 end)
-    {
-        Vector2 segment = end - start;
-        float lenSq = segment.sqrMagnitude;
-        if (lenSq < 0.0001f) return Vector2.Distance(point, start);
-        float t = Mathf.Clamp01(Vector2.Dot(point - start, segment) / lenSq);
-        Vector2 projection = start + t * segment;
-        return Vector2.Distance(point, projection);
-    }
-
-    #endregion
-
-    #region Pattern 2: Stomp (Phase 2 / 80%)
+    // -------------------------------------------------------------------------
+    // Pattern 2: Stomp (Phase 2 / 80%)
+    // -------------------------------------------------------------------------
 
     private IEnumerator StompRoutine()
     {
@@ -746,9 +843,10 @@ public class LegendarySamurai : EnemyBase
             ascendTimer += Time.deltaTime;
             if (playerController != null)
             {
+                Vector3 pos = transform.position;
                 float targetX = playerController.transform.position.x;
-                float newX = Mathf.MoveTowards(transform.position.x, targetX, 7.5f * speedMult * Time.deltaTime);
-                transform.position = new Vector3(newX, transform.position.y, transform.position.z);
+                pos.x = Mathf.MoveTowards(pos.x, targetX, 7.5f * speedMult * Time.deltaTime);
+                transform.position = pos;
             }
             yield return null;
         }
@@ -832,9 +930,10 @@ public class LegendarySamurai : EnemyBase
 
         // Deal surrounding area damage
         Collider2D[] hitColliders = Physics2D.OverlapCircleAll(transform.position, stompRadius);
-        foreach (Collider2D hit in hitColliders)
+        for (int i = 0; i < hitColliders.Length; i++)
         {
-            if (hit.gameObject == gameObject) continue;
+            Collider2D hit = hitColliders[i];
+            if (hit == null || hit.gameObject == gameObject) continue;
 
             if (hit.TryGetComponent<PlayerController>(out PlayerController player) ||
                 (hit.GetComponentInParent<PlayerController>() is PlayerController p && (player = p) != null))
@@ -861,9 +960,9 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
-    #endregion
-
-    #region Pattern 3: 360 Shuriken (Phase 3 / 60%)
+    // -------------------------------------------------------------------------
+    // Pattern 3: 360 Shuriken (Phase 3 / 60%)
+    // -------------------------------------------------------------------------
 
     private IEnumerator Shuriken360Routine()
     {
@@ -904,33 +1003,51 @@ public class LegendarySamurai : EnemyBase
 
     private void Fire360Burst(int count, float angleOffset)
     {
+        if (count <= 0) return;
+
         float angleStep = 360f / count;
+        float speed = shurikenSpeed360 * GetSpeedMultiplier();
+        Vector2 origin = transform.position;
 
         for (int i = 0; i < count; i++)
         {
-            float angle = i * angleStep + angleOffset;
-            float rad = angle * Mathf.Deg2Rad;
+            float rad = (i * angleStep + angleOffset) * Mathf.Deg2Rad;
             Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
-            Vector2 spawnPos = (Vector2)transform.position + dir * 0.85f;
+            Vector2 spawnPos = origin + dir * 0.85f;
 
             if (shurikenPrefab != null)
             {
                 GameObject proj = Instantiate(shurikenPrefab, spawnPos, Quaternion.identity);
                 if (proj.TryGetComponent<Shuriken>(out Shuriken shurikenComp))
                 {
-                    shurikenComp.Launch(dir, shurikenSpeed360 * GetSpeedMultiplier(), shurikenDamage360);
+                    shurikenComp.Launch(dir, speed, shurikenDamage360);
                 }
             }
             else
             {
-                Shuriken.CreateDefaultShuriken(spawnPos, dir, shurikenSpeed360 * GetSpeedMultiplier(), shurikenDamage360, groundLayer);
+                Shuriken.CreateDefaultShuriken(spawnPos, dir, speed, shurikenDamage360, groundLayer);
             }
         }
     }
 
-    #endregion
+    // -------------------------------------------------------------------------
+    // Pattern 4: Wind Slash (Phase 4 / 40%)
+    // -------------------------------------------------------------------------
 
-    #region Pattern 4: Wind Slash (Phase 4 / 40%)
+    private static AnimationCurve cachedTaperedSlashCurve;
+
+    private static AnimationCurve GetTaperedSlashWidthCurve()
+    {
+        if (cachedTaperedSlashCurve != null) return cachedTaperedSlashCurve;
+        cachedTaperedSlashCurve = new AnimationCurve(
+            new Keyframe(0.0f, 0.0f),
+            new Keyframe(0.2f, 0.65f),
+            new Keyframe(0.5f, 1.0f),
+            new Keyframe(0.8f, 0.65f),
+            new Keyframe(1.0f, 0.0f)
+        );
+        return cachedTaperedSlashCurve;
+    }
 
     private IEnumerator WindSlashRoutine()
     {
@@ -944,15 +1061,28 @@ public class LegendarySamurai : EnemyBase
         if (spriteRenderer != null) spriteRenderer.color = new Color(0.2f, 1f, 0.7f, 1f);
         FacePlayer();
 
-        Vector2 playerCenter = playerController != null ? (Vector2)playerController.transform.position : (Vector2)transform.position + Vector2.right * 4f;
+        Vector2 playerCenter = playerController != null
+            ? (Vector2)playerController.transform.position
+            : (Vector2)transform.position + Vector2.right * 4f;
         int lineCount = Mathf.Clamp(windSlashLineCount + (GetCurrentPhase() >= 5 ? 1 : 0), 3, 5);
 
-        List<GameObject> lineObjects = new List<GameObject>();
-        List<KeyValuePair<Vector2, Vector2>> lineSegments = new List<KeyValuePair<Vector2, Vector2>>();
+        List<GameObject> lineObjects = new List<GameObject>(lineCount * 3 + 16);
+        List<LineRenderer> outerLineRenderers = new List<LineRenderer>(lineCount);
+        List<LineRenderer> coreLineRenderers = new List<LineRenderer>(lineCount);
+        List<KeyValuePair<Vector2, Vector2>> lineSegments = new List<KeyValuePair<Vector2, Vector2>>(lineCount);
+        List<Vector2> lineDirections = new List<Vector2>(lineCount);
+        List<Vector2> lineCenters = new List<Vector2>(lineCount);
 
-        float lineLength = 24f;
+        const float lineLength = 24f;
+        Shader lineShader = GetDefaultSpriteShader();
+        Material sharedLineMat = lineShader != null ? new Material(lineShader) : null;
+        AnimationCurve taperedCurve = GetTaperedSlashWidthCurve();
 
-        // Generate multiple straight slash lines intersecting the player's zone
+        Color vibrantWindColor = new Color(windSlashTelegraphColor.r, windSlashTelegraphColor.g, windSlashTelegraphColor.b, 0.88f);
+        Color snapGlintColor = Color.Lerp(vibrantWindColor, Color.white, 0.75f);
+        snapGlintColor.a = 0.95f;
+
+        // 1. Generate Dual-Layer Tapered Katana Slash Lines (Outer Wind Aura + Inner Hot Core)
         for (int i = 0; i < lineCount; i++)
         {
             float angle = -35f + (i * (70f / Mathf.Max(1, lineCount - 1))) + Random.Range(-10f, 10f);
@@ -964,39 +1094,151 @@ public class LegendarySamurai : EnemyBase
             Vector2 end = centerPoint + dir * (lineLength * 0.5f);
 
             lineSegments.Add(new KeyValuePair<Vector2, Vector2>(start, end));
+            lineDirections.Add(dir);
+            lineCenters.Add(centerPoint);
 
-            // Create telegraph line
-            GameObject lObj = new GameObject($"WindSlashTelegraph_{i}");
-            LineRenderer lr = lObj.AddComponent<LineRenderer>();
-            lr.positionCount = 2;
-            lr.SetPosition(0, start);
-            lr.SetPosition(1, end);
-            lr.startWidth = 0.05f;
-            lr.endWidth = 0.05f;
-            lr.material = new Material(Shader.Find("Sprites/Default"));
-            lr.startColor = windSlashTelegraphColor;
-            lr.endColor = windSlashTelegraphColor;
-            lr.sortingOrder = 9;
+            // Outer Wind Aura LineRenderer (5 points for tapered curve)
+            GameObject outerObj = new GameObject($"WindSlashOuter_{i}");
+            LineRenderer outerLr = outerObj.AddComponent<LineRenderer>();
+            outerLr.positionCount = 5;
+            outerLr.widthCurve = taperedCurve;
+            outerLr.widthMultiplier = 0.06f;
+            if (sharedLineMat != null) outerLr.sharedMaterial = sharedLineMat;
+            outerLr.startColor = windSlashTelegraphColor;
+            outerLr.endColor = windSlashTelegraphColor;
+            outerLr.sortingOrder = 14;
 
-            lineObjects.Add(lObj);
+            // Inner Core LineRenderer
+            GameObject coreObj = new GameObject($"WindSlashCore_{i}");
+            LineRenderer coreLr = coreObj.AddComponent<LineRenderer>();
+            coreLr.positionCount = 5;
+            coreLr.widthCurve = taperedCurve;
+            coreLr.widthMultiplier = 0.02f;
+            if (sharedLineMat != null) coreLr.sharedMaterial = sharedLineMat;
+            coreLr.startColor = new Color(1f, 1f, 1f, 0.65f);
+            coreLr.endColor = new Color(1f, 1f, 1f, 0.65f);
+            coreLr.sortingOrder = 15;
+
+            SetSubdividedLinePositions(outerLr, start, start);
+            SetSubdividedLinePositions(coreLr, start, start);
+
+            lineObjects.Add(outerObj);
+            lineObjects.Add(coreObj);
+            outerLineRenderers.Add(outerLr);
+            coreLineRenderers.Add(coreLr);
         }
 
-        // Telegraph wait
+        // 2. Spawn Swirling Pixel Wind-Leaves / Vacuum Particles during Telegraph
+        const int windParticleCount = 12;
+        List<Transform> windParticles = new List<Transform>(windParticleCount);
+        List<SpriteRenderer> windParticleRenderers = new List<SpriteRenderer>(windParticleCount);
+        List<Vector2> windParticleTargets = new List<Vector2>(windParticleCount);
+        List<Vector2> windParticleStartOffsets = new List<Vector2>(windParticleCount);
+
+        Sprite sparkSprite = BossStraightSlashVFX.GetOrCreateSparkSprite();
+        Sprite streakSprite = BossStraightSlashVFX.GetOrCreateStreakBarSprite();
+
+        for (int i = 0; i < windParticleCount; i++)
+        {
+            GameObject pObj = new GameObject($"WindVacuumParticle_{i}");
+            Transform pTrans = pObj.transform;
+            Vector2 targetHub = (i < lineCount * 2)
+                ? lineCenters[i % lineCount] + Random.insideUnitCircle * 1.4f
+                : (Vector2)transform.position + new Vector2(0f, 0.65f);
+            Vector2 startOffset = Random.insideUnitCircle.normalized * Random.Range(2.2f, 4.2f);
+
+            pTrans.position = targetHub + startOffset;
+            float pAngle = Mathf.Atan2(-startOffset.y, -startOffset.x) * Mathf.Rad2Deg;
+            pTrans.rotation = Quaternion.Euler(0f, 0f, pAngle);
+            pTrans.localScale = (i % 3 == 0) ? new Vector3(0.9f, 0.45f, 1f) : new Vector3(1.1f, 1.1f, 1f);
+
+            SpriteRenderer pSr = pObj.AddComponent<SpriteRenderer>();
+            pSr.sprite = (i % 3 == 0) ? streakSprite : sparkSprite;
+            pSr.color = (i % 2 == 0) ? vibrantWindColor : Color.Lerp(vibrantWindColor, Color.white, 0.5f);
+            pSr.sortingOrder = 16;
+
+            lineObjects.Add(pObj);
+            windParticles.Add(pTrans);
+            windParticleRenderers.Add(pSr);
+            windParticleTargets.Add(targetHub);
+            windParticleStartOffsets.Add(startOffset);
+        }
+
+        // 3. "Sheathe & Draw" Telegraph: Laser Trace -> Vacuum Swirl -> Snap-Glint Lock-On
         float telegraphDuration = windSlashTelegraphTime / speedMult;
+        float snapWindow = Mathf.Min(0.11f, telegraphDuration * 0.28f);
+        bool snapGlintTriggered = false;
         float t = 0f;
+
         while (t < telegraphDuration && !IsDead && currentHits > 0)
         {
-            t += Time.deltaTime;
-            float pulseWidth = 0.05f + Mathf.PingPong(t * 8f, 0.08f);
-            for (int i = 0; i < lineObjects.Count; i++)
+            float dt = Time.deltaTime;
+            t += dt;
+            float normT = Mathf.Clamp01(t / telegraphDuration);
+
+            // Fast initial laser draw-in across the first 45% of telegraph
+            float drawProgress = Mathf.Clamp01(normT / 0.45f);
+            bool inSnapWindow = (telegraphDuration - t) <= snapWindow;
+
+            if (inSnapWindow && !snapGlintTriggered)
             {
-                if (lineObjects[i] != null && lineObjects[i].TryGetComponent<LineRenderer>(out LineRenderer lr))
+                snapGlintTriggered = true;
+                SpawnWindKatanaGlint(lineObjects, vibrantWindColor);
+            }
+
+            float outerWidth = inSnapWindow
+                ? 0.03f
+                : 0.09f + Mathf.PingPong(t * 10f, 0.10f);
+            float coreWidth = inSnapWindow ? 0.02f : outerWidth * 0.4f;
+            Color currentOuterColor = inSnapWindow ? snapGlintColor : windSlashTelegraphColor;
+
+            for (int i = 0; i < lineCount; i++)
+            {
+                KeyValuePair<Vector2, Vector2> seg = lineSegments[i];
+                Vector2 curEnd = Vector2.Lerp(seg.Key, seg.Value, drawProgress);
+
+                LineRenderer outerLr = outerLineRenderers[i];
+                if (outerLr != null)
                 {
-                    lr.startWidth = pulseWidth;
-                    lr.endWidth = pulseWidth;
+                    SetSubdividedLinePositions(outerLr, seg.Key, curEnd);
+                    outerLr.widthMultiplier = outerWidth;
+                    outerLr.startColor = currentOuterColor;
+                    outerLr.endColor = currentOuterColor;
+                }
+
+                LineRenderer coreLr = coreLineRenderers[i];
+                if (coreLr != null)
+                {
+                    SetSubdividedLinePositions(coreLr, seg.Key, curEnd);
+                    coreLr.widthMultiplier = coreWidth;
                 }
             }
+
+            // Animate swirling vacuum wind particles sucking inward toward the slash lines
+            float swirlEase = normT * normT;
+            for (int i = 0; i < windParticles.Count; i++)
+            {
+                Transform pTrans = windParticles[i];
+                if (pTrans == null) continue;
+
+                Vector2 startOff = windParticleStartOffsets[i];
+                float spinRad = normT * 4.5f * ((i % 2 == 0) ? 1f : -1f);
+                float cos = Mathf.Cos(spinRad);
+                float sin = Mathf.Sin(spinRad);
+                Vector2 rotatedOff = new Vector2(startOff.x * cos - startOff.y * sin, startOff.x * sin + startOff.y * cos);
+                Vector2 curPos = windParticleTargets[i] + rotatedOff * (1f - swirlEase * 0.88f);
+
+                pTrans.position = curPos;
+                pTrans.Rotate(0f, 0f, 360f * dt);
+            }
+
             yield return null;
+        }
+
+        // Hide vacuum particles on cut ignition
+        for (int i = 0; i < windParticleRenderers.Count; i++)
+        {
+            if (windParticleRenderers[i] != null) windParticleRenderers[i].enabled = false;
         }
 
         if (spriteRenderer != null && !isTarget) spriteRenderer.color = originalColor;
@@ -1004,49 +1246,182 @@ public class LegendarySamurai : EnemyBase
         {
             StopActionAnimation();
             CleanupLineObjects(lineObjects);
+            if (sharedLineMat != null) Destroy(sharedLineMat);
             yield break;
         }
 
-        // Execute violent slash flash across all lines!
+        // 4. Staggered "Anime Multi-Cut" Cascade (1 -> 2 -> 3 -> 4) with Procedural Blades & Crescent Wind Waves!
         AudioClip sfx = windSlashSFX != null ? windSlashSFX : slashDashSFX;
-        PlayBossSFX(sfx, Random.Range(1.2f, 1.4f), windSlashVolume);
-
-        if (playerController != null)
-        {
-            playerController.TriggerCameraShake(0.35f);
-        }
-
-        // Flash lines thick and check player hit
         bool playerHit = false;
-        Vector2 curPlayerPos = playerController != null ? (Vector2)playerController.transform.position : Vector2.zero;
+        float cascadeInterval = 0.045f / Mathf.Max(1f, speedMult * 0.75f);
+        WaitForSeconds cascadeWait = new WaitForSeconds(cascadeInterval);
 
-        for (int i = 0; i < lineObjects.Count; i++)
+        for (int i = 0; i < lineCount; i++)
         {
-            if (lineObjects[i] != null && lineObjects[i].TryGetComponent<LineRenderer>(out LineRenderer lr))
+            if (IsDead || currentHits <= 0) break;
+
+            // Escalating pitch per cut in the cascade
+            float cutPitch = 1.15f + (i * 0.12f);
+            PlayBossSFX(sfx, cutPitch, windSlashVolume);
+
+            if (playerController != null)
             {
-                lr.startWidth = 0.45f;
-                lr.endWidth = 0.45f;
-                lr.startColor = windSlashActiveColor;
-                lr.endColor = windSlashActiveColor;
+                playerController.TriggerCameraShake(i == lineCount - 1 ? 0.35f : 0.18f);
             }
 
+            KeyValuePair<Vector2, Vector2> seg = lineSegments[i];
+            Vector2 dir = lineDirections[i];
+            Vector2 center = lineCenters[i];
+
+            // Expand Dual-Layer Tapered Katana Line to full blazing width
+            LineRenderer outerLr = outerLineRenderers[i];
+            if (outerLr != null)
+            {
+                SetSubdividedLinePositions(outerLr, seg.Key, seg.Value);
+                outerLr.widthMultiplier = 0.72f;
+                outerLr.startColor = vibrantWindColor;
+                outerLr.endColor = vibrantWindColor;
+            }
+
+            LineRenderer coreLr = coreLineRenderers[i];
+            if (coreLr != null)
+            {
+                SetSubdividedLinePositions(coreLr, seg.Key, seg.Value);
+                coreLr.widthMultiplier = 0.28f;
+                coreLr.startColor = windSlashActiveColor;
+                coreLr.endColor = windSlashActiveColor;
+            }
+
+            // Spawn Emerald/White Tapered Pixel Blade Beam + Flying Wind Sparks at the intersection zone
+            const float beamSpan = 9.5f;
+            Vector3 beamStart = (Vector3)(center - dir * (beamSpan * 0.5f));
+            BossStraightSlashVFX.SpawnWindSlash(beamStart, dir, beamSpan, vibrantWindColor, windSlashActiveColor);
+
+            // Spawn Traveling Pixel Crescent Wind Wave racing along the slash cut
+            Vector3 waveStart = (Vector3)(center - dir * 5.5f);
+            BossSlashDashVFX.SpawnTravelingWindCrescent(waveStart, dir, 28f * speedMult, 0.38f, vibrantWindColor, windSlashActiveColor);
+
+            // Spawn Drifting Air-Scar After-Ripples parallel to the cut
+            SpawnAirScarAfterRipples(lineObjects, center, dir, vibrantWindColor);
+
+            // Check player hit along this cut
             if (!playerHit && playerController != null)
             {
-                var seg = lineSegments[i];
+                Vector2 curPlayerPos = playerController.transform.position;
                 if (DistancePointToSegment(curPlayerPos, seg.Key, seg.Value) <= 0.75f)
                 {
                     playerHit = true;
                     playerController.TakeDamage(windSlashDamage);
                 }
             }
+
+            if (i < lineCount - 1)
+            {
+                yield return cascadeWait;
+            }
         }
 
-        yield return new WaitForSeconds(0.16f);
+        // 5. Smooth Dual-Layer Katana Slice-Shut & Dissolve
+        const float sliceShutDuration = 0.20f;
+        float dissolveTimer = 0f;
+        while (dissolveTimer < sliceShutDuration)
+        {
+            dissolveTimer += Time.deltaTime;
+            float fade = 1f - Mathf.Clamp01(dissolveTimer / sliceShutDuration);
+            float outerW = 0.72f * fade * fade;
+            float coreW = 0.28f * fade;
+
+            Color fadedOuter = vibrantWindColor;
+            fadedOuter.a = vibrantWindColor.a * fade;
+            Color fadedCore = windSlashActiveColor;
+            fadedCore.a = fade;
+
+            for (int i = 0; i < lineCount; i++)
+            {
+                LineRenderer outerLr = outerLineRenderers[i];
+                if (outerLr != null)
+                {
+                    outerLr.widthMultiplier = outerW;
+                    outerLr.startColor = fadedOuter;
+                    outerLr.endColor = fadedOuter;
+                }
+
+                LineRenderer coreLr = coreLineRenderers[i];
+                if (coreLr != null)
+                {
+                    coreLr.widthMultiplier = coreW;
+                    coreLr.startColor = fadedCore;
+                    coreLr.endColor = fadedCore;
+                }
+            }
+
+            yield return null;
+        }
+
         CleanupLineObjects(lineObjects);
+        if (sharedLineMat != null) Destroy(sharedLineMat);
 
         yield return new WaitForSeconds(0.5f / speedMult);
         StopActionAnimation();
         if (!IsDead && currentHits > 0) bossState = BossActionState.Idle;
+    }
+
+    private static void SetSubdividedLinePositions(LineRenderer lr, Vector2 start, Vector2 end)
+    {
+        if (lr == null) return;
+        int count = lr.positionCount;
+        if (count < 2) return;
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / (count - 1);
+            lr.SetPosition(i, Vector2.Lerp(start, end, t));
+        }
+    }
+
+    private void SpawnWindKatanaGlint(List<GameObject> trackedObjects, Color windColor)
+    {
+        Vector3 glintPos = transform.position + new Vector3(spriteRenderer != null && spriteRenderer.flipX ? -0.55f : 0.55f, 0.65f, 0f);
+        Sprite barSprite = BossStraightSlashVFX.GetOrCreateSparkSprite();
+
+        for (int i = 0; i < 2; i++)
+        {
+            GameObject cross = new GameObject($"WindKatanaGlint_{i}");
+            cross.transform.position = glintPos;
+            cross.transform.rotation = Quaternion.Euler(0f, 0f, i * 90f + 45f);
+            cross.transform.localScale = new Vector3(3.2f, 0.45f, 1f);
+
+            SpriteRenderer sr = cross.AddComponent<SpriteRenderer>();
+            sr.sprite = barSprite;
+            sr.color = i == 0 ? Color.white : Color.Lerp(windColor, Color.white, 0.5f);
+            sr.sortingOrder = 20;
+
+            trackedObjects.Add(cross);
+        }
+    }
+
+    private void SpawnAirScarAfterRipples(List<GameObject> trackedObjects, Vector2 center, Vector2 dir, Color windColor)
+    {
+        Vector2 perp = new Vector2(-dir.y, dir.x);
+        float angle = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg;
+        Sprite streakSprite = BossStraightSlashVFX.GetOrCreateStreakBarSprite();
+
+        for (int side = -1; side <= 1; side += 2)
+        {
+            GameObject rippleObj = new GameObject("WindAirScarRipple");
+            rippleObj.transform.position = center + perp * (side * 0.42f);
+            rippleObj.transform.rotation = Quaternion.Euler(0f, 0f, angle);
+            rippleObj.transform.localScale = new Vector3(2.8f, 0.65f, 1f);
+
+            SpriteRenderer sr = rippleObj.AddComponent<SpriteRenderer>();
+            sr.sprite = streakSprite;
+            Color c = Color.Lerp(windColor, Color.white, 0.35f);
+            c.a = 0.75f;
+            sr.color = c;
+            sr.sortingOrder = 16;
+
+            trackedObjects.Add(rippleObj);
+        }
     }
 
     private void CleanupLineObjects(List<GameObject> lineObjects)
@@ -1061,9 +1436,9 @@ public class LegendarySamurai : EnemyBase
         lineObjects.Clear();
     }
 
-    #endregion
-
-    #region Pattern 5: Hidden Stab (Phase 5 / 20%)
+    // -------------------------------------------------------------------------
+    // Pattern 5: Hidden Stab (Phase 5 / 20%)
+    // -------------------------------------------------------------------------
 
     private IEnumerator HiddenStabRoutine()
     {
@@ -1076,14 +1451,7 @@ public class LegendarySamurai : EnemyBase
         AudioClip vSfx = slashDashSFX != null ? slashDashSFX : bossRoarSFX;
         PlayBossSFX(vSfx, 1.35f, hiddenStabVolume * 0.85f);
 
-        if (hitVFX != null)
-        {
-            Instantiate(hitVFX, transform.position, Quaternion.identity);
-        }
-        else
-        {
-            BossHitVFX.Spawn(transform.position);
-        }
+        SpawnHitEffect(transform.position);
 
         Color origColor = spriteRenderer != null ? spriteRenderer.color : Color.white;
         if (spriteRenderer != null) spriteRenderer.color = Color.clear;
@@ -1197,7 +1565,56 @@ public class LegendarySamurai : EnemyBase
 
     #endregion
 
-    #region Weak Points & 5-Circle Selection System
+    #region Sequential Iai & Weak Points
+
+    private void CreateWeakPointContainer()
+    {
+        targetPoints.Clear();
+
+        GameObject containerObj = new GameObject("BossWeakPointContainer");
+        weakPointContainer = containerObj.transform;
+        weakPointContainer.SetParent(transform, false);
+        weakPointContainer.localPosition = new Vector3(0f, 0.65f, 0f);
+
+        for (int i = 0; i < requiredWeakPoints; i++)
+        {
+            BossTargetPoint point;
+
+            if (weakPointPrefab != null)
+            {
+                GameObject obj = Instantiate(weakPointPrefab, weakPointContainer);
+                if (!obj.TryGetComponent<BossTargetPoint>(out point))
+                {
+                    point = obj.AddComponent<BossTargetPoint>();
+                }
+            }
+            else
+            {
+                GameObject obj = new GameObject($"BossTargetPoint_{i}");
+                obj.transform.SetParent(weakPointContainer, false);
+                obj.layer = gameObject.layer;
+                obj.tag = gameObject.tag;
+
+                CircleCollider2D circleCol = obj.AddComponent<CircleCollider2D>();
+                circleCol.radius = 0.45f;
+                circleCol.isTrigger = true;
+
+                Rigidbody2D kinematicRb = obj.AddComponent<Rigidbody2D>();
+                kinematicRb.bodyType = RigidbodyType2D.Kinematic;
+                kinematicRb.gravityScale = 0f;
+
+                SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
+                sr.sprite = BossTargetPoint.GetOrCreateTargetPointSprite();
+                sr.sortingOrder = 7;
+
+                point = obj.AddComponent<BossTargetPoint>();
+            }
+
+            point.Initialize(this, i);
+            point.DeactivatePoint();
+            targetPoints.Add(point);
+        }
+    }
 
     public override void TrySelectTarget()
     {
@@ -1216,6 +1633,7 @@ public class LegendarySamurai : EnemyBase
     private void ShowWeakPointCircles()
     {
         slashedCirclesCount = 0;
+        currentSequenceIndex = 0;
         hitDeductedInCurrentSlash = false;
         areWeakPointsActive = true;
         modeExitTimer = 0f;
@@ -1224,55 +1642,78 @@ public class LegendarySamurai : EnemyBase
             ? weakPointContainer.position
             : transform.position + new Vector3(0f, 0.65f, 0f);
 
-        List<Vector2> placedOffsets = new List<Vector2>();
-
-        for (int i = 0; i < targetPoints.Count; i++)
+        if (useSequentialIaiPatterns)
         {
-            if (targetPoints[i] == null) continue;
+            IaiPatternType pattern = GetPatternForPhase(GetCurrentPhase());
+            List<Vector2> offsets = GetIaiPatternOffsets(pattern, targetPoints.Count);
 
-            Vector2 offset = Vector2.zero;
-            bool foundValid = false;
-
-            // Pick a fully random angle and distance, ensuring circles do not stack directly on top of each other
-            for (int attempt = 0; attempt < 15; attempt++)
+            for (int i = 0; i < targetPoints.Count; i++)
             {
-                float angle = Random.Range(0f, 360f);
-                float dist = Random.Range(weakPointRadiusMin, weakPointRadiusMax);
-                offset = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * dist;
+                if (targetPoints[i] == null) continue;
 
-                bool tooClose = false;
-                for (int j = 0; j < placedOffsets.Count; j++)
+                Vector2 offset = i < offsets.Count ? offsets[i] : Vector2.zero;
+                Vector3 worldPos = centerPos + (Vector3)offset;
+
+                targetPoints[i].SetSequenceIndex(i, targetPoints.Count, weakPointFontAsset, weakPointNumberFontSize);
+                targetPoints[i].SetSequenceState(i == 0 ? TargetPointSequenceState.ActiveNext : TargetPointSequenceState.Locked);
+                targetPoints[i].ActivatePoint(worldPos);
+            }
+        }
+        else
+        {
+            randomWeakPointOffsetsBuffer.Clear();
+
+            for (int i = 0; i < targetPoints.Count; i++)
+            {
+                if (targetPoints[i] == null) continue;
+
+                Vector2 offset = Vector2.zero;
+                bool foundValid = false;
+
+                // Pick a fully random angle and distance, ensuring circles do not stack directly on top of each other
+                for (int attempt = 0; attempt < 15; attempt++)
                 {
-                    if (Vector2.Distance(offset, placedOffsets[j]) < 0.85f)
+                    float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
+                    float dist = Random.Range(weakPointRadiusMin, weakPointRadiusMax);
+                    offset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * dist;
+
+                    bool tooClose = false;
+                    for (int j = 0; j < randomWeakPointOffsetsBuffer.Count; j++)
                     {
-                        tooClose = true;
+                        if ((offset - randomWeakPointOffsetsBuffer[j]).sqrMagnitude < MIN_WEAK_POINT_SPACING_SQR)
+                        {
+                            tooClose = true;
+                            break;
+                        }
+                    }
+
+                    if (!tooClose)
+                    {
+                        foundValid = true;
                         break;
                     }
                 }
 
-                if (!tooClose)
+                if (!foundValid)
                 {
-                    foundValid = true;
-                    break;
+                    float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
+                    float dist = Random.Range(weakPointRadiusMin, weakPointRadiusMax);
+                    offset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * dist;
                 }
-            }
 
-            if (!foundValid)
-            {
-                float angle = Random.Range(0f, 360f);
-                float dist = Random.Range(weakPointRadiusMin, weakPointRadiusMax);
-                offset = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * dist;
+                randomWeakPointOffsetsBuffer.Add(offset);
+                Vector3 worldPos = centerPos + (Vector3)offset;
+                targetPoints[i].SetSequenceIndex(i, targetPoints.Count, weakPointFontAsset, weakPointNumberFontSize);
+                targetPoints[i].SetSequenceState(TargetPointSequenceState.ActiveNext);
+                targetPoints[i].ActivatePoint(worldPos);
             }
-
-            placedOffsets.Add(offset);
-            Vector3 worldPos = centerPos + (Vector3)offset;
-            targetPoints[i].ActivatePoint(worldPos);
         }
     }
 
     private void ResetWeakPoints()
     {
         slashedCirclesCount = 0;
+        currentSequenceIndex = 0;
         hitDeductedInCurrentSlash = false;
         areWeakPointsActive = false;
         isTarget = false;
@@ -1284,6 +1725,127 @@ public class LegendarySamurai : EnemyBase
                 targetPoints[i].DeactivatePoint();
             }
         }
+    }
+
+    public bool IsPointNextInSequence(BossTargetPoint point)
+    {
+        if (!useSequentialIaiPatterns) return true;
+        if (point == null) return false;
+        return point.PointIndex == currentSequenceIndex;
+    }
+
+    public void OnTargetPointSelected(BossTargetPoint point)
+    {
+        if (point == null) return;
+
+        // Play sequential pitch chime SFX if assigned
+        if (pointSelectChimeSFX != null)
+        {
+            float pitch = 0.95f + Mathf.Clamp(point.PointIndex, 0, 8) * 0.12f;
+            PlayBossSFX(pointSelectChimeSFX, pitch, 1.15f);
+        }
+
+        currentSequenceIndex = point.PointIndex + 1;
+
+        if (useSequentialIaiPatterns && currentSequenceIndex < targetPoints.Count)
+        {
+            if (targetPoints[currentSequenceIndex] != null)
+            {
+                targetPoints[currentSequenceIndex].SetSequenceState(TargetPointSequenceState.ActiveNext);
+            }
+        }
+    }
+
+    private IaiPatternType GetPatternForPhase(int phase)
+    {
+        switch (phase)
+        {
+            case 1: return IaiPatternType.Ichimonji;
+            case 2: return IaiPatternType.KesaGiri;
+            case 3: return IaiPatternType.Jumonji;
+            case 4: return IaiPatternType.Zantetsu;
+            case 5:
+            default:
+                return IaiPatternType.GorinStar;
+        }
+    }
+
+    private List<Vector2> GetIaiPatternOffsets(IaiPatternType pattern, int count)
+    {
+        List<Vector2> offsets = new List<Vector2>(Mathf.Max(5, count));
+
+        switch (pattern)
+        {
+            case IaiPatternType.Ichimonji:
+                // Pure horizontal slash across the samurai's torso
+                // 5 points from left to right with subtle blade curve
+                offsets.Add(new Vector2(-1.9f, 0.08f));
+                offsets.Add(new Vector2(-0.95f, -0.02f));
+                offsets.Add(new Vector2(0.0f, -0.06f));
+                offsets.Add(new Vector2(0.95f, -0.02f));
+                offsets.Add(new Vector2(1.9f, 0.08f));
+                break;
+
+            case IaiPatternType.KesaGiri:
+                // Diagonal monk's robe crescent slash from shoulder across to hip
+                offsets.Add(new Vector2(-1.45f, 1.45f));
+                offsets.Add(new Vector2(-0.75f, 0.75f));
+                offsets.Add(new Vector2(0.0f, 0.05f));
+                offsets.Add(new Vector2(0.75f, -0.65f));
+                offsets.Add(new Vector2(1.45f, -1.35f));
+                break;
+
+            case IaiPatternType.Jumonji:
+                // Cross Slash: First horizontal cut (0->1->2), then top-down vertical strike (3->4)
+                offsets.Add(new Vector2(-1.5f, 0.05f));
+                offsets.Add(new Vector2(0.0f, 0.0f));
+                offsets.Add(new Vector2(1.5f, -0.05f));
+                offsets.Add(new Vector2(0.0f, 1.45f));
+                offsets.Add(new Vector2(0.0f, -1.45f));
+                break;
+
+            case IaiPatternType.Zantetsu:
+                // Zantetsu Z-Slash: Top cut -> diagonal cut -> bottom cut
+                offsets.Add(new Vector2(-1.45f, 1.35f));
+                offsets.Add(new Vector2(1.45f, 1.35f));
+                offsets.Add(new Vector2(0.0f, 0.0f));
+                offsets.Add(new Vector2(-1.45f, -1.35f));
+                offsets.Add(new Vector2(1.45f, -1.35f));
+                break;
+
+            case IaiPatternType.GorinStar:
+            default:
+                // Five Rings / Pentagram Star Flurry (single continuous stroke)
+                // Angles: 90, 306, 162, 18, 234 degrees
+                const float starRadius = 1.6f;
+                for (int i = 0; i < GorinStarAngles.Length; i++)
+                {
+                    float rad = GorinStarAngles[i] * Mathf.Deg2Rad;
+                    offsets.Add(new Vector2(Mathf.Cos(rad), Mathf.Sin(rad)) * starRadius);
+                }
+                break;
+        }
+
+        // Apply spread multiplier and boss facing orientation (flipX)
+        bool isFacingFlipped = spriteRenderer != null && spriteRenderer.flipX;
+        for (int i = 0; i < offsets.Count; i++)
+        {
+            Vector2 p = offsets[i] * iaiPatternSpread;
+            if (isFacingFlipped)
+            {
+                p.x = -p.x;
+            }
+            offsets[i] = p;
+        }
+
+        // Safety fallback if count differs from 5
+        while (offsets.Count < count)
+        {
+            float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
+            offsets.Add(new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * Random.Range(weakPointRadiusMin, weakPointRadiusMax));
+        }
+
+        return offsets;
     }
 
     public void OnTargetPointSlashed(BossTargetPoint point, Vector2 slashImpulse)
@@ -1300,6 +1862,37 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
+    private bool AreAllCirclesSelected()
+    {
+        if (targetPoints.Count < requiredWeakPoints) return false;
+
+        for (int i = 0; i < targetPoints.Count; i++)
+        {
+            BossTargetPoint pt = targetPoints[i];
+            if (pt == null || (!pt.IsTarget && !pt.IsSlashed))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void DestroyAllTargetPoints()
+    {
+        for (int i = 0; i < targetPoints.Count; i++)
+        {
+            if (targetPoints[i] != null && targetPoints[i].gameObject != null)
+            {
+                Destroy(targetPoints[i].gameObject);
+            }
+        }
+        targetPoints.Clear();
+    }
+
+    #endregion
+
+    #region Combat & Damage
+
     public override void OnDeath(Vector2 deathImpulse = default)
     {
         if (IsDead || currentHits <= 0) return;
@@ -1315,20 +1908,6 @@ public class LegendarySamurai : EnemyBase
         HandleDeflectedHit();
     }
 
-    private bool AreAllCirclesSelected()
-    {
-        if (targetPoints.Count < requiredWeakPoints) return false;
-
-        for (int i = 0; i < targetPoints.Count; i++)
-        {
-            if (targetPoints[i] == null || (!targetPoints[i].IsTarget && !targetPoints[i].IsSlashed))
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private void HandleDeflectedHit()
     {
         if (hitDeductedInCurrentSlash) return;
@@ -1342,7 +1921,7 @@ public class LegendarySamurai : EnemyBase
 
     private IEnumerator ResetAfterDeflectRoutine()
     {
-        yield return new WaitForSeconds(0.2f);
+        yield return WaitDeflectReset;
         ResetWeakPoints();
     }
 
@@ -1409,37 +1988,52 @@ public class LegendarySamurai : EnemyBase
 
         TriggerHitFlash(Color.white);
         PlayBossSFX(hitDamageSFX, Random.Range(0.95f, 1.05f), hitDeflectVolume);
-
-        if (hitVFX != null)
-        {
-            Instantiate(hitVFX, transform.position, Quaternion.identity);
-        }
-        else
-        {
-            BossHitVFX.Spawn(transform.position);
-        }
+        SpawnHitEffect(transform.position);
 
         ResetWeakPoints();
     }
 
     private void TriggerHitFlash(Color? flashColor = null)
     {
+        Color targetColor = flashColor ?? Color.white;
         if (pixelEffect != null)
         {
-            pixelEffect.Flash(0.12f, flashColor ?? Color.white);
+            pixelEffect.Flash(0.12f, targetColor);
             return;
         }
 
         if (flashCoroutine != null) StopCoroutine(flashCoroutine);
-        flashCoroutine = StartCoroutine(HitFlashRoutine(flashColor ?? Color.white));
+        flashCoroutine = StartCoroutine(HitFlashRoutine(targetColor));
     }
 
     private IEnumerator HitFlashRoutine(Color color)
     {
         if (spriteRenderer != null) spriteRenderer.color = color;
-        yield return new WaitForSeconds(0.12f);
+        yield return WaitHitFlash;
         if (spriteRenderer != null && !isTarget) spriteRenderer.color = originalColor;
     }
+
+    protected override void HandlePlayerContact(Collision2D collision)
+    {
+        if (IsDead || currentHits <= 0) return;
+
+        if (isDashingSlash && collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
+        {
+            float dmg = (bossState == BossActionState.HiddenStab) ? hiddenStabDamage : slashDashDamage;
+            player.TakeDamage(dmg);
+            if (collision.gameObject.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
+            {
+                Vector2 pushDir = (player.transform.position - transform.position).normalized;
+                if (pushDir == Vector2.zero) pushDir = Vector2.up;
+                playerRb.AddForce(pushDir * stompKnockback, ForceMode2D.Impulse);
+            }
+            return;
+        }
+
+        base.HandlePlayerContact(collision);
+    }
+
+    protected override bool HandleThrownImpact(Collision2D collision) => false;
 
     public void Die(Vector2 deathImpulse = default)
     {
@@ -1459,9 +2053,9 @@ public class LegendarySamurai : EnemyBase
         if (dashTrailRenderer != null) dashTrailRenderer.emitting = false;
 
         Collider2D[] allColliders = GetComponentsInChildren<Collider2D>();
-        foreach (var c in allColliders)
+        for (int i = 0; i < allColliders.Length; i++)
         {
-            if (c != null) c.enabled = false;
+            if (allColliders[i] != null) allColliders[i].enabled = false;
         }
 
         DestroyAllTargetPoints();
@@ -1469,15 +2063,16 @@ public class LegendarySamurai : EnemyBase
         // Clean up or defeat all active minions spawned by the boss so the arena is cleared cleanly
         for (int i = 0; i < activeSpawnedMinions.Count; i++)
         {
-            if (activeSpawnedMinions[i] != null)
+            GameObject minionObj = activeSpawnedMinions[i];
+            if (minionObj != null)
             {
-                if (activeSpawnedMinions[i].TryGetComponent<EnemyBase>(out EnemyBase eb) && !eb.IsDead)
+                if (minionObj.TryGetComponent<EnemyBase>(out EnemyBase eb) && !eb.IsDead)
                 {
                     eb.OnDeath();
                 }
                 else
                 {
-                    Destroy(activeSpawnedMinions[i]);
+                    Destroy(minionObj);
                 }
             }
         }
@@ -1492,81 +2087,6 @@ public class LegendarySamurai : EnemyBase
         onBossHealthChanged?.Invoke(0, bossMaxHits);
 
         StartCoroutine(DefeatVisualSequence(deathImpulse));
-    }
-
-    /// <summary>
-    /// Spawns a randomized wave of minions when entering a new phrase based on minionsPerPhrase.
-    /// </summary>
-    public void SpawnMinionWaveForPhase(int phase)
-    {
-        if (minionPrefabs == null || minionPrefabs.Count == 0) return;
-
-        int phaseIndex = phase - 1;
-        int countToSpawn = 0;
-        if (minionsPerPhrase != null && phaseIndex >= 0 && phaseIndex < minionsPerPhrase.Length)
-        {
-            countToSpawn = minionsPerPhrase[phaseIndex];
-        }
-
-        if (countToSpawn <= 0) return;
-
-        StartCoroutine(SpawnMinionWaveRoutine(countToSpawn));
-    }
-
-    private IEnumerator SpawnMinionWaveRoutine(int count)
-    {
-        yield return new WaitForSeconds(0.35f);
-
-        AudioClip sfx = minionSummonSFX != null ? minionSummonSFX : bossRoarSFX;
-        PlayBossSFX(sfx, 1.1f, roarVolume);
-
-        for (int i = 0; i < count; i++)
-        {
-            if (IsDead || currentHits <= 0) yield break;
-
-            GameObject prefab = minionPrefabs[Random.Range(0, minionPrefabs.Count)];
-            if (prefab == null) continue;
-
-            Vector2 spawnPoint;
-            if (GameManager.Instance != null && GameManager.Instance.TryGetValidSpawnPoint(out Vector2 validPoint, prefab))
-            {
-                spawnPoint = validPoint;
-            }
-            else
-            {
-                float sign = (i % 2 == 0) ? 1f : -1f;
-                float dist = Random.Range(4.5f, 10f) * sign;
-                Vector2 origin = (Vector2)transform.position + new Vector2(dist, 4f);
-                RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, 12f, groundLayer);
-                if (hit.collider != null)
-                {
-                    spawnPoint = hit.point + Vector2.up * 0.5f;
-                }
-                else
-                {
-                    spawnPoint = (Vector2)transform.position + new Vector2(dist, 0f);
-                }
-            }
-
-            GameObject spawnedMinion = Instantiate(prefab, spawnPoint, Quaternion.identity);
-            activeSpawnedMinions.Add(spawnedMinion);
-
-            if (GameManager.Instance != null)
-            {
-                GameManager.Instance.RegisterEnemy(spawnedMinion);
-            }
-
-            if (hitVFX != null)
-            {
-                Instantiate(hitVFX, spawnPoint, Quaternion.identity);
-            }
-            else
-            {
-                BossHitVFX.Spawn(spawnPoint);
-            }
-
-            yield return new WaitForSeconds(0.12f);
-        }
     }
 
     private IEnumerator DefeatVisualSequence(Vector2 deathImpulse)
@@ -1590,13 +2110,13 @@ public class LegendarySamurai : EnemyBase
 
         // Dramatic flashing defeat sequence
         float elapsed = 0f;
-        float duration = 1.0f;
+        const float duration = 1.0f;
         while (elapsed < duration)
         {
             elapsed += Time.unscaledDeltaTime;
             if (spriteRenderer != null)
             {
-                spriteRenderer.color = (Mathf.Sin(elapsed * 25f) > 0) ? Color.red : Color.white;
+                spriteRenderer.color = (Mathf.Sin(elapsed * 25f) > 0f) ? Color.red : Color.white;
             }
             yield return null;
         }
@@ -1613,64 +2133,76 @@ public class LegendarySamurai : EnemyBase
         Destroy(gameObject);
     }
 
-    private void DestroyAllTargetPoints()
+    #endregion
+
+    #region Minion Spawner
+
+    /// <summary>
+    /// Spawns a randomized wave of minions when entering a new phrase based on minionsPerPhrase.
+    /// </summary>
+    public void SpawnMinionWaveForPhase(int phase)
     {
-        for (int i = 0; i < targetPoints.Count; i++)
+        if (minionPrefabs == null || minionPrefabs.Count == 0) return;
+
+        int phaseIndex = phase - 1;
+        int countToSpawn = 0;
+        if (minionsPerPhrase != null && phaseIndex >= 0 && phaseIndex < minionsPerPhrase.Length)
         {
-            if (targetPoints[i] != null && targetPoints[i].gameObject != null)
-            {
-                Destroy(targetPoints[i].gameObject);
-            }
+            countToSpawn = minionsPerPhrase[phaseIndex];
         }
-        targetPoints.Clear();
+
+        if (countToSpawn <= 0) return;
+
+        StartCoroutine(SpawnMinionWaveRoutine(countToSpawn));
     }
 
-    private void OnDestroy()
+    private IEnumerator SpawnMinionWaveRoutine(int count)
     {
-        DestroyAllTargetPoints();
+        yield return WaitMinionWaveInitial;
+
+        AudioClip sfx = minionSummonSFX != null ? minionSummonSFX : bossRoarSFX;
+        PlayBossSFX(sfx, 1.1f, roarVolume);
+
+        for (int i = 0; i < count; i++)
+        {
+            if (IsDead || currentHits <= 0) yield break;
+
+            GameObject prefab = minionPrefabs[Random.Range(0, minionPrefabs.Count)];
+            if (prefab == null) continue;
+
+            Vector2 spawnPoint;
+            if (GameManager.Instance != null && GameManager.Instance.TryGetValidSpawnPoint(out Vector2 validPoint, prefab))
+            {
+                spawnPoint = validPoint;
+            }
+            else
+            {
+                float sign = (i % 2 == 0) ? 1f : -1f;
+                float dist = Random.Range(4.5f, 10f) * sign;
+                Vector2 origin = (Vector2)transform.position + new Vector2(dist, 4f);
+                RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, 12f, groundLayer);
+                spawnPoint = hit.collider != null
+                    ? hit.point + Vector2.up * 0.5f
+                    : (Vector2)transform.position + new Vector2(dist, 0f);
+            }
+
+            GameObject spawnedMinion = Instantiate(prefab, spawnPoint, Quaternion.identity);
+            activeSpawnedMinions.Add(spawnedMinion);
+
+            if (GameManager.Instance != null)
+            {
+                GameManager.Instance.RegisterEnemy(spawnedMinion);
+            }
+
+            SpawnHitEffect(spawnPoint);
+
+            yield return WaitMinionSpawnInterval;
+        }
     }
 
     #endregion
 
-    #region Helper Methods & Updates
-
-    protected override void Update()
-    {
-        if (IsDead) return;
-
-        if (currentHits <= 0)
-        {
-            Die();
-            return;
-        }
-
-        base.Update();
-
-        UpdateSpriteAnimation(Time.deltaTime);
-
-        // Reset circles if the player leaves Chain Slash mode without slashing
-        if (areWeakPointsActive && (PlayerController.Instance == null || !PlayerController.Instance.IsInMode))
-        {
-            modeExitTimer += Time.unscaledDeltaTime;
-            if (modeExitTimer > 0.45f)
-            {
-                ResetWeakPoints();
-            }
-        }
-        else
-        {
-            modeExitTimer = 0f;
-        }
-
-#if ENABLE_INPUT_SYSTEM
-        if (UnityEngine.InputSystem.Keyboard.current != null && UnityEngine.InputSystem.Keyboard.current.f8Key.wasPressedThisFrame)
-        {
-            showOnScreenSlider = !showOnScreenSlider;
-        }
-#endif
-    }
-
-    #region Sprite Animation Engine (No Animator)
+    #region Sprite Animation
 
     public void PlayActionAnimation(BossAnimState state, bool loop = false)
     {
@@ -1691,22 +2223,6 @@ public class LegendarySamurai : EnemyBase
     {
         isPlayingActionAnim = false;
         actionAnimLoop = false;
-    }
-
-    private bool IsBossGrounded()
-    {
-        if (col == null) return true;
-        Bounds bounds = col.bounds;
-        Vector2 groundBoxOrigin = new Vector2(bounds.center.x, bounds.min.y + 0.06f);
-        Vector2 groundBoxSize = new Vector2(bounds.size.x * 0.75f, 0.08f);
-        return Physics2D.BoxCast(
-            groundBoxOrigin,
-            groundBoxSize,
-            0f,
-            Vector2.down,
-            0.18f,
-            groundLayer
-        );
     }
 
     private List<Sprite> GetFramesForState(BossAnimState state)
@@ -1830,108 +2346,6 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
-    #endregion
-
-    protected override void Movement()
-    {
-        if (IsDead || currentHits <= 0 || bossState != BossActionState.Moving) return;
-        base.Movement();
-    }
-
-    protected override void OnCollisionEnter2D(Collision2D collision)
-    {
-        base.OnCollisionEnter2D(collision);
-
-        if (isStompSlamming)
-        {
-            for (int i = 0; i < collision.contactCount; i++)
-            {
-                if (collision.GetContact(i).normal.y > 0.35f)
-                {
-                    stompHasHitGround = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    protected override void OnCollisionStay2D(Collision2D collision)
-    {
-        if (isStompSlamming)
-        {
-            for (int i = 0; i < collision.contactCount; i++)
-            {
-                if (collision.GetContact(i).normal.y > 0.35f)
-                {
-                    stompHasHitGround = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    protected override void HandlePlayerContact(Collision2D collision)
-    {
-        if (IsDead || currentHits <= 0) return;
-
-        if (isDashingSlash)
-        {
-            if (collision.gameObject.TryGetComponent<PlayerController>(out PlayerController player))
-            {
-                float dmg = (bossState == BossActionState.HiddenStab) ? hiddenStabDamage : slashDashDamage;
-                player.TakeDamage(dmg);
-                if (collision.gameObject.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
-                {
-                    Vector2 pushDir = (player.transform.position - transform.position).normalized;
-                    if (pushDir == Vector2.zero) pushDir = Vector2.up;
-                    playerRb.AddForce(pushDir * stompKnockback, ForceMode2D.Impulse);
-                }
-                return;
-            }
-        }
-
-        base.HandlePlayerContact(collision);
-    }
-
-    protected override bool HandleThrownImpact(Collision2D collision) => false;
-
-    private void FacePlayer()
-    {
-        if (playerController != null && spriteRenderer != null)
-        {
-            float dirX = playerController.transform.position.x - transform.position.x;
-            if (Mathf.Abs(dirX) > 0.1f)
-            {
-                spriteRenderer.flipX = dirX < 0f;
-            }
-        }
-    }
-
-    private Vector2 GetDirectionToPlayer()
-    {
-        if (playerController != null)
-        {
-            Vector2 diff = (Vector2)playerController.transform.position - (Vector2)transform.position;
-            if (diff.sqrMagnitude > 0.01f) return diff.normalized;
-        }
-        return (spriteRenderer != null && spriteRenderer.flipX) ? Vector2.left : Vector2.right;
-    }
-
-    private static float DistancePointToSegment(Vector2 point, Vector2 a, Vector2 b)
-    {
-        Vector2 ab = b - a;
-        float lenSq = ab.sqrMagnitude;
-        if (lenSq < 0.0001f) return Vector2.Distance(point, a);
-
-        float t = Mathf.Clamp01(Vector2.Dot(point - a, ab) / lenSq);
-        Vector2 projection = a + t * ab;
-        return Vector2.Distance(point, projection);
-    }
-
-    #endregion
-
-    #region Dash Trail & Ghost After-Images
-
     private void SetupDashTrail()
     {
         if (dashTrailRenderer == null)
@@ -1971,8 +2385,7 @@ public class LegendarySamurai : EnemyBase
 
         if (dashTrailRenderer.material == null || dashTrailRenderer.material.name.Contains("Default-Material"))
         {
-            Shader shader = Shader.Find("Sprites/Default");
-            if (shader == null) shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+            Shader shader = GetDefaultSpriteShader();
             if (shader != null)
             {
                 dashTrailRenderer.material = new Material(shader);
@@ -1988,11 +2401,14 @@ public class LegendarySamurai : EnemyBase
     private IEnumerator DashAfterImageRoutine(float duration)
     {
         float timer = 0f;
+        float interval = Mathf.Max(0.01f, afterImageInterval);
+        WaitForSeconds waitInterval = new WaitForSeconds(interval);
+
         while (timer < duration && isDashingSlash && !IsDead && currentHits > 0)
         {
             SpawnSpriteAfterImage();
-            yield return new WaitForSeconds(afterImageInterval);
-            timer += afterImageInterval;
+            yield return waitInterval;
+            timer += interval;
         }
     }
 
@@ -2002,17 +2418,16 @@ public class LegendarySamurai : EnemyBase
         if (sourceSr == null || sourceSr.sprite == null) return;
 
         GameObject ghost = new GameObject("BossAfterImage");
-        ghost.transform.position = sourceSr.transform.position;
-        ghost.transform.rotation = sourceSr.transform.rotation;
-        ghost.transform.localScale = sourceSr.transform.lossyScale;
+        Transform sourceTransform = sourceSr.transform;
+        ghost.transform.SetPositionAndRotation(sourceTransform.position, sourceTransform.rotation);
+        ghost.transform.localScale = sourceTransform.lossyScale;
 
         SpriteRenderer ghostSr = ghost.AddComponent<SpriteRenderer>();
         ghostSr.sprite = sourceSr.sprite;
         ghostSr.flipX = sourceSr.flipX;
         ghostSr.flipY = sourceSr.flipY;
         ghostSr.sortingOrder = Mathf.Max(0, sourceSr.sortingOrder - 1);
-        ghostSr.material = sourceSr.material;
-
+        ghostSr.sharedMaterial = sourceSr.sharedMaterial;
         ghostSr.color = new Color(dashTrailColor.r, dashTrailColor.g, dashTrailColor.b, 0.65f);
 
         StartCoroutine(FadeAndDestroyAfterImage(ghost, ghostSr));
@@ -2020,14 +2435,14 @@ public class LegendarySamurai : EnemyBase
 
     private IEnumerator FadeAndDestroyAfterImage(GameObject ghost, SpriteRenderer sr)
     {
-        float lifetime = 0.22f;
+        const float lifetime = 0.22f;
         float elapsed = 0f;
         Color initialColor = sr != null ? sr.color : dashTrailColor;
 
         while (elapsed < lifetime)
         {
             elapsed += 0.055f;
-            yield return new WaitForSeconds(0.055f);
+            yield return WaitAfterImageFadeStep;
 
             if (sr == null || ghost == null) yield break;
 
@@ -2044,14 +2459,11 @@ public class LegendarySamurai : EnemyBase
 
     #endregion
 
-    #region Boss Audio & Volume Sliders
-
-    private AudioSource bossAudioSource;
+    #region Audio & BGM
 
     private void SetupBossAudio()
     {
-        bossAudioSource = GetComponent<AudioSource>();
-        if (bossAudioSource == null)
+        if (!TryGetComponent<AudioSource>(out bossAudioSource))
         {
             bossAudioSource = gameObject.AddComponent<AudioSource>();
         }
@@ -2080,12 +2492,6 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
-    public float BossMasterVolume
-    {
-        get => bossMasterVolume;
-        set => SetBossMasterVolume(value);
-    }
-
     public void PlayBossSFX(AudioClip clip, float pitch = 1f, float patternVolume = 1f)
     {
         if (clip == null) return;
@@ -2106,30 +2512,6 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
-    private void OnGUI()
-    {
-        if (!showOnScreenSlider || IsDead || currentHits <= 0) return;
-
-        GUILayout.BeginArea(new Rect(15, Screen.height - 95, 230, 80), GUI.skin.box);
-        GUILayout.Label($"<b>Boss Master Volume:</b> {bossMasterVolume:F1}x");
-        float newVol = GUILayout.HorizontalSlider(bossMasterVolume, 0f, 3f);
-        if (Mathf.Abs(newVol - bossMasterVolume) > 0.01f)
-        {
-            SetBossMasterVolume(newVol);
-        }
-        GUILayout.EndArea();
-    }
-
-    #endregion
-
-    #region Boss Background Music (BGM) Engine
-
-    private AudioSource bgmSourceA;
-    private AudioSource bgmSourceB;
-    private bool isSourceAPlaying = false;
-    private bool isPhase2BGMActive = false;
-    private Coroutine bgmCrossfadeCoroutine;
-
     private void SetupBossBGM()
     {
 #if UNITY_EDITOR
@@ -2143,23 +2525,21 @@ public class LegendarySamurai : EnemyBase
         }
 #endif
 
-        GameObject bgmObjA = new GameObject("BossBGM_SourceA");
-        bgmObjA.transform.SetParent(transform, false);
-        bgmSourceA = bgmObjA.AddComponent<AudioSource>();
-        bgmSourceA.loop = loopBGM;
-        bgmSourceA.playOnAwake = false;
-        bgmSourceA.spatialBlend = 0f;
-        bgmSourceA.priority = 16;
-        bgmSourceA.volume = 0f;
+        bgmSourceA = CreateBGMSource("BossBGM_SourceA");
+        bgmSourceB = CreateBGMSource("BossBGM_SourceB");
+    }
 
-        GameObject bgmObjB = new GameObject("BossBGM_SourceB");
-        bgmObjB.transform.SetParent(transform, false);
-        bgmSourceB = bgmObjB.AddComponent<AudioSource>();
-        bgmSourceB.loop = loopBGM;
-        bgmSourceB.playOnAwake = false;
-        bgmSourceB.spatialBlend = 0f;
-        bgmSourceB.priority = 16;
-        bgmSourceB.volume = 0f;
+    private AudioSource CreateBGMSource(string sourceName)
+    {
+        GameObject bgmObj = new GameObject(sourceName);
+        bgmObj.transform.SetParent(transform, false);
+        AudioSource src = bgmObj.AddComponent<AudioSource>();
+        src.loop = loopBGM;
+        src.playOnAwake = false;
+        src.spatialBlend = 0f;
+        src.priority = 16;
+        src.volume = 0f;
+        return src;
     }
 
     private void StartBossBGM()
@@ -2200,11 +2580,12 @@ public class LegendarySamurai : EnemyBase
 
         float timer = 0f;
         float startVol = currentSource != null ? currentSource.volume : bossBGMVolume;
+        float safeDuration = Mathf.Max(0.01f, duration);
 
-        while (timer < duration)
+        while (timer < safeDuration)
         {
             timer += Time.unscaledDeltaTime;
-            float t = Mathf.Clamp01(timer / duration);
+            float t = Mathf.Clamp01(timer / safeDuration);
 
             if (currentSource != null) currentSource.volume = Mathf.Lerp(startVol, 0f, t);
             if (newSource != null) newSource.volume = Mathf.Lerp(0f, bossBGMVolume, t);
@@ -2229,10 +2610,11 @@ public class LegendarySamurai : EnemyBase
     private IEnumerator FadeInSource(AudioSource src, float targetVol, float duration)
     {
         float timer = 0f;
-        while (timer < duration && src != null)
+        float safeDuration = Mathf.Max(0.01f, duration);
+        while (timer < safeDuration && src != null)
         {
             timer += Time.unscaledDeltaTime;
-            src.volume = Mathf.Lerp(0f, targetVol, timer / duration);
+            src.volume = Mathf.Lerp(0f, targetVol, timer / safeDuration);
             yield return null;
         }
         if (src != null) src.volume = targetVol;
@@ -2264,10 +2646,11 @@ public class LegendarySamurai : EnemyBase
 
         float startVol = src.volume;
         float timer = 0f;
-        while (timer < duration && src != null)
+        float safeDuration = Mathf.Max(0.01f, duration);
+        while (timer < safeDuration && src != null)
         {
             timer += Time.unscaledDeltaTime;
-            src.volume = Mathf.Lerp(startVol, 0f, timer / duration);
+            src.volume = Mathf.Lerp(startVol, 0f, timer / safeDuration);
             yield return null;
         }
 
@@ -2277,6 +2660,108 @@ public class LegendarySamurai : EnemyBase
             src.Stop();
             Destroy(src.gameObject);
         }
+    }
+
+    #endregion
+
+    #region Helpers & Gizmos
+
+    private static Shader GetDefaultSpriteShader()
+    {
+        if (cachedDefaultSpriteShader == null)
+        {
+            cachedDefaultSpriteShader = Shader.Find("Sprites/Default");
+            if (cachedDefaultSpriteShader == null)
+            {
+                cachedDefaultSpriteShader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+            }
+            if (cachedDefaultSpriteShader == null)
+            {
+                cachedDefaultSpriteShader = Shader.Find("Hidden/Internal-Colored");
+            }
+        }
+        return cachedDefaultSpriteShader;
+    }
+
+    private void SpawnHitEffect(Vector3 position)
+    {
+        if (hitVFX != null)
+        {
+            Instantiate(hitVFX, position, Quaternion.identity);
+        }
+        else
+        {
+            BossHitVFX.Spawn(position);
+        }
+    }
+
+    private void CheckStompGroundContacts(Collision2D collision)
+    {
+        if (!isStompSlamming) return;
+
+        int contactCount = collision.contactCount;
+        for (int i = 0; i < contactCount; i++)
+        {
+            if (collision.GetContact(i).normal.y > 0.35f)
+            {
+                stompHasHitGround = true;
+                break;
+            }
+        }
+    }
+
+    private bool IsBossGrounded()
+    {
+        if (col == null) return true;
+        Bounds bounds = col.bounds;
+        Vector2 groundBoxOrigin = new Vector2(bounds.center.x, bounds.min.y + 0.06f);
+        Vector2 groundBoxSize = new Vector2(bounds.size.x * 0.75f, 0.08f);
+        return Physics2D.BoxCast(
+            groundBoxOrigin,
+            groundBoxSize,
+            0f,
+            Vector2.down,
+            0.18f,
+            groundLayer
+        );
+    }
+
+    private void FacePlayer()
+    {
+        if (playerController != null && spriteRenderer != null)
+        {
+            float dirX = playerController.transform.position.x - transform.position.x;
+            if (Mathf.Abs(dirX) > 0.1f)
+            {
+                spriteRenderer.flipX = dirX < 0f;
+            }
+        }
+    }
+
+    private Vector2 GetDirectionToPlayer()
+    {
+        if (playerController != null)
+        {
+            Vector2 diff = (Vector2)playerController.transform.position - (Vector2)transform.position;
+            if (diff.sqrMagnitude > 0.01f) return diff.normalized;
+        }
+        return (spriteRenderer != null && spriteRenderer.flipX) ? Vector2.left : Vector2.right;
+    }
+
+    private float DistancePointToLineSegment(Vector2 point, Vector2 start, Vector2 end)
+    {
+        return DistancePointToSegment(point, start, end);
+    }
+
+    private static float DistancePointToSegment(Vector2 point, Vector2 a, Vector2 b)
+    {
+        Vector2 ab = b - a;
+        float lenSq = ab.sqrMagnitude;
+        if (lenSq < 0.0001f) return Vector2.Distance(point, a);
+
+        float t = Mathf.Clamp01(Vector2.Dot(point - a, ab) / lenSq);
+        Vector2 projection = a + t * ab;
+        return Vector2.Distance(point, projection);
     }
 
     #endregion

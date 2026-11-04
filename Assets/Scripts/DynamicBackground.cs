@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -11,6 +10,8 @@ using UnityEngine;
 [AddComponentMenu("Rendering/Dynamic Background")]
 public class DynamicBackground : MonoBehaviour
 {
+    #region Types & Configuration
+
     public enum BackgroundMode
     {
         [Tooltip("Controls the GameObject this script is attached to (Single Layer).")]
@@ -67,6 +68,10 @@ public class DynamicBackground : MonoBehaviour
         [System.NonSerialized] public bool isInitialized = false;
     }
 
+    #endregion
+
+    #region Serialized Fields
+
     [Header("Operating Mode")]
     [Tooltip("Choose whether this component controls this single GameObject or manages multiple child layers.")]
     [SerializeField] private BackgroundMode mode = BackgroundMode.SingleObject;
@@ -120,10 +125,19 @@ public class DynamicBackground : MonoBehaviour
     [Tooltip("Pixels Per Unit used for pixel grid snapping.")]
     [SerializeField] private float pixelsPerUnit = 16f;
 
+    #endregion
+
+    #region Private State
+
     // Single object runtime state
     private BackgroundLayerConfig singleLayerConfig;
+    private Transform cachedCameraTransform;
     private Vector3 initialCameraPosition;
     private bool cameraInitialized = false;
+
+    #endregion
+
+    #region Unity Lifecycle
 
     private void Awake()
     {
@@ -145,6 +159,43 @@ public class DynamicBackground : MonoBehaviour
         if (smoothTime <= 0f) smoothTime = 0.05f;
     }
 
+    /// <summary>
+    /// Executes parallax and wrapping in LateUpdate to synchronize perfectly with Cinemachine and camera post-processing.
+    /// </summary>
+    private void LateUpdate()
+    {
+        Camera cam = GetActiveCamera();
+        if (cam == null || cachedCameraTransform == null) return;
+
+        float dt = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
+        Vector3 camPos = cachedCameraTransform.position;
+        Vector3 camDeltaFromStart = camPos - initialCameraPosition;
+
+        if (mode == BackgroundMode.SingleObject)
+        {
+            if (singleLayerConfig != null && singleLayerConfig.isInitialized && singleLayerConfig.layerTransform != null)
+            {
+                UpdateLayer(singleLayerConfig, camPos, camDeltaFromStart, dt);
+            }
+        }
+        else
+        {
+            int count = layers.Count;
+            for (int i = 0; i < count; i++)
+            {
+                BackgroundLayerConfig layer = layers[i];
+                if (layer != null && layer.isInitialized && layer.layerTransform != null)
+                {
+                    UpdateLayer(layer, camPos, camDeltaFromStart, dt);
+                }
+            }
+        }
+    }
+
+    #endregion
+
+    #region Initialization & Setup
+
     private void InitializeCamera()
     {
         if (targetCamera == null)
@@ -154,7 +205,8 @@ public class DynamicBackground : MonoBehaviour
 
         if (targetCamera != null)
         {
-            initialCameraPosition = targetCamera.transform.position;
+            cachedCameraTransform = targetCamera.transform;
+            initialCameraPosition = cachedCameraTransform.position;
             cameraInitialized = true;
         }
     }
@@ -164,12 +216,21 @@ public class DynamicBackground : MonoBehaviour
         if (targetCamera == null)
         {
             targetCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
-            if (targetCamera != null && !cameraInitialized)
+            if (targetCamera != null)
             {
-                initialCameraPosition = targetCamera.transform.position;
-                cameraInitialized = true;
+                cachedCameraTransform = targetCamera.transform;
+                if (!cameraInitialized)
+                {
+                    initialCameraPosition = cachedCameraTransform.position;
+                    cameraInitialized = true;
+                }
             }
         }
+        else if (cachedCameraTransform == null)
+        {
+            cachedCameraTransform = targetCamera.transform;
+        }
+
         return targetCamera;
     }
 
@@ -195,8 +256,10 @@ public class DynamicBackground : MonoBehaviour
         }
         else
         {
-            foreach (var layer in layers)
+            int count = layers.Count;
+            for (int i = 0; i < count; i++)
             {
+                BackgroundLayerConfig layer = layers[i];
                 if (layer != null && layer.layerTransform != null)
                 {
                     SetupLayer(layer);
@@ -270,8 +333,10 @@ public class DynamicBackground : MonoBehaviour
         if (layer.cachedRenderer == null || layer.cachedRenderer.sprite == null) return;
 
         // Clear any previous clones
-        foreach (var clone in layer.spawnedCloneObjects)
+        int cloneCount = layer.spawnedCloneObjects.Count;
+        for (int i = 0; i < cloneCount; i++)
         {
+            GameObject clone = layer.spawnedCloneObjects[i];
             if (clone != null)
             {
                 if (Application.isPlaying) Destroy(clone);
@@ -302,10 +367,11 @@ public class DynamicBackground : MonoBehaviour
     private GameObject CreateCompanionClone(BackgroundLayerConfig layer, float localOffsetX, string cloneName)
     {
         GameObject cloneObj = new GameObject(cloneName);
-        cloneObj.transform.SetParent(layer.layerTransform, false);
-        cloneObj.transform.localPosition = new Vector3(localOffsetX, 0f, 0f);
-        cloneObj.transform.localRotation = Quaternion.identity;
-        cloneObj.transform.localScale = Vector3.one;
+        Transform cloneTransform = cloneObj.transform;
+        cloneTransform.SetParent(layer.layerTransform, false);
+        cloneTransform.localPosition = new Vector3(localOffsetX, 0f, 0f);
+        cloneTransform.localRotation = Quaternion.identity;
+        cloneTransform.localScale = Vector3.one;
 
         SpriteRenderer parentSr = layer.cachedRenderer;
         SpriteRenderer cloneSr = cloneObj.AddComponent<SpriteRenderer>();
@@ -325,37 +391,9 @@ public class DynamicBackground : MonoBehaviour
         return cloneObj;
     }
 
-    /// <summary>
-    /// Executes parallax and wrapping in LateUpdate to synchronize perfectly with Cinemachine and camera post-processing.
-    /// </summary>
-    private void LateUpdate()
-    {
-        Camera cam = GetActiveCamera();
-        if (cam == null) return;
+    #endregion
 
-        float dt = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
-        Vector3 camPos = cam.transform.position;
-        Vector3 camDeltaFromStart = camPos - initialCameraPosition;
-
-        if (mode == BackgroundMode.SingleObject)
-        {
-            if (singleLayerConfig != null && singleLayerConfig.isInitialized)
-            {
-                UpdateLayer(singleLayerConfig, camPos, camDeltaFromStart, dt);
-            }
-        }
-        else
-        {
-            for (int i = 0; i < layers.Count; i++)
-            {
-                var layer = layers[i];
-                if (layer != null && layer.isInitialized && layer.layerTransform != null)
-                {
-                    UpdateLayer(layer, camPos, camDeltaFromStart, dt);
-                }
-            }
-        }
-    }
+    #region Core Logic
 
     private void UpdateLayer(BackgroundLayerConfig layer, Vector3 camPos, Vector3 camDeltaFromStart, float dt)
     {
@@ -429,8 +467,9 @@ public class DynamicBackground : MonoBehaviour
         // 6. Optional Pixel Grid Snap
         if (pixelSnap && pixelsPerUnit > 0f)
         {
-            targetPosition.x = Mathf.Round(targetPosition.x * pixelsPerUnit) / pixelsPerUnit;
-            targetPosition.y = Mathf.Round(targetPosition.y * pixelsPerUnit) / pixelsPerUnit;
+            float invPpu = 1f / pixelsPerUnit;
+            targetPosition.x = Mathf.Round(targetPosition.x * pixelsPerUnit) * invPpu;
+            targetPosition.y = Mathf.Round(targetPosition.y * pixelsPerUnit) * invPpu;
         }
 
         // 7. Apply position with optional smoothing
@@ -444,7 +483,9 @@ public class DynamicBackground : MonoBehaviour
         }
     }
 
-    #region Context Menus & Utility
+    #endregion
+
+    #region Helpers & Gizmos
 
     /// <summary>
     /// Automatically populates child transforms as distinct parallax layers.
@@ -492,8 +533,9 @@ public class DynamicBackground : MonoBehaviour
         }
         else if (layers != null)
         {
-            foreach (var layer in layers)
+            for (int i = 0; i < layers.Count; i++)
             {
+                BackgroundLayerConfig layer = layers[i];
                 if (layer != null && layer.layerTransform != null)
                 {
                     DrawLayerGizmo(layer.layerTransform, layer.customWidth > 0 ? layer.customWidth : 19.2f, layer.customHeight > 0 ? layer.customHeight : 10.8f);

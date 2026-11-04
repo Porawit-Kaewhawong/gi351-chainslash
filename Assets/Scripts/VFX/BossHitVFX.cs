@@ -4,6 +4,8 @@ using UnityEngine;
 
 public class BossHitVFX : MonoBehaviour
 {
+    #region Serialized Fields
+
     [Header("Pixel Hit VFX Settings")]
     [SerializeField] private float duration = 0.28f;
     [SerializeField] private float maxRingScale = 3.2f;
@@ -11,10 +13,35 @@ public class BossHitVFX : MonoBehaviour
     [SerializeField] private Color sparkColor = new Color(1f, 0.85f, 0.2f, 1f);
     [SerializeField] private Color edgeColor = new Color(1f, 0.25f, 0.15f, 1f);
 
+    #endregion
+
+    #region Constants
+
+    private const int DebrisCount = 8;
+    // Stepped frame animation: 18 FPS
+    private const float FrameInterval = 1f / 18f;
+    private const float PixelsPerUnit = 16f;
+    private static readonly Vector3 RingStartScale = Vector3.one * 0.4f;
+
+    #endregion
+
+    #region Private State
+
     private SpriteRenderer crossSlashRenderer;
+    private Transform crossSlashTransform;
     private SpriteRenderer shockwaveRingRenderer;
-    private readonly List<Transform> pixelDebris = new List<Transform>();
-    private readonly List<Vector2> debrisVelocities = new List<Vector2>();
+    private Transform shockwaveRingTransform;
+    private readonly List<Transform> pixelDebris = new List<Transform>(DebrisCount);
+    private readonly List<SpriteRenderer> debrisRenderers = new List<SpriteRenderer>(DebrisCount);
+    private readonly List<Vector2> debrisVelocities = new List<Vector2>(DebrisCount);
+
+    private static Sprite cachedPixelSquare;
+    private static Sprite cachedPixelCross;
+    private static Sprite cachedPixelRing;
+
+    #endregion
+
+    #region Unity Lifecycle
 
     private void Awake()
     {
@@ -26,121 +53,9 @@ public class BossHitVFX : MonoBehaviour
         StartCoroutine(PixelHitRoutine());
     }
 
-    private void SetupPixelComponents()
-    {
-        // 1. Chunky Pixel Cross-Slash ("X")
-        GameObject crossObj = new GameObject("PixelCrossSlash");
-        crossObj.transform.SetParent(transform, false);
-        crossSlashRenderer = crossObj.AddComponent<SpriteRenderer>();
-        crossSlashRenderer.sprite = GetOrCreatePixelCrossSprite();
-        crossSlashRenderer.color = coreColor;
-        crossSlashRenderer.sortingOrder = 15;
+    #endregion
 
-        // 2. Stepped Pixel Shockwave Ring
-        GameObject ringObj = new GameObject("PixelShockwaveRing");
-        ringObj.transform.SetParent(transform, false);
-        shockwaveRingRenderer = ringObj.AddComponent<SpriteRenderer>();
-        shockwaveRingRenderer.sprite = GetOrCreatePixelRingSprite();
-        shockwaveRingRenderer.color = sparkColor;
-        shockwaveRingRenderer.sortingOrder = 14;
-
-        // 3. Chunky Square Pixel Sparks
-        Sprite squareSprite = GetOrCreatePixelSquareSprite();
-        int debrisCount = 8;
-        for (int i = 0; i < debrisCount; i++)
-        {
-            float angle = (i * (360f / debrisCount)) + Random.Range(-12f, 12f);
-            float rad = angle * Mathf.Deg2Rad;
-            Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
-            float speed = Random.Range(6f, 12f);
-
-            GameObject sparkObj = new GameObject($"PixelSpark_{i}");
-            sparkObj.transform.SetParent(transform, false);
-            sparkObj.transform.localScale = Vector3.one * (Random.value > 0.5f ? 1.5f : 1.0f);
-
-            SpriteRenderer sr = sparkObj.AddComponent<SpriteRenderer>();
-            sr.sprite = squareSprite;
-            sr.color = (i % 2 == 0) ? sparkColor : edgeColor;
-            sr.sortingOrder = 16;
-
-            pixelDebris.Add(sparkObj.transform);
-            debrisVelocities.Add(dir * speed);
-        }
-    }
-
-    private IEnumerator PixelHitRoutine()
-    {
-        float timer = 0f;
-        // Stepped frame animation: 18 FPS
-        float frameInterval = 1f / 18f;
-        float frameTimer = 0f;
-
-        Vector3 ringStartScale = Vector3.one * 0.4f;
-        Vector3 ringTargetScale = Vector3.one * maxRingScale;
-
-        while (timer < duration)
-        {
-            timer += Time.deltaTime;
-            frameTimer += Time.deltaTime;
-
-            float t = Mathf.Clamp01(timer / duration);
-            float easeOut = 1f - Mathf.Pow(1f - t, 2.5f);
-
-            // Stepped discrete frame scale & color for retro feel
-            if (frameTimer >= frameInterval)
-            {
-                frameTimer = 0f;
-
-                // Stepped cross-slash expansion and dissolve
-                if (crossSlashRenderer != null)
-                {
-                    float crossT = Mathf.Clamp01(timer / 0.16f);
-                    float crossScale = Mathf.Lerp(1.2f, 2.8f, crossT);
-                    crossSlashRenderer.transform.localScale = Vector3.one * crossScale;
-                    crossSlashRenderer.color = (timer < 0.08f) ? coreColor : edgeColor;
-                    if (timer >= 0.16f) crossSlashRenderer.enabled = false;
-                }
-
-                // Stepped shockwave expansion
-                if (shockwaveRingRenderer != null)
-                {
-                    // Discrete stepped scale
-                    float steppedEase = Mathf.Floor(easeOut * 5f) / 5f;
-                    shockwaveRingRenderer.transform.localScale = Vector3.Lerp(ringStartScale, ringTargetScale, steppedEase);
-                    Color c = Color.Lerp(sparkColor, edgeColor, t);
-                    c.a = Mathf.Clamp01(1f - t);
-                    shockwaveRingRenderer.color = c;
-                }
-            }
-
-            // Move chunky pixel debris
-            for (int i = 0; i < pixelDebris.Count; i++)
-            {
-                if (pixelDebris[i] != null)
-                {
-                    Vector2 vel = debrisVelocities[i];
-                    vel += Vector2.down * 12f * Time.deltaTime; // arcade gravity
-                    vel *= Mathf.Clamp01(1f - (Time.deltaTime * 4f)); // drag
-                    debrisVelocities[i] = vel;
-
-                    // Pixel snap local position to 16 PPU
-                    Vector3 newPos = pixelDebris[i].localPosition + (Vector3)vel * Time.deltaTime;
-                    pixelDebris[i].localPosition = SnapToPixel(newPos, 16f);
-
-                    if (pixelDebris[i].TryGetComponent<SpriteRenderer>(out SpriteRenderer sr))
-                    {
-                        Color sc = sr.color;
-                        sc.a = Mathf.Clamp01(1f - (t * 1.3f));
-                        sr.color = sc;
-                    }
-                }
-            }
-
-            yield return null;
-        }
-
-        Destroy(gameObject);
-    }
+    #region Public API
 
     public static Vector3 SnapToPixel(Vector3 pos, float pixelsPerUnit)
     {
@@ -162,12 +77,11 @@ public class BossHitVFX : MonoBehaviour
 
     // --- Procedural Pixel Art Sprites with FilterMode.Point ---
 
-    private static Sprite cachedPixelSquare;
     public static Sprite GetOrCreatePixelSquareSprite()
     {
         if (cachedPixelSquare != null) return cachedPixelSquare;
 
-        int size = 4;
+        const int size = 4;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Point;
         Color solid = Color.white;
@@ -180,16 +94,15 @@ public class BossHitVFX : MonoBehaviour
             }
         }
         tex.Apply();
-        cachedPixelSquare = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 16f);
+        cachedPixelSquare = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), PixelsPerUnit);
         return cachedPixelSquare;
     }
 
-    private static Sprite cachedPixelCross;
     public static Sprite GetOrCreatePixelCrossSprite()
     {
         if (cachedPixelCross != null) return cachedPixelCross;
 
-        int size = 24;
+        const int size = 24;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Point;
         Color clear = new Color(0, 0, 0, 0);
@@ -220,16 +133,15 @@ public class BossHitVFX : MonoBehaviour
         }
 
         tex.Apply();
-        cachedPixelCross = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 16f);
+        cachedPixelCross = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), PixelsPerUnit);
         return cachedPixelCross;
     }
 
-    private static Sprite cachedPixelRing;
     public static Sprite GetOrCreatePixelRingSprite()
     {
         if (cachedPixelRing != null) return cachedPixelRing;
 
-        int size = 32;
+        const int size = 32;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Point;
         Color clear = new Color(0, 0, 0, 0);
@@ -246,14 +158,19 @@ public class BossHitVFX : MonoBehaviour
         Vector2 center = new Vector2(size * 0.5f - 0.5f, size * 0.5f - 0.5f);
         float radius = size * 0.44f;
         float innerRadius = radius - 2.5f;
+        float radiusSq = radius * radius;
+        float innerRadiusSq = innerRadius * innerRadius;
 
         // Draw stepped pixel ring
         for (int y = 0; y < size; y++)
         {
+            float dy = y - center.y;
+            float dySq = dy * dy;
             for (int x = 0; x < size; x++)
             {
-                float dist = Vector2.Distance(new Vector2(x, y), center);
-                if (dist >= innerRadius && dist <= radius)
+                float dx = x - center.x;
+                float distSq = dx * dx + dySq;
+                if (distSq >= innerRadiusSq && distSq <= radiusSq)
                 {
                     tex.SetPixel(x, y, solid);
                 }
@@ -261,9 +178,141 @@ public class BossHitVFX : MonoBehaviour
         }
 
         tex.Apply();
-        cachedPixelRing = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 16f);
+        cachedPixelRing = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), PixelsPerUnit);
         return cachedPixelRing;
     }
+
+    #endregion
+
+    #region VFX / Rendering Logic
+
+    private void SetupPixelComponents()
+    {
+        // 1. Chunky Pixel Cross-Slash ("X")
+        GameObject crossObj = new GameObject("PixelCrossSlash");
+        crossSlashTransform = crossObj.transform;
+        crossSlashTransform.SetParent(transform, false);
+        crossSlashRenderer = crossObj.AddComponent<SpriteRenderer>();
+        crossSlashRenderer.sprite = GetOrCreatePixelCrossSprite();
+        crossSlashRenderer.color = coreColor;
+        crossSlashRenderer.sortingOrder = 15;
+
+        // 2. Stepped Pixel Shockwave Ring
+        GameObject ringObj = new GameObject("PixelShockwaveRing");
+        shockwaveRingTransform = ringObj.transform;
+        shockwaveRingTransform.SetParent(transform, false);
+        shockwaveRingRenderer = ringObj.AddComponent<SpriteRenderer>();
+        shockwaveRingRenderer.sprite = GetOrCreatePixelRingSprite();
+        shockwaveRingRenderer.color = sparkColor;
+        shockwaveRingRenderer.sortingOrder = 14;
+
+        // 3. Chunky Square Pixel Sparks
+        Sprite squareSprite = GetOrCreatePixelSquareSprite();
+        const float angleStep = 360f / DebrisCount;
+
+        for (int i = 0; i < DebrisCount; i++)
+        {
+            float angle = (i * angleStep) + Random.Range(-12f, 12f);
+            float rad = angle * Mathf.Deg2Rad;
+            Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
+            float speed = Random.Range(6f, 12f);
+
+            GameObject sparkObj = new GameObject($"PixelSpark_{i}");
+            Transform sparkTransform = sparkObj.transform;
+            sparkTransform.SetParent(transform, false);
+            sparkTransform.localScale = Vector3.one * (Random.value > 0.5f ? 1.5f : 1.0f);
+
+            SpriteRenderer sr = sparkObj.AddComponent<SpriteRenderer>();
+            sr.sprite = squareSprite;
+            sr.color = (i % 2 == 0) ? sparkColor : edgeColor;
+            sr.sortingOrder = 16;
+
+            pixelDebris.Add(sparkTransform);
+            debrisRenderers.Add(sr);
+            debrisVelocities.Add(dir * speed);
+        }
+    }
+
+    private IEnumerator PixelHitRoutine()
+    {
+        float timer = 0f;
+        float frameTimer = 0f;
+
+        Vector3 ringTargetScale = Vector3.one * maxRingScale;
+
+        while (timer < duration)
+        {
+            float dt = Time.deltaTime;
+            timer += dt;
+            frameTimer += dt;
+
+            float t = Mathf.Clamp01(timer / duration);
+            float easeOut = 1f - Mathf.Pow(1f - t, 2.5f);
+
+            // Stepped discrete frame scale & color for retro feel
+            if (frameTimer >= FrameInterval)
+            {
+                frameTimer = 0f;
+
+                // Stepped cross-slash expansion and dissolve
+                if (crossSlashRenderer != null)
+                {
+                    float crossT = Mathf.Clamp01(timer / 0.16f);
+                    float crossScale = Mathf.Lerp(1.2f, 2.8f, crossT);
+                    crossSlashTransform.localScale = Vector3.one * crossScale;
+                    crossSlashRenderer.color = (timer < 0.08f) ? coreColor : edgeColor;
+                    if (timer >= 0.16f) crossSlashRenderer.enabled = false;
+                }
+
+                // Stepped shockwave expansion
+                if (shockwaveRingRenderer != null)
+                {
+                    // Discrete stepped scale
+                    float steppedEase = Mathf.Floor(easeOut * 5f) / 5f;
+                    shockwaveRingTransform.localScale = Vector3.Lerp(RingStartScale, ringTargetScale, steppedEase);
+                    Color c = Color.Lerp(sparkColor, edgeColor, t);
+                    c.a = Mathf.Clamp01(1f - t);
+                    shockwaveRingRenderer.color = c;
+                }
+            }
+
+            // Move chunky pixel debris
+            float dragFactor = Mathf.Clamp01(1f - (dt * 4f));
+            float debrisAlpha = Mathf.Clamp01(1f - (t * 1.3f));
+
+            for (int i = 0; i < pixelDebris.Count; i++)
+            {
+                Transform debrisTransform = pixelDebris[i];
+                if (debrisTransform != null)
+                {
+                    Vector2 vel = debrisVelocities[i];
+                    vel += Vector2.down * (12f * dt); // arcade gravity
+                    vel *= dragFactor; // drag
+                    debrisVelocities[i] = vel;
+
+                    // Pixel snap local position to 16 PPU
+                    Vector3 newPos = debrisTransform.localPosition + (Vector3)(vel * dt);
+                    debrisTransform.localPosition = SnapToPixel(newPos, PixelsPerUnit);
+
+                    SpriteRenderer sr = debrisRenderers[i];
+                    if (sr != null)
+                    {
+                        Color sc = sr.color;
+                        sc.a = debrisAlpha;
+                        sr.color = sc;
+                    }
+                }
+            }
+
+            yield return null;
+        }
+
+        Destroy(gameObject);
+    }
+
+    #endregion
+
+    #region Helpers
 
     private static void SetPixelSafe(Texture2D tex, int x, int y, Color c)
     {
@@ -272,5 +321,6 @@ public class BossHitVFX : MonoBehaviour
             tex.SetPixel(x, y, c);
         }
     }
-}
 
+    #endregion
+}

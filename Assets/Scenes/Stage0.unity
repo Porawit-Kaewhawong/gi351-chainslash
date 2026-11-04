@@ -795,7 +795,7 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 0
   textComponent: {fileID: 0}
-  message: 'Hold "LMB" and hover over the object to destroy '
+  message: 'Hold "LMB" and hover over the object then release to destroy '
   textColor: {r: 1, g: 1, b: 1, a: 1}
   fontAsset: {fileID: 11400000, guid: 7b10e90a0f282904ea04394eb6724133, type: 2}
   fontMaterial: {fileID: 0}

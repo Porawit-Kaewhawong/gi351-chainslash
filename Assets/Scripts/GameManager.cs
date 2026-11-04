@@ -4,7 +4,16 @@ using UnityEngine;
 
 public class GameManager : MonoBehaviour
 {
+    #region Singleton & Constants
+
     public static GameManager Instance { get; private set; }
+
+    private static readonly float[] ProbeHeights = { 1.5f, 3.5f, 0.5f, 6f, -1f, 9f, -3f };
+    private static readonly System.Predicate<GameObject> IsNullEnemyPredicate = enemy => enemy == null;
+
+    #endregion
+
+    #region Types & Enums
 
     [System.Serializable]
     public struct EnemySpawnConfig
@@ -27,6 +36,10 @@ public class GameManager : MonoBehaviour
         PerWaveCounts,   // Spawns specified spawnCount of each prefab every wave cycle
         WeightedRandom   // Selects prefabs randomly based on their relative spawnWeight
     }
+
+    #endregion
+
+    #region Serialized Fields
 
     [Header("Enemy Configuration")]
     [SerializeField] private SpawnMode spawnMode = SpawnMode.PerWaveCounts;
@@ -54,8 +67,6 @@ public class GameManager : MonoBehaviour
     [Tooltip("Optional specific Transform where the portal spawns. If empty, spawns on valid ground near the player.")]
     [SerializeField] private Transform portalSpawnPoint;
 
-    public Transform PlayerSpawnPoint => playerSpawnPoint;
-
     [Header("Ground & Raycast Settings")]
     [SerializeField] private LayerMask groundLayer;
     [SerializeField] private float minSpawnDistance = 6f;
@@ -66,19 +77,34 @@ public class GameManager : MonoBehaviour
     [Header("Spawn Validation")]
     [SerializeField] private Vector2 checkExtent = new Vector2(0.8f, 0.8f);
 
+    #endregion
+
+    #region Public Properties
+
+    public Transform PlayerSpawnPoint => playerSpawnPoint;
     public int CurrentWave { get; private set; }
     public int TotalWaves => totalWaves;
     public int ActiveEnemyCount => activeEnemies.Count;
     public IReadOnlyList<GameObject> ActiveEnemies => activeEnemies;
     public bool AllWavesCompleted { get; private set; }
 
+    #endregion
+
+    #region Private State
+
     private PlayerController player;
-    private List<GameObject> activeEnemies = new List<GameObject>();
+    private readonly List<GameObject> activeEnemies = new List<GameObject>();
+    private readonly Dictionary<GameObject, (Vector2 offset, Vector2 size)> prefabGeometryCache = new Dictionary<GameObject, (Vector2 offset, Vector2 size)>();
     private Bounds levelColliderBounds;
     private bool hasLevelBounds;
 
     private WaitForSeconds waitForSpawnInterval;
     private WaitForSeconds waitForWaveInterval;
+    private WaitForSeconds waitForVoidCheck;
+
+    #endregion
+
+    #region Unity Lifecycle
 
     private void Awake()
     {
@@ -91,6 +117,7 @@ public class GameManager : MonoBehaviour
 
         waitForSpawnInterval = new WaitForSeconds(timeBetweenSpawns);
         waitForWaveInterval = new WaitForSeconds(timeBetweenWaves);
+        waitForVoidCheck = new WaitForSeconds(0.5f);
 
         if (portalSceneObject != null)
         {
@@ -102,7 +129,7 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
-        player = PlayerController.Instance != null ? PlayerController.Instance : FindFirstObjectByType<PlayerController>();
+        EnsurePlayerReference();
 
         if (player != null && enemyConfigs.Count > 0)
         {
@@ -115,26 +142,17 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void CacheLevelBounds()
+    private void OnDestroy()
     {
-        hasLevelBounds = false;
-        Collider2D[] allColliders = FindObjectsByType<Collider2D>(FindObjectsSortMode.None);
-        foreach (Collider2D col in allColliders)
+        if (Instance == this)
         {
-            if (col == null || !col.enabled || col.isTrigger) continue;
-            if (((1 << col.gameObject.layer) & groundLayer.value) == 0) continue;
-
-            if (!hasLevelBounds)
-            {
-                levelColliderBounds = col.bounds;
-                hasLevelBounds = true;
-            }
-            else
-            {
-                levelColliderBounds.Encapsulate(col.bounds);
-            }
+            Instance = null;
         }
     }
+
+    #endregion
+
+    #region Wave & Spawn Logic
 
     private IEnumerator SpawnRoutine()
     {
@@ -150,12 +168,8 @@ public class GameManager : MonoBehaviour
             CurrentWave++;
 
             // Clean up destroyed enemy references
-            activeEnemies.RemoveAll(enemy => enemy == null);
-
-            if (player == null)
-            {
-                player = PlayerController.Instance != null ? PlayerController.Instance : FindFirstObjectByType<PlayerController>();
-            }
+            PruneNullEnemies();
+            EnsurePlayerReference();
 
             if (player != null)
             {
@@ -175,7 +189,7 @@ public class GameManager : MonoBehaviour
             {
                 while (activeEnemies.Count > 0)
                 {
-                    activeEnemies.RemoveAll(enemy => enemy == null);
+                    PruneNullEnemies();
                     yield return null;
                 }
             }
@@ -190,14 +204,14 @@ public class GameManager : MonoBehaviour
         // Ensure any remaining enemies in the scene (including pre-placed enemies) are completely gone
         while (activeEnemies.Count > 0)
         {
-            activeEnemies.RemoveAll(enemy => enemy == null);
+            PruneNullEnemies();
             yield return null;
         }
 
         while (HasAnyLivingEnemies())
         {
-            activeEnemies.RemoveAll(enemy => enemy == null);
-            yield return null;
+            PruneNullEnemies();
+            yield return waitForSpawnInterval;
         }
 
         AllWavesCompleted = true;
@@ -211,11 +225,9 @@ public class GameManager : MonoBehaviour
     /// </summary>
     private IEnumerator MonitorVoidEnemiesRoutine()
     {
-        WaitForSeconds checkWait = new WaitForSeconds(0.5f);
-
         while (!AllWavesCompleted)
         {
-            activeEnemies.RemoveAll(enemy => enemy == null);
+            PruneNullEnemies();
 
             float voidThresholdY = hasLevelBounds
                 ? levelColliderBounds.min.y - 8f
@@ -226,16 +238,14 @@ public class GameManager : MonoBehaviour
                 GameObject enemyObj = activeEnemies[i];
                 if (enemyObj == null) continue;
 
-                EnemyBase enemyBase = enemyObj.GetComponent<EnemyBase>();
-                if (enemyBase != null && enemyBase.IsDead) continue;
+                if (enemyObj.TryGetComponent(out EnemyBase enemyBase) && enemyBase.IsDead) continue;
 
                 if (enemyObj.transform.position.y < voidThresholdY)
                 {
                     if (TryGetValidSpawnPoint(out Vector2 rescuedPos, enemyObj))
                     {
                         enemyObj.transform.position = rescuedPos;
-                        Rigidbody2D enemyRb = enemyObj.GetComponent<Rigidbody2D>();
-                        if (enemyRb != null)
+                        if (enemyObj.TryGetComponent(out Rigidbody2D enemyRb))
                         {
                             enemyRb.linearVelocity = Vector2.zero;
                         }
@@ -244,7 +254,7 @@ public class GameManager : MonoBehaviour
                 }
             }
 
-            yield return checkWait;
+            yield return waitForVoidCheck;
         }
     }
 
@@ -288,8 +298,9 @@ public class GameManager : MonoBehaviour
     {
         int waveBonus = Mathf.Max(0, (CurrentWave - 1) * bonusEnemiesPerWave);
 
-        foreach (EnemySpawnConfig config in enemyConfigs)
+        for (int c = 0; c < enemyConfigs.Count; c++)
         {
+            EnemySpawnConfig config = enemyConfigs[c];
             if (config.prefab == null) continue;
 
             int countToSpawn = config.spawnCount + (config.spawnCount > 0 ? waveBonus : 0);
@@ -299,7 +310,7 @@ public class GameManager : MonoBehaviour
                 // Wait if maxActiveEnemies cap is currently reached so the wave still spawns its full quota
                 while (activeEnemies.Count >= maxActiveEnemies)
                 {
-                    activeEnemies.RemoveAll(enemy => enemy == null);
+                    PruneNullEnemies();
                     yield return null;
                 }
 
@@ -318,8 +329,9 @@ public class GameManager : MonoBehaviour
     private IEnumerator SpawnByWeightedRandom()
     {
         int totalWeight = 0;
-        foreach (EnemySpawnConfig config in enemyConfigs)
+        for (int i = 0; i < enemyConfigs.Count; i++)
         {
+            EnemySpawnConfig config = enemyConfigs[i];
             if (config.prefab != null && config.spawnWeight > 0)
             {
                 totalWeight += config.spawnWeight;
@@ -334,7 +346,7 @@ public class GameManager : MonoBehaviour
         {
             while (activeEnemies.Count >= maxActiveEnemies)
             {
-                activeEnemies.RemoveAll(enemy => enemy == null);
+                PruneNullEnemies();
                 yield return null;
             }
 
@@ -354,8 +366,9 @@ public class GameManager : MonoBehaviour
         int randomValue = Random.Range(0, totalWeight);
         int currentSum = 0;
 
-        foreach (EnemySpawnConfig config in enemyConfigs)
+        for (int i = 0; i < enemyConfigs.Count; i++)
         {
+            EnemySpawnConfig config = enemyConfigs[i];
             if (config.prefab == null || config.spawnWeight <= 0) continue;
 
             currentSum += config.spawnWeight;
@@ -367,6 +380,10 @@ public class GameManager : MonoBehaviour
 
         return null;
     }
+
+    #endregion
+
+    #region Spawn Point Evaluation
 
     /// <summary>
     /// Finds a valid floor spawn point around the player (never on top of the player),
@@ -384,7 +401,7 @@ public class GameManager : MonoBehaviour
 
         float effectiveMinDist = Mathf.Max(2.5f, minSpawnDistance);
         float effectiveMaxDist = Mathf.Max(effectiveMinDist + 2f, maxSpawnDistance);
-        float minPlayerClearance = 2.5f;
+        const float minPlayerClearance = 2.5f;
 
         // Pass 1: Random attempts in [minSpawnDistance, maxSpawnDistance] around the player
         for (int i = 0; i < 20; i++)
@@ -474,11 +491,19 @@ public class GameManager : MonoBehaviour
         }
 
         // 3. Probe vertical heights near refOrigin.y to find an open-air raycast start (not inside a ceiling or wall collider)
-        float[] probeHeights = new float[] { 1.5f, 3.5f, 0.5f, 6f, -1f, 9f, -3f };
+        float maxDownDist = Mathf.Max(raycastHeight * 1.5f, 18f);
+        float footOffset = Mathf.Max(0.35f, colSize.x * 0.38f);
+        float colliderBottomRelY = colOffset.y - (colSize.y * 0.5f);
+        float clearanceY = Mathf.Max(0.08f, Mathf.Min(spawnHeightOffset, 0.2f));
+        Vector2 checkBoxSize = new Vector2(
+            Mathf.Max(colSize.x, checkExtent.x) + 0.1f,
+            Mathf.Max(colSize.y, checkExtent.y)
+        );
+        float minPlayerClearanceSqr = minPlayerClearance * minPlayerClearance;
 
-        foreach (float yOff in probeHeights)
+        for (int i = 0; i < ProbeHeights.Length; i++)
         {
-            Vector2 airStart = new Vector2(candidateX, refOrigin.y + yOff);
+            Vector2 airStart = new Vector2(candidateX, refOrigin.y + ProbeHeights[i]);
 
             // Ensure rayOrigin is in open air and NOT inside a wall/ceiling collider
             if (Physics2D.OverlapPoint(airStart, groundLayer) != null)
@@ -498,7 +523,6 @@ public class GameManager : MonoBehaviour
             }
 
             // Cast downward to find the floor surface
-            float maxDownDist = Mathf.Max(raycastHeight * 1.5f, 18f);
             RaycastHit2D floorHit = Physics2D.Raycast(airStart, Vector2.down, maxDownDist, groundLayer);
             if (floorHit.collider == null || floorHit.distance <= 0.02f || floorHit.normal.y < 0.7f)
             {
@@ -506,7 +530,6 @@ public class GameManager : MonoBehaviour
             }
 
             // 4. Ledge/Void check: ensure both the left foot and right foot have solid ground support beneath them
-            float footOffset = Mathf.Max(0.35f, colSize.x * 0.38f);
             if (!HasSolidFloorSupport(floorHit.point.x - footOffset, floorHit.point.y) ||
                 !HasSolidFloorSupport(floorHit.point.x + footOffset, floorHit.point.y))
             {
@@ -514,26 +537,19 @@ public class GameManager : MonoBehaviour
             }
 
             // 5. Compute exact transform position so the bottom of the enemy's BoxCollider2D sits cleanly above the floor
-            float colliderBottomRelY = colOffset.y - (colSize.y * 0.5f);
-            float clearanceY = Mathf.Max(0.08f, Mathf.Min(spawnHeightOffset, 0.2f));
             Vector2 candidateTransformPos = new Vector2(
                 floorHit.point.x,
                 floorHit.point.y - colliderBottomRelY + clearanceY
             );
 
             // Check radial distance from player as well
-            if (player != null && Vector2.Distance(candidateTransformPos, player.transform.position) < minPlayerClearance)
+            if (player != null && (candidateTransformPos - (Vector2)player.transform.position).sqrMagnitude < minPlayerClearanceSqr)
             {
                 continue;
             }
 
             // 6. Verify the enemy's ACTUAL collider box (at candidateTransformPos + colOffset) does not overlap any wall or ground
             Vector2 candidateBoxCenter = candidateTransformPos + colOffset;
-            Vector2 checkBoxSize = new Vector2(
-                Mathf.Max(colSize.x, checkExtent.x) + 0.1f,
-                Mathf.Max(colSize.y, checkExtent.y)
-            );
-
             if (Physics2D.OverlapBox(candidateBoxCenter, checkBoxSize, 0f, groundLayer) != null)
             {
                 continue;
@@ -571,7 +587,15 @@ public class GameManager : MonoBehaviour
 
         if (prefab == null) return;
 
-        Vector2 scale = new Vector2(Mathf.Abs(prefab.transform.localScale.x), Mathf.Abs(prefab.transform.localScale.y));
+        if (prefabGeometryCache.TryGetValue(prefab, out (Vector2 offset, Vector2 size) cached))
+        {
+            colliderOffset = cached.offset;
+            colliderSize = cached.size;
+            return;
+        }
+
+        Vector3 localScale = prefab.transform.localScale;
+        Vector2 scale = new Vector2(Mathf.Abs(localScale.x), Mathf.Abs(localScale.y));
         if (scale.x <= 0.001f) scale.x = 1f;
         if (scale.y <= 0.001f) scale.y = 1f;
 
@@ -607,7 +631,13 @@ public class GameManager : MonoBehaviour
             colliderOffset = Vector2.Scale(capsule.offset, scale);
             colliderSize = Vector2.Scale(capsule.size, scale);
         }
+
+        prefabGeometryCache[prefab] = (colliderOffset, colliderSize);
     }
+
+    #endregion
+
+    #region Enemy Registration & Helpers
 
     public void RegisterEnemy(GameObject enemy)
     {
@@ -617,12 +647,55 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    public void UnregisterEnemy(GameObject enemy)
+    {
+        activeEnemies.Remove(enemy);
+    }
+
+    private void PruneNullEnemies()
+    {
+        activeEnemies.RemoveAll(IsNullEnemyPredicate);
+    }
+
+    private void EnsurePlayerReference()
+    {
+        if (player == null)
+        {
+            player = PlayerController.Instance != null
+                ? PlayerController.Instance
+                : FindFirstObjectByType<PlayerController>();
+        }
+    }
+
+    private void CacheLevelBounds()
+    {
+        hasLevelBounds = false;
+        Collider2D[] allColliders = FindObjectsByType<Collider2D>(FindObjectsSortMode.None);
+        for (int i = 0; i < allColliders.Length; i++)
+        {
+            Collider2D col = allColliders[i];
+            if (col == null || !col.enabled || col.isTrigger) continue;
+            if (((1 << col.gameObject.layer) & groundLayer.value) == 0) continue;
+
+            if (!hasLevelBounds)
+            {
+                levelColliderBounds = col.bounds;
+                hasLevelBounds = true;
+            }
+            else
+            {
+                levelColliderBounds.Encapsulate(col.bounds);
+            }
+        }
+    }
+
     private bool HasAnyLivingEnemies()
     {
         EnemyBase[] remaining = FindObjectsByType<EnemyBase>(FindObjectsSortMode.None);
         for (int i = 0; i < remaining.Length; i++)
         {
-            if (remaining[i] != null && !remaining[i].IsDead && !(remaining[i] is ArmoredNinjaWeakPoint) && !(remaining[i] is BossTargetPoint))
+            EnemyBase enemy = remaining[i];
+            if (enemy != null && !enemy.IsDead && !(enemy is ArmoredNinjaWeakPoint) && !(enemy is BossTargetPoint))
             {
                 return true;
             }
@@ -630,11 +703,5 @@ public class GameManager : MonoBehaviour
         return false;
     }
 
-    public void UnregisterEnemy(GameObject enemy)
-    {
-        if (activeEnemies.Contains(enemy))
-        {
-            activeEnemies.Remove(enemy);
-        }
-    }
+    #endregion
 }

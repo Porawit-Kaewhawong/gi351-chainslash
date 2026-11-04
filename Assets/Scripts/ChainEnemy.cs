@@ -3,7 +3,14 @@ using UnityEngine;
 
 public class ChainEnemy : EnemyBase
 {
+    #region Enums & Constants
+
     public static bool isExploding = false;
+    private static readonly Collider2D[] ExplosionBuffer = new Collider2D[32];
+
+    #endregion
+
+    #region Serialized Fields
 
     [Header("Suicide Aggression Settings")]
     [SerializeField] private float aggroDistance = 4.5f;
@@ -20,12 +27,24 @@ public class ChainEnemy : EnemyBase
     [SerializeField] private float explosionRadius = 5f;
     [SerializeField] private float explosionShakeDuration = 0.25f;
 
+    #endregion
+
+    #region Public Properties
+
+    protected override float CurrentMoveSpeed => isAggro ? moveSpeed * aggroSpeedMultiplier : moveSpeed;
+
+    #endregion
+
+    #region Protected & Private State
+
     private GameObject insExplosionRadius;
     private Coroutine fuseCoroutine;
     private bool isAggro;
     private bool ownsExplodingLock;
 
-    protected override float CurrentMoveSpeed => isAggro ? moveSpeed * aggroSpeedMultiplier : moveSpeed;
+    #endregion
+
+    #region Unity Lifecycle
 
     protected override void Start()
     {
@@ -56,6 +75,24 @@ public class ChainEnemy : EnemyBase
         }
     }
 
+    private void OnDestroy()
+    {
+        if (ownsExplodingLock)
+        {
+            isExploding = false;
+            ownsExplodingLock = false;
+        }
+
+        if (insExplosionRadius != null)
+        {
+            Destroy(insExplosionRadius);
+        }
+    }
+
+    #endregion
+
+    #region Collision & Physics
+
     protected override void OnCollisionEnter2D(Collision2D collision)
     {
         if (IsDead) return;
@@ -85,19 +122,9 @@ public class ChainEnemy : EnemyBase
         base.OnCollisionEnter2D(collision);
     }
 
-    private void OnDestroy()
-    {
-        if (ownsExplodingLock)
-        {
-            isExploding = false;
-            ownsExplodingLock = false;
-        }
+    #endregion
 
-        if (insExplosionRadius != null)
-        {
-            Destroy(insExplosionRadius);
-        }
-    }
+    #region Combat & Targeting
 
     public override void TrySelectTarget()
     {
@@ -110,6 +137,22 @@ public class ChainEnemy : EnemyBase
         }
     }
 
+    public override void OnDeath(Vector2 deathImpulse = default)
+    {
+        if (IsDead) return;
+
+        if (fuseCoroutine != null)
+        {
+            StopCoroutine(fuseCoroutine);
+        }
+
+        StartCoroutine(ExplosionSequence());
+    }
+
+    #endregion
+
+    #region Explosion & Helpers
+
     private IEnumerator TargetFuseCountdown()
     {
         float timer = 0f;
@@ -121,18 +164,6 @@ public class ChainEnemy : EnemyBase
         }
 
         OnDeath();
-    }
-
-    public override void OnDeath(Vector2 deathImpulse = default)
-    {
-        if (IsDead) return;
-
-        if (fuseCoroutine != null)
-        {
-            StopCoroutine(fuseCoroutine);
-        }
-
-        StartCoroutine(ExplosionSequence());
     }
 
     private IEnumerator ExplosionSequence()
@@ -153,7 +184,8 @@ public class ChainEnemy : EnemyBase
         ownsExplodingLock = true;
 
         Vector3 origScale = transform.localScale;
-        float buildUpTime = 0.25f;
+        Vector3 targetScale = origScale * 1.35f;
+        const float buildUpTime = 0.25f;
         float elapsed = 0f;
 
         while (elapsed < buildUpTime)
@@ -161,10 +193,10 @@ public class ChainEnemy : EnemyBase
             elapsed += Time.deltaTime;
             float t = elapsed / buildUpTime;
 
-            transform.localScale = Vector3.Lerp(origScale, origScale * 1.35f, t);
+            transform.localScale = Vector3.Lerp(origScale, targetScale, t);
             if (spriteRenderer != null)
             {
-                spriteRenderer.color = (Mathf.Sin(elapsed * 35f) > 0) ? Color.red : Color.white;
+                spriteRenderer.color = (Mathf.Sin(elapsed * 35f) > 0f) ? Color.red : Color.white;
             }
             yield return null;
         }
@@ -193,29 +225,30 @@ public class ChainEnemy : EnemyBase
 
         // Execute Explosion Damage on both Player and neighboring Enemies
         float effectiveRadius = explosionRadius * 0.5f;
-        Collider2D[] withinRange = Physics2D.OverlapCircleAll(transform.position, effectiveRadius);
+        int hitCount = Physics2D.OverlapCircle((Vector2)transform.position, effectiveRadius, ContactFilter2D.noFilter, ExplosionBuffer);
 
-        foreach (Collider2D collider in withinRange)
+        for (int i = 0; i < hitCount; i++)
         {
-            if (collider == null || collider.gameObject == gameObject) continue;
+            Collider2D hitCollider = ExplosionBuffer[i];
+            if (hitCollider == null || hitCollider.gameObject == gameObject) continue;
 
-            if (collider.TryGetComponent<PlayerController>(out PlayerController player))
+            if (hitCollider.TryGetComponent<PlayerController>(out PlayerController player))
             {
                 player.TakeDamage(explosionDamage);
 
-                if (collider.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
+                if (hitCollider.TryGetComponent<Rigidbody2D>(out Rigidbody2D playerRb))
                 {
                     Vector2 pushDir = (player.transform.position - transform.position).normalized;
                     if (pushDir == Vector2.zero) pushDir = Vector2.up;
                     playerRb.AddForce(pushDir * 12f, ForceMode2D.Impulse);
                 }
             }
-            else if (collider.TryGetComponent<EnemyBase>(out EnemyBase enemy))
+            else if (hitCollider.TryGetComponent<EnemyBase>(out EnemyBase enemy))
             {
                 if (!enemy.IsDead)
                 {
                     // Legendary Samurai takes explosion damage
-                    LegendarySamurai boss = collider.GetComponentInParent<LegendarySamurai>();
+                    LegendarySamurai boss = hitCollider.GetComponentInParent<LegendarySamurai>();
                     if (boss != null || enemy is LegendarySamurai || enemy is BossTargetPoint)
                     {
                         if (boss != null)
@@ -226,8 +259,8 @@ public class ChainEnemy : EnemyBase
                     }
 
                     // Armored Ninja takes explosion damage and shatters
-                    ArmoredNinja armoredNinja = collider.GetComponentInParent<ArmoredNinja>();
-                    if (armoredNinja != null || enemy is ArmoredNinja || enemy is ArmoredNinjaWeakPoint || collider.GetComponentInParent<ArmoredNinjaWeakPoint>() != null)
+                    ArmoredNinja armoredNinja = hitCollider.GetComponentInParent<ArmoredNinja>();
+                    if (armoredNinja != null || enemy is ArmoredNinja || enemy is ArmoredNinjaWeakPoint || hitCollider.GetComponentInParent<ArmoredNinjaWeakPoint>() != null)
                     {
                         if (armoredNinja != null)
                         {
@@ -241,7 +274,12 @@ public class ChainEnemy : EnemyBase
             }
         }
 
-        Destroy(insExplosionRadius);
+        if (insExplosionRadius != null)
+        {
+            Destroy(insExplosionRadius);
+        }
         Destroy(gameObject);
     }
+
+    #endregion
 }

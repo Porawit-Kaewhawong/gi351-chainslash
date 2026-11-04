@@ -1097,7 +1097,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 87052087cfc494040826341059701ed5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MainMenu
-  gameSceneName: Stage1
+  gameSceneName: Stage0
   transitionCanvasGroup: {fileID: 0}
   fadeDuration: 0.5
   zoomScaleOnEnter: 1.22
@@ -1107,9 +1107,12 @@ MonoBehaviour:
   parallaxAmount: 20
   parallaxSmoothSpeed: 5
   backgroundSlideshow:
-  - {fileID: -6695950386315148514, guid: 0a6e07dc224ac0f46bee29dce2992ae5, type: 3}
-  - {fileID: 8053356100939522090, guid: c96c51fe142ce62449503bc5e99aa213, type: 3}
-  - {fileID: 9130931656606948373, guid: ba22ad31c5903a445903f786d427fe7e, type: 3}
+  - {fileID: -5409611486675845757, guid: 0a6e07dc224ac0f46bee29dce2992ae5, type: 3}
+  - {fileID: -4622405347849216440, guid: c96c51fe142ce62449503bc5e99aa213, type: 3}
+  - {fileID: -6762407967339454223, guid: ba22ad31c5903a445903f786d427fe7e, type: 3}
+  - {fileID: -5259761526855939688, guid: 02a1e70795f78d146a3b74b94b086f01, type: 3}
+  - {fileID: 1123963909077142232, guid: 1b2bfeeaf5796c54fba973aa67fafe1a, type: 3}
+  - {fileID: -7447249534804447583, guid: 7e77ffbc82313a04fba0a28c013b7edd, type: 3}
   slideDuration: 6
   crossfadeDuration: 1.2
   autoCycleSlideshow: 1

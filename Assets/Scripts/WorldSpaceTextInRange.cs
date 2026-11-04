@@ -12,6 +12,8 @@ using TMPro;
 [AddComponentMenu("UI/World Space Text In Range")]
 public class WorldSpaceTextInRange : MonoBehaviour
 {
+    #region Types
+
     public enum AnimationStyle
     {
         [Tooltip("Smoothly fades alpha and scales with an elastic pop.")]
@@ -23,6 +25,10 @@ public class WorldSpaceTextInRange : MonoBehaviour
         [Tooltip("Instantly toggles visibility.")]
         Instant
     }
+
+    #endregion
+
+    #region Serialized Fields
 
     [Header("Proximity Settings")]
     [Tooltip("Radius around this object in world units within which text becomes visible.")]
@@ -149,18 +155,32 @@ public class WorldSpaceTextInRange : MonoBehaviour
     [Tooltip("Event triggered when the player exits detection range.")]
     public UnityEvent onExitRange;
 
+    #endregion
+
+    #region Public Properties
+
     // Public Status
     public bool IsInRange => isInRange;
     public string CurrentText => textComponent != null ? textComponent.text : message;
 
+    #endregion
+
+    #region Private State
+
     // Internal State
     private bool isInRange = false;
     private Transform cachedTarget;
+    private Transform displayRootTransform;
+    private MeshRenderer cachedTextMeshRenderer;
     private Vector3 initialLocalPos;
     private Vector3 initialScale;
     private float initialBgAlpha = 1f;
     private Coroutine activeTransitionCoroutine;
     private Coroutine activeTypewriterCoroutine;
+
+    #endregion
+
+    #region Unity Lifecycle
 
     private void Reset()
     {
@@ -200,8 +220,9 @@ public class WorldSpaceTextInRange : MonoBehaviour
 
         if (displayRoot != null)
         {
-            initialLocalPos = displayRoot.transform.localPosition;
-            initialScale = displayRoot.transform.localScale;
+            displayRootTransform = displayRoot.transform;
+            initialLocalPos = displayRootTransform.localPosition;
+            initialScale = displayRootTransform.localScale;
             if (initialScale == Vector3.zero) initialScale = Vector3.one;
         }
         else
@@ -260,9 +281,9 @@ public class WorldSpaceTextInRange : MonoBehaviour
 
         Vector2 checkOrigin = (Vector2)transform.position + rangeOffset;
         Vector2 targetPos = target.position;
-        float distance = Vector2.Distance(checkOrigin, targetPos);
+        float sqrDistance = (targetPos - checkOrigin).sqrMagnitude;
 
-        bool rangeHit = distance <= detectionRange;
+        bool rangeHit = sqrDistance <= (detectionRange * detectionRange);
 
         // Line of sight check
         if (rangeHit && requireLineOfSight)
@@ -285,12 +306,18 @@ public class WorldSpaceTextInRange : MonoBehaviour
         }
 
         // Subtle floating bob motion while visible
-        if (isInRange && enableFloatingBob && displayRoot != null && activeTransitionCoroutine == null)
+        if (isInRange && enableFloatingBob && displayRootTransform != null && activeTransitionCoroutine == null)
         {
             float bobOffset = Mathf.Sin(Time.time * bobSpeed) * bobAmplitude;
-            displayRoot.transform.localPosition = initialLocalPos + new Vector3(0f, bobOffset, 0f);
+            displayRootTransform.localPosition = new Vector3(
+                initialLocalPos.x,
+                initialLocalPos.y + bobOffset,
+                initialLocalPos.z
+            );
         }
     }
+
+    #endregion
 
     #region Proximity Actions
 
@@ -391,9 +418,9 @@ public class WorldSpaceTextInRange : MonoBehaviour
         if (!showing)
         {
             SetDisplayActive(false);
-            if (displayRoot != null)
+            if (displayRootTransform != null)
             {
-                displayRoot.transform.localPosition = initialLocalPos;
+                displayRootTransform.localPosition = initialLocalPos;
             }
         }
 
@@ -416,14 +443,14 @@ public class WorldSpaceTextInRange : MonoBehaviour
             ? textComponent.textInfo.characterCount
             : message.Length;
 
-        float interval = 1f / Mathf.Max(1f, charactersPerSecond);
+        WaitForSeconds stepWait = new WaitForSeconds(1f / Mathf.Max(1f, charactersPerSecond));
         int currentVisible = 0;
 
         while (currentVisible < totalCharacters)
         {
             currentVisible++;
             textComponent.maxVisibleCharacters = currentVisible;
-            yield return new WaitForSeconds(interval);
+            yield return stepWait;
         }
 
         textComponent.maxVisibleCharacters = 9999;
@@ -462,9 +489,14 @@ public class WorldSpaceTextInRange : MonoBehaviour
         }
 
         // 4. Scale
-        if (displayRoot != null)
+        if (displayRootTransform == null && displayRoot != null)
         {
-            displayRoot.transform.localScale = initialScale * scaleFactor;
+            displayRootTransform = displayRoot.transform;
+        }
+
+        if (displayRootTransform != null)
+        {
+            displayRootTransform.localScale = initialScale * scaleFactor;
         }
     }
 
@@ -491,9 +523,9 @@ public class WorldSpaceTextInRange : MonoBehaviour
 
     private float GetCurrentScaleFactor()
     {
-        if (displayRoot != null && initialScale.x > 0.0001f)
+        if (displayRootTransform != null && initialScale.x > 0.0001f)
         {
-            return displayRoot.transform.localScale.x / initialScale.x;
+            return displayRootTransform.localScale.x / initialScale.x;
         }
         return isInRange ? 1f : 0f;
     }
@@ -571,7 +603,7 @@ public class WorldSpaceTextInRange : MonoBehaviour
 
     #endregion
 
-    #region Helpers & Auto-Setup
+    #region Helpers & Gizmos
 
     private Transform ResolveTarget()
     {
@@ -585,11 +617,14 @@ public class WorldSpaceTextInRange : MonoBehaviour
             return cachedTarget;
         }
 
-        GameObject playerObj = GameObject.FindWithTag(playerTag);
-        if (playerObj != null)
+        if (!string.IsNullOrEmpty(playerTag))
         {
-            cachedTarget = playerObj.transform;
-            return cachedTarget;
+            GameObject playerObj = GameObject.FindWithTag(playerTag);
+            if (playerObj != null)
+            {
+                cachedTarget = playerObj.transform;
+                return cachedTarget;
+            }
         }
 
         return null;
@@ -613,11 +648,14 @@ public class WorldSpaceTextInRange : MonoBehaviour
     {
         if (textComponent != null)
         {
-            MeshRenderer mr = textComponent.GetComponent<MeshRenderer>();
-            if (mr != null)
+            if (cachedTextMeshRenderer == null || cachedTextMeshRenderer.gameObject != textComponent.gameObject)
             {
-                mr.sortingLayerName = sortingLayerName;
-                mr.sortingOrder = sortingOrder;
+                cachedTextMeshRenderer = textComponent.GetComponent<MeshRenderer>();
+            }
+            if (cachedTextMeshRenderer != null)
+            {
+                cachedTextMeshRenderer.sortingLayerName = sortingLayerName;
+                cachedTextMeshRenderer.sortingOrder = sortingOrder;
             }
         }
 
@@ -687,8 +725,9 @@ public class WorldSpaceTextInRange : MonoBehaviour
         if (textComponent != null) return;
 
         GameObject textObj = new GameObject("ProximityWorldText");
-        textObj.transform.SetParent(transform, false);
-        textObj.transform.localPosition = new Vector3(0f, 1.25f, 0f);
+        Transform textTransform = textObj.transform;
+        textTransform.SetParent(transform, false);
+        textTransform.localPosition = new Vector3(0f, 1.25f, 0f);
 
         TextMeshPro tmp = textObj.AddComponent<TextMeshPro>();
         tmp.text = message;
@@ -718,15 +757,16 @@ public class WorldSpaceTextInRange : MonoBehaviour
             tmp.fontSharedMaterial = fontMaterial;
         }
 
-        MeshRenderer mr = tmp.GetComponent<MeshRenderer>();
-        if (mr != null)
+        cachedTextMeshRenderer = tmp.GetComponent<MeshRenderer>();
+        if (cachedTextMeshRenderer != null)
         {
-            mr.sortingLayerName = sortingLayerName;
-            mr.sortingOrder = sortingOrder;
+            cachedTextMeshRenderer.sortingLayerName = sortingLayerName;
+            cachedTextMeshRenderer.sortingOrder = sortingOrder;
         }
 
         textComponent = tmp;
         displayRoot = textObj;
+        displayRootTransform = textTransform;
 
         ApplyFontSettings();
 
@@ -752,4 +792,3 @@ public class WorldSpaceTextInRange : MonoBehaviour
 
     #endregion
 }
-

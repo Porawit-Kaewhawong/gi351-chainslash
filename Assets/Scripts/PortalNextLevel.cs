@@ -7,6 +7,8 @@ using UnityEngine.UI;
 [RequireComponent(typeof(Collider2D))]
 public class PortalNextLevel : MonoBehaviour
 {
+    #region Serialized Fields
+
     [Header("Next Level Settings")]
     [SerializeField] private float teleportDelay = 0.05f;
 
@@ -30,15 +32,28 @@ public class PortalNextLevel : MonoBehaviour
     [SerializeField] private float fadeOutDuration = 0.6f;
     [SerializeField] private float portalEnterExpandMultiplier = 1.35f;
 
+    #endregion
+
+    #region Private State
+
+    private static readonly int IsRunningHash = Animator.StringToHash("isRunning");
+    private static readonly int IsDashHash = Animator.StringToHash("isDash");
+
     private bool isTeleporting = false;
     private bool spawnAnimFinished = false;
     private Vector3 targetScale;
+    private Transform cachedTransform;
     private Collider2D portalCollider;
     private AudioSource portalAudioSource;
 
+    #endregion
+
+    #region Unity Lifecycle
+
     private void Awake()
     {
-        targetScale = transform.localScale;
+        cachedTransform = transform;
+        targetScale = cachedTransform.localScale;
         if (targetScale.sqrMagnitude < 0.0001f)
         {
             targetScale = Vector3.one;
@@ -77,27 +92,12 @@ public class PortalNextLevel : MonoBehaviour
         if (isTeleporting || !spawnAnimFinished || !animateIdlePulse) return;
 
         float pulse = 1f + Mathf.Sin(Time.unscaledTime * idlePulseSpeed) * idlePulseAmount;
-        transform.localScale = targetScale * pulse;
+        cachedTransform.localScale = targetScale * pulse;
     }
 
-    private IEnumerator SpawnScaleRoutine()
-    {
-        transform.localScale = Vector3.zero;
-        float elapsed = 0f;
+    #endregion
 
-        while (elapsed < spawnAnimationDuration)
-        {
-            elapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(elapsed / spawnAnimationDuration);
-            // Smooth overshoot pop-in curve
-            float scaleFactor = 1f + 0.15f * Mathf.Sin(t * Mathf.PI) * (1f - t);
-            transform.localScale = targetScale * Mathf.Lerp(0f, scaleFactor, t);
-            yield return null;
-        }
-
-        transform.localScale = targetScale;
-        spawnAnimFinished = true;
-    }
+    #region Trigger & Collision Callbacks
 
     private void OnTriggerEnter2D(Collider2D other)
     {
@@ -107,6 +107,29 @@ public class PortalNextLevel : MonoBehaviour
     private void OnCollisionEnter2D(Collision2D collision)
     {
         TryTeleportPlayer(collision.gameObject);
+    }
+
+    #endregion
+
+    #region Core Logic
+
+    private IEnumerator SpawnScaleRoutine()
+    {
+        cachedTransform.localScale = Vector3.zero;
+        float elapsed = 0f;
+
+        while (elapsed < spawnAnimationDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / spawnAnimationDuration);
+            // Smooth overshoot pop-in curve
+            float scaleFactor = 1f + 0.15f * Mathf.Sin(t * Mathf.PI) * (1f - t);
+            cachedTransform.localScale = targetScale * Mathf.Lerp(0f, scaleFactor, t);
+            yield return null;
+        }
+
+        cachedTransform.localScale = targetScale;
+        spawnAnimFinished = true;
     }
 
     private void TryTeleportPlayer(GameObject hitObject)
@@ -128,7 +151,7 @@ public class PortalNextLevel : MonoBehaviour
         }
 
         // Persist this portal object across the scene load so it can drive the post-load fade-out and finish its audio
-        transform.SetParent(null, true);
+        cachedTransform.SetParent(null, true);
         DontDestroyOnLoad(gameObject);
 
         PlayPortalEnterSound(player);
@@ -184,8 +207,8 @@ public class PortalNextLevel : MonoBehaviour
             playerAnimator = player.GetComponentInChildren<Animator>();
             if (playerAnimator != null)
             {
-                playerAnimator.SetBool("isRunning", false);
-                playerAnimator.SetBool("isDash", false);
+                playerAnimator.SetBool(IsRunningHash, false);
+                playerAnimator.SetBool(IsDashHash, false);
             }
         }
 
@@ -206,14 +229,12 @@ public class PortalNextLevel : MonoBehaviour
         if (cinemachineCam != null)
         {
             // Disable Group Framing so it no longer overrides OrthographicSize or tracks the target group
-            CinemachineGroupFraming groupFraming = cinemachineCam.GetComponent<CinemachineGroupFraming>();
-            if (groupFraming != null)
+            if (cinemachineCam.TryGetComponent<CinemachineGroupFraming>(out CinemachineGroupFraming groupFraming))
             {
                 groupFraming.enabled = false;
             }
 
-            CinemachinePositionComposer composer = cinemachineCam.GetComponent<CinemachinePositionComposer>();
-            if (composer != null)
+            if (cinemachineCam.TryGetComponent<CinemachinePositionComposer>(out CinemachinePositionComposer composer))
             {
                 composer.TargetOffset = Vector3.zero;
                 composer.Damping = new Vector3(0.12f, 0.12f, 0.12f);
@@ -222,11 +243,13 @@ public class PortalNextLevel : MonoBehaviour
             LensSettings lens = cinemachineCam.Lens;
             lens.OrthographicSize = startOrthoSize;
             cinemachineCam.Lens = lens;
-            cinemachineCam.Target.TrackingTarget = transform;
+            cinemachineCam.Target.TrackingTarget = cachedTransform;
         }
 
-        Vector3 camStartPos = mainCam != null ? mainCam.transform.position : transform.position + new Vector3(0f, 0f, -10f);
-        Vector3 camTargetPos = new Vector3(transform.position.x, transform.position.y, camStartPos.z);
+        Vector3 portalPos = cachedTransform.position;
+        Transform mainCamTransform = mainCam != null ? mainCam.transform : null;
+        Vector3 camStartPos = mainCamTransform != null ? mainCamTransform.position : portalPos + new Vector3(0f, 0f, -10f);
+        Vector3 camTargetPos = new Vector3(portalPos.x, portalPos.y, camStartPos.z);
 
         // 3. Create full-screen black overlay Canvas for the fade-in / fade-out transition
         CanvasGroup fadeCanvasGroup = CreateScreenFadeOverlay();
@@ -234,7 +257,7 @@ public class PortalNextLevel : MonoBehaviour
         // 4. Zoom camera into the portal while fading to black
         float elapsed = 0f;
         float duration = Mathf.Max(0.1f, zoomInDuration);
-        Vector3 portalStartScale = transform.localScale;
+        Vector3 portalStartScale = cachedTransform.localScale;
         Vector3 portalZoomScale = targetScale * portalEnterExpandMultiplier;
         float targetOrtho = Mathf.Max(0.5f, zoomInOrthoSize);
 
@@ -255,14 +278,14 @@ public class PortalNextLevel : MonoBehaviour
             if (mainCam != null)
             {
                 mainCam.orthographicSize = currentOrtho;
-                if (cinemachineCam == null)
+                if (cinemachineCam == null && mainCamTransform != null)
                 {
-                    mainCam.transform.position = Vector3.Lerp(camStartPos, camTargetPos, smoothT);
+                    mainCamTransform.position = Vector3.Lerp(camStartPos, camTargetPos, smoothT);
                 }
             }
 
             // Expand portal slightly as camera dives into it
-            transform.localScale = Vector3.Lerp(portalStartScale, portalZoomScale, smoothT);
+            cachedTransform.localScale = Vector3.Lerp(portalStartScale, portalZoomScale, smoothT);
 
             // Keep player standing idle in place
             if (playerRb != null)
@@ -271,7 +294,7 @@ public class PortalNextLevel : MonoBehaviour
             }
             if (playerAnimator != null)
             {
-                playerAnimator.SetBool("isRunning", false);
+                playerAnimator.SetBool(IsRunningHash, false);
             }
 
             // Fade in black screen overlay
@@ -303,9 +326,9 @@ public class PortalNextLevel : MonoBehaviour
 
         // Hide this portal's visuals so it is invisible in the next scene while fading out
         Renderer[] portalRenderers = GetComponentsInChildren<Renderer>(true);
-        foreach (Renderer r in portalRenderers)
+        for (int i = 0; i < portalRenderers.Length; i++)
         {
-            if (r != null) r.enabled = false;
+            if (portalRenderers[i] != null) portalRenderers[i].enabled = false;
         }
 
         // Ensure time scale and static combat flags are reset before switching scenes
@@ -363,10 +386,14 @@ public class PortalNextLevel : MonoBehaviour
         Destroy(gameObject);
     }
 
+    #endregion
+
+    #region Helpers
+
     private CanvasGroup CreateScreenFadeOverlay()
     {
         GameObject canvasObj = new GameObject("PortalTransitionFadeCanvas");
-        canvasObj.transform.SetParent(transform, false);
+        canvasObj.transform.SetParent(cachedTransform, false);
 
         Canvas canvas = canvasObj.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
@@ -396,5 +423,6 @@ public class PortalNextLevel : MonoBehaviour
 
         return canvasGroup;
     }
-}
 
+    #endregion
+}

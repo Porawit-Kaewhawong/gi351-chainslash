@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -13,6 +12,8 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Collider2D))]
 public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
 {
+    #region Serialized Fields
+
     [Header("Layer Configuration")]
     [Tooltip("Designated layer name for this destructible crate.")]
     [SerializeField] private string targetLayerName = "Crate";
@@ -78,9 +79,17 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
     [Range(0f, 1f)]
     [SerializeField] private float dropChance = 0.5f;
 
+    #endregion
+
+    #region Public Properties
+
     // Public Status Properties
     public bool IsTarget => isTarget;
     public bool IsDestroyed => isDestroyed;
+
+    #endregion
+
+    #region Private State
 
     // Internal State
     private bool isTarget = false;
@@ -89,31 +98,36 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
 
     // Cached References
     private Collider2D col;
+    private Collider2D[] allColliders;
     private SpriteRenderer spriteRenderer;
+    private SpriteRenderer[] allSpriteRenderers;
+    private Transform spriteTransform;
     private PixelSpriteEffect pixelEffect;
+    private Camera cachedCamera;
     private Vector3 originalSpriteLocalPos;
     private Color originalSpriteColor = Color.white;
     private Material originalSpriteMaterial;
+    private int cachedCrateLayer = -2;
 
     // Continuous mouse swipe tracking
     private Vector2 lastMousePos;
     private bool hasLastMousePos = false;
     private Coroutine fallbackDestroyCoroutine;
 
+    private static Sprite cachedDebrisSprite;
+
+    #endregion
+
+    #region Unity Lifecycle
+
     private void Awake()
     {
-        col = GetComponent<Collider2D>();
-        if (col == null) col = GetComponentInChildren<Collider2D>();
-
-        spriteRenderer = GetComponent<SpriteRenderer>();
-        if (spriteRenderer == null) spriteRenderer = GetComponentInChildren<SpriteRenderer>();
-
-        pixelEffect = GetComponent<PixelSpriteEffect>();
-        if (pixelEffect == null) pixelEffect = GetComponentInChildren<PixelSpriteEffect>();
+        CacheComponents();
 
         if (spriteRenderer != null)
         {
-            originalSpriteLocalPos = spriteRenderer.transform.localPosition;
+            spriteTransform = spriteRenderer.transform;
+            originalSpriteLocalPos = spriteTransform.localPosition;
             originalSpriteColor = spriteRenderer.color;
             originalSpriteMaterial = spriteRenderer.sharedMaterial;
         }
@@ -123,44 +137,8 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
 
     private void OnValidate()
     {
-        if (col == null) col = GetComponent<Collider2D>();
-        if (col == null) col = GetComponentInChildren<Collider2D>();
-
-        if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
-        if (spriteRenderer == null) spriteRenderer = GetComponentInChildren<SpriteRenderer>();
-
-        if (pixelEffect == null) pixelEffect = GetComponent<PixelSpriteEffect>();
-        if (pixelEffect == null) pixelEffect = GetComponentInChildren<PixelSpriteEffect>();
-    }
-
-    private void EnforceCrateLayer()
-    {
-        if (!autoAssignLayer) return;
-
-        int crateLayer = LayerMask.NameToLayer(targetLayerName);
-        if (crateLayer != -1 && gameObject.layer != crateLayer)
-        {
-            SetLayerRecursively(gameObject, crateLayer);
-        }
-    }
-
-    private void SetLayerRecursively(GameObject obj, int newLayer)
-    {
-        obj.layer = newLayer;
-        foreach (Transform child in obj.transform)
-        {
-            SetLayerRecursively(child.gameObject, newLayer);
-        }
-    }
-
-    private bool IsLayerValid()
-    {
-        if (!requireLayerMatch) return true;
-
-        int crateLayer = LayerMask.NameToLayer(targetLayerName);
-        if (crateLayer == -1) return true; // Layer not registered yet, do not block
-
-        return gameObject.layer == crateLayer;
+        CacheComponents();
+        cachedCrateLayer = -2;
     }
 
     private void Update()
@@ -191,6 +169,76 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
         wasInMode = inMode;
     }
 
+    #endregion
+
+    #region Core Logic
+
+    private void CacheComponents()
+    {
+        if (col == null) col = GetComponent<Collider2D>();
+        if (col == null) col = GetComponentInChildren<Collider2D>();
+        allColliders = GetComponentsInChildren<Collider2D>(true);
+
+        if (spriteRenderer == null) spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer == null) spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+        allSpriteRenderers = GetComponentsInChildren<SpriteRenderer>(true);
+
+        if (pixelEffect == null) pixelEffect = GetComponent<PixelSpriteEffect>();
+        if (pixelEffect == null) pixelEffect = GetComponentInChildren<PixelSpriteEffect>();
+    }
+
+    private int GetTargetLayerIndex()
+    {
+        if (cachedCrateLayer == -2)
+        {
+            cachedCrateLayer = LayerMask.NameToLayer(targetLayerName);
+        }
+        return cachedCrateLayer;
+    }
+
+    private void EnforceCrateLayer()
+    {
+        if (!autoAssignLayer) return;
+
+        int crateLayer = GetTargetLayerIndex();
+        if (crateLayer != -1 && gameObject.layer != crateLayer)
+        {
+            SetLayerRecursively(gameObject, crateLayer);
+        }
+    }
+
+    private void SetLayerRecursively(GameObject obj, int newLayer)
+    {
+        obj.layer = newLayer;
+        Transform objTransform = obj.transform;
+        int childCount = objTransform.childCount;
+        for (int i = 0; i < childCount; i++)
+        {
+            SetLayerRecursively(objTransform.GetChild(i).gameObject, newLayer);
+        }
+    }
+
+    private bool IsLayerValid()
+    {
+        if (!requireLayerMatch) return true;
+
+        int crateLayer = GetTargetLayerIndex();
+        if (crateLayer == -1) return true; // Layer not registered yet, do not block
+
+        return gameObject.layer == crateLayer;
+    }
+
+    private Camera GetActiveCamera()
+    {
+        if (cachedCamera == null || !cachedCamera.isActiveAndEnabled)
+        {
+            cachedCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        }
+        return cachedCamera;
+    }
+
+    #endregion
+
     #region Mouse & Target Selection
 
     public void OnPointerEnter(PointerEventData eventData)
@@ -203,10 +251,10 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
 
     private void CheckMouseSelection()
     {
-        if (isTarget || col == null) return;
+        if (isTarget || col == null || Mouse.current == null) return;
 
-        Camera cam = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
-        if (cam == null || Mouse.current == null) return;
+        Camera cam = GetActiveCamera();
+        if (cam == null) return;
 
         Vector3 screenPos = Mouse.current.position.ReadValue();
         screenPos.z = -cam.transform.position.z;
@@ -218,11 +266,7 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
         if (!isHit && hasLastMousePos)
         {
             RaycastHit2D lineHit = Physics2D.Linecast(lastMousePos, currentMouse, 1 << gameObject.layer);
-            if (lineHit.collider == col)
-            {
-                isHit = true;
-            }
-            else if (LineIntersectsBounds(col.bounds, lastMousePos, currentMouse))
+            if (lineHit.collider == col || LineIntersectsBounds(col.bounds, lastMousePos, currentMouse))
             {
                 isHit = true;
             }
@@ -244,9 +288,7 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
         PlayerController player = PlayerController.Instance;
         if (player == null || !player.IsInMode) return false;
 
-        if (!IsLayerValid()) return false;
-
-        return true;
+        return IsLayerValid();
     }
 
     /// <summary>
@@ -283,10 +325,14 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
 
     private void ApplyTargetJitter()
     {
-        if (spriteRenderer == null || targetJitterStrength <= 0f) return;
+        if (spriteTransform == null || targetJitterStrength <= 0f) return;
 
         Vector2 jitter = Random.insideUnitCircle * targetJitterStrength;
-        spriteRenderer.transform.localPosition = originalSpriteLocalPos + new Vector3(jitter.x, jitter.y, 0f);
+        spriteTransform.localPosition = new Vector3(
+            originalSpriteLocalPos.x + jitter.x,
+            originalSpriteLocalPos.y + jitter.y,
+            originalSpriteLocalPos.z
+        );
     }
 
     #endregion
@@ -352,7 +398,10 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
                 spriteRenderer.sharedMaterial = originalSpriteMaterial;
             }
             spriteRenderer.color = originalSpriteColor;
-            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+            if (spriteTransform != null)
+            {
+                spriteTransform.localPosition = originalSpriteLocalPos;
+            }
         }
     }
 
@@ -372,9 +421,12 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
 
         // Disable all colliders immediately so neither player nor enemies collide
         if (col != null) col.enabled = false;
-        foreach (Collider2D c in GetComponentsInChildren<Collider2D>())
+        if (allColliders != null)
         {
-            c.enabled = false;
+            for (int i = 0; i < allColliders.Length; i++)
+            {
+                if (allColliders[i] != null) allColliders[i].enabled = false;
+            }
         }
 
         // Trigger camera shake
@@ -383,16 +435,18 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
             PlayerController.Instance.TriggerCameraShake(breakCameraShake);
         }
 
+        Vector3 cratePosition = transform.position;
+
         // Spawn destruction VFX prefab if assigned
         if (breakVFXPrefab != null)
         {
-            Instantiate(breakVFXPrefab, transform.position, Quaternion.identity);
+            Instantiate(breakVFXPrefab, cratePosition, Quaternion.identity);
         }
 
         // Play destruction SFX
         if (breakSFX != null)
         {
-            AudioSource.PlayClipAtPoint(breakSFX, transform.position, breakSFXVolume);
+            AudioSource.PlayClipAtPoint(breakSFX, cratePosition, breakSFXVolume);
         }
 
         // Spawn procedural wood debris fragments
@@ -404,14 +458,17 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
         // Drop loot item if configured
         if (dropItemPrefab != null && Random.value <= dropChance)
         {
-            Instantiate(dropItemPrefab, transform.position, Quaternion.identity);
+            Instantiate(dropItemPrefab, cratePosition, Quaternion.identity);
         }
 
         // Hide renderers immediately
         if (spriteRenderer != null) spriteRenderer.enabled = false;
-        foreach (SpriteRenderer sr in GetComponentsInChildren<SpriteRenderer>())
+        if (allSpriteRenderers != null)
         {
-            sr.enabled = false;
+            for (int i = 0; i < allSpriteRenderers.Length; i++)
+            {
+                if (allSpriteRenderers[i] != null) allSpriteRenderers[i].enabled = false;
+            }
         }
 
         // Destroy the GameObject
@@ -425,19 +482,24 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
     private void SpawnWoodDebris(Vector2 slashVector)
     {
         Sprite sprite = spriteRenderer != null ? spriteRenderer.sprite : null;
+        Sprite debrisSprite = sprite != null ? sprite : GetFallbackDebrisSprite();
+        int sortingLayerID = spriteRenderer != null ? spriteRenderer.sortingLayerID : 0;
+        int sortingOrder = (spriteRenderer != null ? spriteRenderer.sortingOrder : 3) + 1;
         Vector2 baseImpulse = slashVector.normalized * (debrisExplosionForce * 0.75f);
+        Vector3 origin = transform.position;
 
         for (int i = 0; i < debrisPiecesCount; i++)
         {
             GameObject fragment = new GameObject($"CrateDebris_{i}");
-            fragment.transform.position = transform.position + (Vector3)(Random.insideUnitCircle * 0.2f);
-            fragment.transform.localScale = Vector3.one * Random.Range(0.2f, 0.45f);
+            Transform fragmentTransform = fragment.transform;
+            fragmentTransform.position = origin + (Vector3)(Random.insideUnitCircle * 0.2f);
+            fragmentTransform.localScale = Vector3.one * Random.Range(0.2f, 0.45f);
 
             SpriteRenderer sr = fragment.AddComponent<SpriteRenderer>();
-            sr.sprite = sprite != null ? sprite : GetFallbackDebrisSprite();
+            sr.sprite = debrisSprite;
             sr.color = debrisColor;
-            sr.sortingLayerID = spriteRenderer != null ? spriteRenderer.sortingLayerID : 0;
-            sr.sortingOrder = (spriteRenderer != null ? spriteRenderer.sortingOrder : 3) + 1;
+            sr.sortingLayerID = sortingLayerID;
+            sr.sortingOrder = sortingOrder;
 
             Rigidbody2D rb = fragment.AddComponent<Rigidbody2D>();
             rb.gravityScale = 2.5f;
@@ -452,7 +514,6 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
         }
     }
 
-    private static Sprite cachedDebrisSprite;
     private static Sprite GetFallbackDebrisSprite()
     {
         if (cachedDebrisSprite == null)
@@ -492,7 +553,7 @@ public class Crate : MonoBehaviour, IPointerEnterHandler, ISlashable
 
     #endregion
 
-    #region Helper Geometry
+    #region Helpers & Gizmos
 
     private static bool LineIntersectsBounds(Bounds bounds, Vector2 p1, Vector2 p2)
     {
