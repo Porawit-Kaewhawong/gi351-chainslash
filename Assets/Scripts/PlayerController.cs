@@ -302,8 +302,8 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private bool enableAfterimages = true;
     [SerializeField] private float afterimageInterval = 0.035f;
     [SerializeField] private float afterimageLifetime = 0.22f;
-    [SerializeField] private Color afterimageStartColor = new Color(0.22f, 0.92f, 1f, 0.62f);
-    [SerializeField] private Color afterimageEndColor = new Color(0.38f, 0.12f, 0.88f, 0f);
+    [SerializeField] private Color afterimageStartColor = new Color(1f, 1f, 1f, 0.65f);
+    [SerializeField] private Color afterimageEndColor = new Color(1f, 1f, 1f, 0f);
 
     [Tooltip("Smoothly zooms the camera in during Chain Slash mode and adds impact zoom-punches on slash execution and kicks.")]
     [SerializeField] private bool enableDynamicCameraZoom = true;
@@ -4566,7 +4566,7 @@ public class PlayerController : MonoBehaviour
     private void SpawnTakeoffDust()
     {
         if (!enableMovementDustVFX) return;
-        PixelMovementDustVFX.SpawnDustBurst(GetFeetPosition(), Vector2.up, 5, new Color(0.88f, 0.92f, 0.96f, 0.85f));
+        PixelMovementDustVFX.SpawnDustBurst(GetFeetPosition(), Vector2.up, 5, Color.white);
     }
 
     private void OnPlayerLanded(float impactSpeed)
@@ -4574,7 +4574,7 @@ public class PlayerController : MonoBehaviour
         if (enableMovementDustVFX)
         {
             int count = impactSpeed > 11f ? 7 : 4;
-            PixelMovementDustVFX.SpawnLandingPuffs(GetFeetPosition(), count, new Color(0.88f, 0.92f, 0.96f, 0.85f));
+            PixelMovementDustVFX.SpawnLandingPuffs(GetFeetPosition(), count, Color.white);
         }
 
         if (spriteRenderer != null)
@@ -4622,7 +4622,7 @@ public class PlayerController : MonoBehaviour
     private void SpawnDoubleJumpAirRing()
     {
         if (!enableMovementDustVFX) return;
-        PixelMovementDustVFX.SpawnAirRing(GetFeetPosition(), new Color(0.35f, 0.95f, 1f, 0.92f));
+        PixelMovementDustVFX.SpawnAirRing(GetFeetPosition(), Color.white);
     }
 
     private void UpdateWallSlideDust()
@@ -4638,7 +4638,7 @@ public class PlayerController : MonoBehaviour
         {
             wallSlideDustTimer = 0.075f;
             Vector3 wallPos = transform.position + new Vector3(wallDirection * 0.35f, 0.1f, 0f);
-            PixelMovementDustVFX.SpawnDustBurst(wallPos, Vector2.up, 2, new Color(0.85f, 0.90f, 0.96f, 0.75f));
+            PixelMovementDustVFX.SpawnDustBurst(wallPos, Vector2.up, 2, Color.white);
         }
     }
 
@@ -4647,7 +4647,7 @@ public class PlayerController : MonoBehaviour
         if (!enableMovementDustVFX) return;
         Vector3 wallPos = transform.position + new Vector3(-kickDir * 0.35f, 0f, 0f);
         Vector2 burstDir = new Vector2(kickDir, 0.5f).normalized;
-        PixelMovementDustVFX.SpawnDustBurst(wallPos, burstDir, 5, new Color(0.88f, 0.95f, 1f, 0.9f));
+        PixelMovementDustVFX.SpawnDustBurst(wallPos, burstDir, 5, Color.white);
     }
 
     // =========================================================================
@@ -4802,19 +4802,23 @@ public class PlayerAfterimageGhostVFX : MonoBehaviour
         obj.transform.rotation = Quaternion.identity;
         obj.transform.localScale = source.transform.lossyScale;
 
+        float startAlpha = startTint.a > 0.05f ? startTint.a : 0.65f;
+        Color whiteStart = new Color(1f, 1f, 1f, startAlpha);
+        Color whiteEnd = new Color(1f, 1f, 1f, 0f);
+
         SpriteRenderer ghostSr = obj.AddComponent<SpriteRenderer>();
         ghostSr.sprite = source.sprite;
         ghostSr.flipX = source.flipX;
         ghostSr.flipY = source.flipY;
         ghostSr.sortingLayerID = source.sortingLayerID;
         ghostSr.sortingOrder = source.sortingOrder - 1;
-        ghostSr.color = startTint;
+        ghostSr.color = whiteStart;
 
         PlayerAfterimageGhostVFX vfx = obj.AddComponent<PlayerAfterimageGhostVFX>();
         vfx.sr = ghostSr;
         vfx.duration = Mathf.Max(0.05f, lifetime);
-        vfx.startColor = startTint;
-        vfx.endColor = endTint;
+        vfx.startColor = whiteStart;
+        vfx.endColor = whiteEnd;
     }
 
     private void Update()
