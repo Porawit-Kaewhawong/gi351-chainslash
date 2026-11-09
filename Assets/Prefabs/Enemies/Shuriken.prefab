@@ -156,6 +156,7 @@ MonoBehaviour:
   trailStartWidth: 0.35
   trailColor: {r: 0.85, g: 0.95, b: 1, a: 0.85}
   canDamageEnemies: 0
+  parryVFXPrefab: {fileID: 7083987536874535276, guid: 04a1995f4a3a7ce47bfe52af84e1d48c, type: 3}
   reflectSFX: {fileID: 8300000, guid: 98936b8a712d84748be947cc31bd8e4a, type: 3}
   reflectColor: {r: 0.44968545, g: 0.6380315, b: 1, a: 1}
   reflectSpeedMultiplier: 1.5

@@ -1272,5 +1272,356 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         }
     }
 
+    private bool hasSpawnedDeathSlice;
+    private static Sprite cachedPixel1x1Sprite;
+    private static Sprite cachedPixel2x2Sprite;
+    private static Sprite cachedPixel3x3Sprite;
+    private static Sprite[] cachedPixelSlashFrames;
+
+    /// <summary>
+    /// Spawns a sliced-in-half sprite split VFX + glowing slash seam & pixel sparks when this enemy dies.
+    /// Safe to call multiple times; executes at most once per enemy instance.
+    /// </summary>
+    public void TrySpawnDeathSlice(Vector2 slashDir = default)
+    {
+        if (hasSpawnedDeathSlice) return;
+        if (this is BossTargetPoint || this is ArmoredNinjaWeakPoint) return;
+        if (spriteRenderer == null || spriteRenderer.sprite == null || spriteRenderer.sprite.texture == null) return;
+
+        hasSpawnedDeathSlice = true;
+
+        if (slashDir.sqrMagnitude < 0.001f)
+        {
+            if (playerController != null)
+            {
+                slashDir = ((Vector2)transform.position - (Vector2)playerController.transform.position).normalized;
+            }
+            if (slashDir.sqrMagnitude < 0.001f)
+            {
+                float angle = Random.Range(20f, 55f) * Mathf.Deg2Rad;
+                slashDir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+            }
+        }
+        else
+        {
+            slashDir.Normalize();
+        }
+
+        EnemyDeathSliceVFX.Spawn(spriteRenderer, slashDir, originalColor);
+    }
+
+    internal static Vector3 SnapToPixelGrid(Vector3 pos, float ppu = 16f)
+    {
+        float inv = 1f / Mathf.Max(1f, ppu);
+        return new Vector3(
+            Mathf.Round(pos.x * ppu) * inv,
+            Mathf.Round(pos.y * ppu) * inv,
+            pos.z
+        );
+    }
+
+    internal static float QuantizeStep(float val, int steps = 4)
+    {
+        return Mathf.Round(Mathf.Clamp01(val) * steps) / steps;
+    }
+
+    internal static Sprite GetSharedPixelSquareSprite()
+    {
+        return GetSharedPixelBlockSprite(2);
+    }
+
+    internal static Sprite GetSharedPixelBlockSprite(int sizePx)
+    {
+        sizePx = Mathf.Clamp(sizePx, 1, 3);
+        if (sizePx == 1 && cachedPixel1x1Sprite != null) return cachedPixel1x1Sprite;
+        if (sizePx == 2 && cachedPixel2x2Sprite != null) return cachedPixel2x2Sprite;
+        if (sizePx == 3 && cachedPixel3x3Sprite != null) return cachedPixel3x3Sprite;
+
+        Texture2D tex = new Texture2D(sizePx, sizePx, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        Color[] cols = new Color[sizePx * sizePx];
+        for (int i = 0; i < cols.Length; i++) cols[i] = Color.white;
+        tex.SetPixels(cols);
+        tex.Apply();
+
+        Sprite spr = Sprite.Create(tex, new Rect(0f, 0f, sizePx, sizePx), new Vector2(0.5f, 0.5f), 16f);
+        if (sizePx == 1) cachedPixel1x1Sprite = spr;
+        else if (sizePx == 2) cachedPixel2x2Sprite = spr;
+        else cachedPixel3x3Sprite = spr;
+        return spr;
+    }
+
+    /// <summary>
+    /// Generates a 3-frame 24x24 pixel-art diagonal slash animation (FilterMode.Point, axis-aligned stair-stepped pixels).
+    /// </summary>
+    internal static Sprite[] GetSharedPixelSlashFrames()
+    {
+        if (cachedPixelSlashFrames != null && cachedPixelSlashFrames.Length == 3 && cachedPixelSlashFrames[0] != null)
+        {
+            return cachedPixelSlashFrames;
+        }
+
+        const int size = 24;
+        cachedPixelSlashFrames = new Sprite[3];
+        Color clear = new Color(0f, 0f, 0f, 0f);
+        Color coreWhite = Color.white;
+        Color edgeCyan = new Color(0.35f, 0.96f, 1f, 1f);
+
+        for (int f = 0; f < 3; f++)
+        {
+            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            Color[] px = new Color[size * size];
+            for (int i = 0; i < px.Length; i++) px[i] = clear;
+
+            for (int i = 2; i < size - 2; i++)
+            {
+                // Frame 2 breaks into dashed pixel segments
+                if (f == 2 && (i % 4 == 0 || i % 4 == 1)) continue;
+
+                int x = i;
+                int y = (size / 2 - 5) + (i / 2);
+                if (x >= 0 && x < size && y >= 0 && y < size)
+                {
+                    px[y * size + x] = (f == 2) ? edgeCyan : coreWhite;
+                    if (f == 0)
+                    {
+                        if (y + 1 < size) px[(y + 1) * size + x] = edgeCyan;
+                        if (y - 1 >= 0) px[(y - 1) * size + x] = edgeCyan;
+                    }
+                    else if (f == 1 && (i > 5 && i < size - 5))
+                    {
+                        if (y + 1 < size) px[(y + 1) * size + x] = edgeCyan;
+                    }
+                }
+            }
+
+            tex.SetPixels(px);
+            tex.Apply();
+            cachedPixelSlashFrames[f] = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 16f);
+        }
+
+        return cachedPixelSlashFrames;
+    }
+
     #endregion
+}
+
+/// <summary>
+/// Self-contained pixel-art sliced-in-half enemy death effect: splits the enemy sprite into top and bottom
+/// halves that flash white, step apart on the pixel grid (without sub-pixel rotation), and burst into pixel blocks.
+/// </summary>
+public class EnemyDeathSliceVFX : MonoBehaviour
+{
+    private SpriteRenderer topRenderer;
+    private SpriteRenderer bottomRenderer;
+    private SpriteRenderer seamRenderer;
+    private Sprite topSprite;
+    private Sprite bottomSprite;
+
+    private Vector2 topPos;
+    private Vector2 bottomPos;
+    private Vector2 topVelocity;
+    private Vector2 bottomVelocity;
+    private Color baseColor;
+
+    private Transform[] sparkTransforms;
+    private SpriteRenderer[] sparkRenderers;
+    private Vector2[] sparkPositions;
+    private Vector2[] sparkVelocities;
+
+    private float elapsed;
+    private const float TotalDuration = 0.42f;
+    private const float FlashDuration = 0.065f;
+
+    public static void Spawn(SpriteRenderer source, Vector2 slashDir, Color baseTint)
+    {
+        if (source == null || source.sprite == null || source.sprite.texture == null) return;
+
+        Sprite orig = source.sprite;
+        Rect r = orig.textureRect;
+        if (r.width < 2f || r.height < 2f) return;
+
+        GameObject root = new GameObject("EnemyDeathSliceVFX");
+        root.transform.position = EnemyBase.SnapToPixelGrid(source.bounds.center);
+
+        EnemyDeathSliceVFX vfx = root.AddComponent<EnemyDeathSliceVFX>();
+        vfx.Initialize(source, orig, r, slashDir, baseTint);
+    }
+
+    private void Initialize(SpriteRenderer source, Sprite orig, Rect r, Vector2 slashDir, Color baseTint)
+    {
+        baseColor = baseTint.a > 0.1f ? baseTint : Color.white;
+
+        float halfH = Mathf.Floor(r.height * 0.5f);
+        Rect bottomRect = new Rect(r.x, r.y, r.width, halfH);
+        Rect topRect = new Rect(r.x, r.y + halfH, r.width, r.height - halfH);
+
+        float ppu = Mathf.Max(1f, orig.pixelsPerUnit);
+        topSprite = Sprite.Create(orig.texture, topRect, new Vector2(0.5f, 0f), ppu);
+        bottomSprite = Sprite.Create(orig.texture, bottomRect, new Vector2(0.5f, 1f), ppu);
+
+        Vector3 lossyScale = source.transform.lossyScale;
+
+        // Keep Quaternion.identity so pixel art stays strictly axis-aligned (no sub-pixel rotation shearing)
+        topRenderer = CreateHalfObject("TopHalf", topSprite, source, lossyScale);
+        bottomRenderer = CreateHalfObject("BottomHalf", bottomSprite, source, lossyScale);
+
+        float dirSignX = slashDir.x >= 0f ? 1f : -1f;
+        topVelocity = new Vector2(dirSignX * Random.Range(2.2f, 3.4f), Random.Range(1.8f, 2.8f));
+        bottomVelocity = new Vector2(-dirSignX * Random.Range(1.0f, 1.8f), Random.Range(-0.8f, -0.2f));
+
+        // 3-frame pixel-art slash seam sprite (axis-aligned, flipped to match slash quadrant)
+        GameObject seamObj = new GameObject("PixelSlashSeam");
+        seamObj.transform.SetParent(transform, false);
+        seamObj.transform.localScale = Vector3.one * 1.5f;
+
+        Sprite[] slashFrames = EnemyBase.GetSharedPixelSlashFrames();
+        seamRenderer = seamObj.AddComponent<SpriteRenderer>();
+        seamRenderer.sprite = slashFrames[0];
+        seamRenderer.flipX = slashDir.x < 0f;
+        seamRenderer.flipY = slashDir.y < 0f;
+        seamRenderer.sortingLayerID = source.sortingLayerID;
+        seamRenderer.sortingOrder = source.sortingOrder + 3;
+
+        // Chunky axis-aligned 1x1 and 2x2 pixel sparks
+        int sparkCount = 8;
+        sparkTransforms = new Transform[sparkCount];
+        sparkRenderers = new SpriteRenderer[sparkCount];
+        sparkPositions = new Vector2[sparkCount];
+        sparkVelocities = new Vector2[sparkCount];
+
+        for (int i = 0; i < sparkCount; i++)
+        {
+            GameObject spark = new GameObject("PixelSlashSpark");
+            spark.transform.SetParent(transform, false);
+            spark.transform.localScale = Vector3.one;
+            spark.transform.localRotation = Quaternion.identity;
+
+            float sign = (i % 2 == 0) ? 1f : -1f;
+            Vector2 dir = (slashDir * sign + Random.insideUnitCircle * 0.55f).normalized;
+            sparkVelocities[i] = dir * Random.Range(4.0f, 8.5f);
+
+            SpriteRenderer sr = spark.AddComponent<SpriteRenderer>();
+            sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 2 == 0) ? 2 : 1);
+            sr.sortingLayerID = source.sortingLayerID;
+            sr.sortingOrder = source.sortingOrder + 4;
+            sr.color = (i % 3 == 0) ? new Color(0.3f, 0.95f, 1f, 1f) : new Color(1f, 0.25f, 0.35f, 1f);
+
+            sparkTransforms[i] = spark.transform;
+            sparkRenderers[i] = sr;
+        }
+    }
+
+    private SpriteRenderer CreateHalfObject(string objName, Sprite spr, SpriteRenderer source, Vector3 worldScale)
+    {
+        GameObject halfObj = new GameObject(objName);
+        halfObj.transform.SetParent(transform, false);
+        halfObj.transform.localPosition = Vector3.zero;
+        halfObj.transform.localRotation = Quaternion.identity;
+        halfObj.transform.localScale = worldScale;
+
+        SpriteRenderer sr = halfObj.AddComponent<SpriteRenderer>();
+        sr.sprite = spr;
+        sr.flipX = source.flipX;
+        sr.flipY = source.flipY;
+        sr.sortingLayerID = source.sortingLayerID;
+        sr.sortingOrder = source.sortingOrder + 1;
+        sr.color = Color.white;
+        return sr;
+    }
+
+    private void Update()
+    {
+        float dt = Time.unscaledDeltaTime > 0f ? Mathf.Min(Time.unscaledDeltaTime, 0.05f) : Time.deltaTime;
+        elapsed += dt;
+
+        float t = Mathf.Clamp01(elapsed / TotalDuration);
+
+        // Apply gravity & drag, then snap positions to 16 PPU pixel grid
+        topVelocity.y -= 9.5f * dt;
+        bottomVelocity.y -= 12f * dt;
+        topVelocity *= (1f - 3.5f * dt);
+        bottomVelocity *= (1f - 3.5f * dt);
+
+        topPos += topVelocity * dt;
+        bottomPos += bottomVelocity * dt;
+
+        if (topRenderer != null)
+        {
+            topRenderer.transform.localPosition = EnemyBase.SnapToPixelGrid(topPos);
+        }
+
+        if (bottomRenderer != null)
+        {
+            bottomRenderer.transform.localPosition = EnemyBase.SnapToPixelGrid(bottomPos);
+        }
+
+        // Quantized 4-step retro color & alpha fade
+        Color c;
+        if (elapsed < FlashDuration)
+        {
+            c = new Color(0.85f, 1f, 1f, 1f);
+        }
+        else
+        {
+            float fadeT = EnemyBase.QuantizeStep((elapsed - FlashDuration) / (TotalDuration - FlashDuration), 4);
+            c = Color.Lerp(Color.white, new Color(1f, 0.25f, 0.3f, 0f), fadeT);
+            c.r *= baseColor.r;
+            c.g *= baseColor.g;
+            c.b *= baseColor.b;
+            c.a = 1f - fadeT;
+        }
+
+        if (topRenderer != null) topRenderer.color = c;
+        if (bottomRenderer != null) bottomRenderer.color = c;
+
+        // 3-frame stepped pixel slash seam animation
+        if (seamRenderer != null)
+        {
+            if (elapsed >= 0.15f)
+            {
+                seamRenderer.enabled = false;
+            }
+            else
+            {
+                Sprite[] frames = EnemyBase.GetSharedPixelSlashFrames();
+                int frameIdx = Mathf.Clamp(Mathf.FloorToInt((elapsed / 0.15f) * 3f), 0, 2);
+                seamRenderer.sprite = frames[frameIdx];
+            }
+        }
+
+        // Pixel-snapped sparks update
+        float quantAlpha = 1f - EnemyBase.QuantizeStep(t, 4);
+        if (sparkTransforms != null)
+        {
+            for (int i = 0; i < sparkTransforms.Length; i++)
+            {
+                if (sparkTransforms[i] == null) continue;
+                sparkPositions[i] += sparkVelocities[i] * dt;
+                sparkVelocities[i] *= (1f - 6f * dt);
+                sparkTransforms[i].localPosition = EnemyBase.SnapToPixelGrid(sparkPositions[i]);
+                Color sc = sparkRenderers[i].color;
+                sc.a = quantAlpha;
+                sparkRenderers[i].color = sc;
+            }
+        }
+
+        if (elapsed >= TotalDuration)
+        {
+            Destroy(gameObject);
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (topSprite != null) Destroy(topSprite);
+        if (bottomSprite != null) Destroy(bottomSprite);
+    }
 }

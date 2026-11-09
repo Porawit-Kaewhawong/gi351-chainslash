@@ -1078,6 +1078,14 @@ MonoBehaviour:
   healingGlowColor: {r: 0.25, g: 1, b: 0.55, a: 1}
   showFloatingHealSparks: 1
   healSparkScale: 1
+  enableDrawToHeal: 1
+  plusHealAmount: 20
+  heartHealAmount: 40
+  plusHealMeterCost: 15
+  heartHealMeterCost: 30
+  minHealGestureWorldSize: 0.7
+  plusGestureGlowColor: {r: 0.25, g: 1, b: 0.55, a: 1}
+  heartGestureGlowColor: {r: 1, g: 0.38, b: 0.68, a: 1}
   moveSpeed: 7.5
   jumpHeight: 15
   groundCheck: {fileID: 5666370576736019074}
@@ -1234,12 +1242,63 @@ MonoBehaviour:
   ropeSegments: 20
   waveFrequency: 12
   waveAmplitude: 0.6
+  grappleAttachedHandOffsetX: 0.32
+  grappleStartHeightMultiplier: 0.55
   grappleReleaseSFX: {fileID: 8300000, guid: ff39b2f4b1e29204da4be693bbe6b7ac, type: 3}
   grappleHitSFX: {fileID: 8300000, guid: af8269b9d5ed14b46bbf79d1c7b10fef, type: 3}
   grappleImpactPrefab: {fileID: 0}
   grappleTargetIndicatorPrefab: {fileID: 6395415726420353949, guid: 7934020378fda6e4ab229d810da02b6d, type: 3}
   grappleIndicatorOrbitRadius: 1.8
   maxSoundPlaying: 3
+  idleSprites:
+  - {fileID: 725756294040167046, guid: ccb956e6e4d61664f9332e9403934287, type: 3}
+  - {fileID: 2756775943549882264, guid: a7163b4fc4a570640a3ab9f5f1b06202, type: 3}
+  idleFPS: 4
+  walkSprites:
+  - {fileID: -7930355650201923474, guid: bce2590cbf2a1f741a4cd1b6bb9a6fdb, type: 3}
+  - {fileID: -1071083020363879801, guid: 71d87e24b5f070c49ad416c7f41808a8, type: 3}
+  - {fileID: 7474028193545773561, guid: 0972b9dadba4d9440bb63ad8234d9435, type: 3}
+  - {fileID: 5375739553775314487, guid: 22db0879b59202d48804437eed41beb3, type: 3}
+  walkFPS: 10
+  dashSprites:
+  - {fileID: 7110878671101974141, guid: 390f76e3cde8a97428bab04da0853f1f, type: 3}
+  dashFPS: 12
+  jumpSprites:
+  - {fileID: 4072598593252468119, guid: 2b3c06e37c7e09247abd764fa97b76e6, type: 3}
+  jumpFPS: 8
+  doubleJumpSprites:
+  - {fileID: 6137212783605098422, guid: 7ea257143f1acdb4d9f1cc71985898a4, type: 3}
+  doubleJumpFPS: 10
+  parrySprites:
+  - {fileID: -858288936149798443, guid: 542922a007353114c8899110d053fad2, type: 3}
+  parryFPS: 12
+  parryAnimDuration: 0.28
+  inModeSlashingStanceSprites:
+  - {fileID: 8038727968482881496, guid: cdb8f08a9de750048a2085b6a1f25e33, type: 3}
+  - {fileID: -7304333297647617550, guid: 5529c1de3aa97de40b2ebf774c99c996, type: 3}
+  inModeSlashingStanceFPS: 1
+  releaseGrapplingHookSprites:
+  - {fileID: 5312236382250205602, guid: bc906176c7be4b54d90ba1226a5066d3, type: 3}
+  releaseGrapplingHookFPS: 12
+  releaseGrappleAnimDuration: 0.25
+  deathSprites:
+  - {fileID: -298624492823214948, guid: b13d12a7e0fce8649ab15f48a06e2bf2, type: 3}
+  - {fileID: 4080093069886616910, guid: 9f3756846bcb66147b4932eb3c275112, type: 3}
+  deathFPS: 1
+  kickSprites:
+  - {fileID: -3204974255207185353, guid: 4fe073999a3fed14fa786d1f88c27334, type: 3}
+  kickFPS: 12
+  kickAnimDuration: 0.3
+  enableAfterimages: 1
+  afterimageInterval: 0.035
+  afterimageLifetime: 0.22
+  afterimageStartColor: {r: 0.22, g: 0.92, b: 1, a: 0.62}
+  afterimageEndColor: {r: 0.38, g: 0.12, b: 0.88, a: 0}
+  enableDynamicCameraZoom: 1
+  chainSlashZoomMultiplier: 0.91
+  cameraZoomSmoothSpeed: 9
+  enableMovementDustVFX: 1
+  enableTargetReticlesAndComboPopups: 1
 --- !u!114 &3093081682949568568
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1940,7 +1999,6 @@ GameObject:
   m_Component:
   - component: {fileID: 8782276379231935702}
   - component: {fileID: 1728595185902983670}
-  - component: {fileID: 4495285667035944841}
   m_Layer: 7
   m_Name: SpriteRenderer
   m_TagString: Untagged
@@ -1958,7 +2016,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
+  m_LocalScale: {x: 5, y: 5, z: 5}
   m_ConstrainProportionsScale: 1
   m_Children: []
   m_Father: {fileID: 696738621975650736}
@@ -2012,7 +2070,7 @@ SpriteRenderer:
   m_SortingLayer: 0
   m_SortingOrder: 5
   m_MaskInteraction: 0
-  m_Sprite: {fileID: -3104709011019773545, guid: 9e9d3360274481945b7b0df9d246dfa1, type: 3}
+  m_Sprite: {fileID: 725756294040167046, guid: ccb956e6e4d61664f9332e9403934287, type: 3}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
@@ -2022,25 +2080,3 @@ SpriteRenderer:
   m_SpriteTileMode: 0
   m_WasSpriteAssigned: 1
   m_SpriteSortPoint: 0
---- !u!95 &4495285667035944841
-Animator:
-  serializedVersion: 7
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 9155522140527923095}
-  m_Enabled: 1
-  m_Avatar: {fileID: 0}
-  m_Controller: {fileID: 9100000, guid: b1a5c3d1b4cd3ce4ea50933edb85b935, type: 2}
-  m_CullingMode: 0
-  m_UpdateMode: 0
-  m_ApplyRootMotion: 0
-  m_LinearVelocityBlending: 0
-  m_StabilizeFeet: 0
-  m_AnimatePhysics: 0
-  m_WarningMessage: 
-  m_HasTransformHierarchy: 1
-  m_AllowConstantClipSamplingOptimization: 1
-  m_KeepAnimatorStateOnDisable: 0
-  m_WriteDefaultValuesOnDisable: 0

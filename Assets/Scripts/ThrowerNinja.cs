@@ -69,6 +69,7 @@ public class ThrowerNinja : EnemyBase
         if (IsDead) return;
         IsDead = true;
 
+        TrySpawnDeathSlice(deathImpulse);
         SpawnDeathShurikens();
 
         if (GameManager.Instance != null)

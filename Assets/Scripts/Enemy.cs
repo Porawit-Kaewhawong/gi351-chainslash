@@ -68,6 +68,8 @@ public class Enemy : EnemyBase
         if (IsDead) return;
         IsDead = true;
 
+        TrySpawnDeathSlice(deathImpulse);
+
         if (GameManager.Instance != null)
         {
             GameManager.Instance.UnregisterEnemy(gameObject);

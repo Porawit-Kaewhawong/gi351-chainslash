@@ -278,6 +278,7 @@ public class ChainEnemy : EnemyBase
         {
             Destroy(insExplosionRadius);
         }
+        TrySpawnDeathSlice();
         Destroy(gameObject);
     }
 

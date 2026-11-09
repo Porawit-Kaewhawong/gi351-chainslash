@@ -393,6 +393,8 @@ public class ArmoredNinja : EnemyBase
         isDefeated = true;
         IsDead = true;
 
+        TrySpawnDeathSlice(impulse);
+
         if (GameManager.Instance != null)
         {
             GameManager.Instance.UnregisterEnemy(gameObject);

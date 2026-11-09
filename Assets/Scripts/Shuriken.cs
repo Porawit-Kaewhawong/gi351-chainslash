@@ -32,11 +32,14 @@ public class Shuriken : MonoBehaviour
     [SerializeField] private bool canDamageEnemies = false;
 
     [Header("Reflect Settings")]
+    [SerializeField] private GameObject parryVFXPrefab;
     [SerializeField] private AudioClip reflectSFX;
     [SerializeField] private Color reflectColor = new Color(0.2f, 0.95f, 1f, 1f);
     [SerializeField] private float reflectSpeedMultiplier = 1.5f;
     [SerializeField] private float reflectDamageMultiplier = 2.5f;
     [SerializeField] private float reflectRadius = 0.85f;
+    [SerializeField] private float parryMeterRefund = 15f;
+    [SerializeField] private float parryHitstopDuration = 0.045f;
 
     #endregion
 
@@ -64,6 +67,7 @@ public class Shuriken : MonoBehaviour
 
     private static Material sharedTrailMaterial;
     private static Sprite cachedSprite;
+    private static GameObject cachedParryVFXPrefab;
 
     #endregion
 
@@ -71,6 +75,8 @@ public class Shuriken : MonoBehaviour
 
     private void Awake()
     {
+        EnsureParryVFXPrefab();
+
         baseScale = transform.localScale;
         if (baseScale == Vector3.zero) baseScale = Vector3.one;
 
@@ -258,9 +264,12 @@ public class Shuriken : MonoBehaviour
         if (punchScaleCoroutine != null) StopCoroutine(punchScaleCoroutine);
         punchScaleCoroutine = StartCoroutine(PunchScaleRoutine());
 
-        // Camera micro-shake
+        // Player parry animation, meter refund, micro-hitstop & camera micro-shake
         if (PlayerController.Instance != null)
         {
+            PlayerController.Instance.OnParryTriggered();
+            PlayerController.Instance.RefundMeter(parryMeterRefund);
+            PlayerController.Instance.TriggerBriefHitstop(parryHitstopDuration);
             PlayerController.Instance.TriggerCameraShake(0.08f);
         }
     }
@@ -524,6 +533,230 @@ public class Shuriken : MonoBehaviour
         if (hitEffectPrefab != null)
         {
             Instantiate(hitEffectPrefab, transform.position, Quaternion.identity);
+        }
+
+        SpawnParryVFX();
+    }
+
+    private void EnsureParryVFXPrefab()
+    {
+        if (parryVFXPrefab != null)
+        {
+            cachedParryVFXPrefab = parryVFXPrefab;
+            return;
+        }
+
+        if (cachedParryVFXPrefab != null)
+        {
+            parryVFXPrefab = cachedParryVFXPrefab;
+            return;
+        }
+
+#if UNITY_EDITOR
+        cachedParryVFXPrefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/VFX/ParryVFX.prefab");
+        parryVFXPrefab = cachedParryVFXPrefab;
+#endif
+    }
+
+    private void SpawnParryVFX()
+    {
+        ParryImpactBurstVFX.Spawn(transform.position, moveDirection, reflectColor);
+
+        EnsureParryVFXPrefab();
+        if (parryVFXPrefab == null) return;
+
+        float angle = Mathf.Atan2(moveDirection.y, moveDirection.x) * Mathf.Rad2Deg;
+        Quaternion rot = Quaternion.Euler(0f, 0f, angle);
+        GameObject vfx = Instantiate(parryVFXPrefab, transform.position, rot);
+
+        SpriteRenderer vfxSr = vfx.GetComponent<SpriteRenderer>();
+        if (vfxSr != null && vfxSr.sortingOrder < 15)
+        {
+            vfxSr.sortingOrder = 15;
+        }
+
+        float clipDuration = 0.34f;
+        Animator anim = vfx.GetComponent<Animator>();
+        if (anim != null)
+        {
+            anim.updateMode = AnimatorUpdateMode.UnscaledTime;
+            if (anim.runtimeAnimatorController != null && anim.runtimeAnimatorController.animationClips.Length > 0)
+            {
+                AnimationClip clip = anim.runtimeAnimatorController.animationClips[0];
+                if (clip != null && clip.length > 0.05f)
+                {
+                    clipDuration = clip.length;
+                }
+            }
+        }
+
+        ParryVFXCleanup cleanup = vfx.AddComponent<ParryVFXCleanup>();
+        cleanup.Initialize(clipDuration);
+    }
+
+    private sealed class ParryImpactBurstVFX : MonoBehaviour
+    {
+        private SpriteRenderer ringSpriteRenderer;
+        private Transform[] sparkTransforms;
+        private SpriteRenderer[] sparkRenderers;
+        private Vector2[] sparkPositions;
+        private Vector2[] sparkVelocities;
+        private Color ringColor;
+        private float elapsed;
+        private const float TotalDuration = 0.24f;
+        private static Sprite[] cachedPixelRingFrames;
+
+        public static void Spawn(Vector3 position, Vector2 reflectDir, Color tint)
+        {
+            GameObject root = new GameObject("ParryImpactBurstVFX");
+            root.transform.position = EnemyBase.SnapToPixelGrid(position);
+            ParryImpactBurstVFX vfx = root.AddComponent<ParryImpactBurstVFX>();
+            vfx.Initialize(reflectDir, tint);
+        }
+
+        private static Sprite[] GetOrCreatePixelRingFrames()
+        {
+            if (cachedPixelRingFrames != null && cachedPixelRingFrames.Length == 4 && cachedPixelRingFrames[0] != null)
+            {
+                return cachedPixelRingFrames;
+            }
+
+            const int size = 24;
+            const float center = 11.5f;
+            float[] radii = { 3.2f, 6.2f, 8.8f, 10.6f };
+            cachedPixelRingFrames = new Sprite[4];
+            Color clear = new Color(0f, 0f, 0f, 0f);
+
+            for (int f = 0; f < 4; f++)
+            {
+                Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+                {
+                    filterMode = FilterMode.Point,
+                    wrapMode = TextureWrapMode.Clamp
+                };
+                Color[] px = new Color[size * size];
+                float r = radii[f];
+                float thickness = (f < 2) ? 1.15f : 0.75f;
+
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        float dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+                        bool onRing = Mathf.Abs(dist - r) <= thickness;
+                        // Frame 3 breaks into a dashed 8-bit pixel ring
+                        if (onRing && f == 3 && ((x + y) % 2 == 0))
+                        {
+                            onRing = false;
+                        }
+                        px[y * size + x] = onRing ? Color.white : clear;
+                    }
+                }
+
+                tex.SetPixels(px);
+                tex.Apply();
+                cachedPixelRingFrames[f] = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 16f);
+            }
+
+            return cachedPixelRingFrames;
+        }
+
+        private void Initialize(Vector2 reflectDir, Color tint)
+        {
+            ringColor = tint;
+            if (reflectDir.sqrMagnitude < 0.001f) reflectDir = Vector2.right;
+            else reflectDir.Normalize();
+
+            Sprite[] ringFrames = GetOrCreatePixelRingFrames();
+            ringSpriteRenderer = gameObject.AddComponent<SpriteRenderer>();
+            ringSpriteRenderer.sprite = ringFrames[0];
+            ringSpriteRenderer.sortingOrder = 16;
+            ringSpriteRenderer.color = ringColor;
+
+            int sparkCount = 8;
+            sparkTransforms = new Transform[sparkCount];
+            sparkRenderers = new SpriteRenderer[sparkCount];
+            sparkPositions = new Vector2[sparkCount];
+            sparkVelocities = new Vector2[sparkCount];
+
+            float baseAngle = Mathf.Atan2(reflectDir.y, reflectDir.x) * Mathf.Rad2Deg;
+
+            for (int i = 0; i < sparkCount; i++)
+            {
+                GameObject spark = new GameObject("PixelParrySpark");
+                spark.transform.SetParent(transform, false);
+                spark.transform.localScale = Vector3.one;
+                spark.transform.localRotation = Quaternion.identity;
+
+                float spread = Random.Range(-50f, 50f);
+                float rad = (baseAngle + spread) * Mathf.Deg2Rad;
+                Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
+                sparkVelocities[i] = dir * Random.Range(4.8f, 10.5f);
+
+                SpriteRenderer sr = spark.AddComponent<SpriteRenderer>();
+                sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 2 == 0) ? 2 : 1);
+                sr.sortingOrder = 17;
+                sr.color = (i % 2 == 0) ? new Color(0.85f, 1f, 1f, 1f) : new Color(1f, 0.92f, 0.35f, 1f);
+
+                sparkTransforms[i] = spark.transform;
+                sparkRenderers[i] = sr;
+            }
+        }
+
+        private void Update()
+        {
+            float dt = Time.unscaledDeltaTime > 0f ? Mathf.Min(Time.unscaledDeltaTime, 0.05f) : Time.deltaTime;
+            elapsed += dt;
+            float t = Mathf.Clamp01(elapsed / TotalDuration);
+
+            if (ringSpriteRenderer != null)
+            {
+                Sprite[] ringFrames = GetOrCreatePixelRingFrames();
+                int frameIdx = Mathf.Clamp(Mathf.FloorToInt(t * 4f), 0, 3);
+                ringSpriteRenderer.sprite = ringFrames[frameIdx];
+                Color rc = ringColor;
+                rc.a = 1f - EnemyBase.QuantizeStep(t, 4);
+                ringSpriteRenderer.color = rc;
+            }
+
+            float quantAlpha = 1f - EnemyBase.QuantizeStep(t, 4);
+            if (sparkTransforms != null)
+            {
+                for (int i = 0; i < sparkTransforms.Length; i++)
+                {
+                    if (sparkTransforms[i] == null) continue;
+                    sparkPositions[i] += sparkVelocities[i] * dt;
+                    sparkVelocities[i] *= (1f - 8f * dt);
+                    sparkTransforms[i].localPosition = EnemyBase.SnapToPixelGrid(sparkPositions[i]);
+                    Color sc = sparkRenderers[i].color;
+                    sc.a = quantAlpha;
+                    sparkRenderers[i].color = sc;
+                }
+            }
+
+            if (elapsed >= TotalDuration)
+            {
+                Destroy(gameObject);
+            }
+        }
+    }
+
+    private sealed class ParryVFXCleanup : MonoBehaviour
+    {
+        private float remainingUnscaledTime = 0.34f;
+
+        public void Initialize(float duration)
+        {
+            remainingUnscaledTime = Mathf.Max(0.05f, duration);
+        }
+
+        private void Update()
+        {
+            remainingUnscaledTime -= Time.unscaledDeltaTime;
+            if (remainingUnscaledTime <= 0f)
+            {
+                Destroy(gameObject);
+            }
         }
     }
 
