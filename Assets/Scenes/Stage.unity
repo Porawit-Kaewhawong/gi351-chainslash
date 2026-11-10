@@ -157,8 +157,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 236.86, y: -167.63918}
-  m_SizeDelta: {x: 500, y: 100}
+  m_AnchoredPosition: {x: 236.86, y: -178}
+  m_SizeDelta: {x: 500, y: 118}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &45936389
 MonoBehaviour:
@@ -269,6 +269,10 @@ MonoBehaviour:
   hoverScale: 1.12
   clickScale: 0.95
   animationSpeed: 12
+  enableSlashHoverFX: 1
+  hoverSlideX: 18
+  hoverPlateAlpha: 0.68
+  hoverSparkCount: 5
   hoverSFX: {fileID: 0}
   clickSFX: {fileID: 0}
 --- !u!1 &106578717
@@ -328,7 +332,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: -3104709011019773545, guid: 244465bc14d9a8c4fa1f6fec373c7b4f, type: 3}
+  m_Sprite: {fileID: -3104709011019773545, guid: 9e9d3360274481945b7b0df9d246dfa1, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -1101,11 +1105,28 @@ MonoBehaviour:
   transitionCanvasGroup: {fileID: 0}
   fadeDuration: 0.5
   zoomScaleOnEnter: 1.22
-  slashFlashColor: {r: 0.55, g: 0.95, b: 1, a: 1}
-  startTransitionSFX: {fileID: 8300000, guid: cb8cdd2c56f5c2440a92a295bf525259, type: 3}
+  slashFlashColor: {r: 1, g: 1, b: 1, a: 1}
+  startTransitionSFX: {fileID: 8300000, guid: fc4a585deb93e0f4cb03f1016ce2fd22, type: 3}
+  startPortalSFX: {fileID: 8300000, guid: cb8cdd2c56f5c2440a92a295bf525259, type: 3}
   parallaxBackground: {fileID: 2007456631}
   parallaxAmount: 20
   parallaxSmoothSpeed: 5
+  characterExtraParallax: 16
+  uiCounterParallax: 7
+  idleDriftScaleAmount: 0.032
+  idleDriftSpeed: 0.36
+  enableAmbientParticles: 1
+  ambientParticleCount: 30
+  enableMenuLeaves: 1
+  menuLeafCount: 14
+  menuWindDirection: {x: 1, y: -0.25}
+  menuLeafSprites:
+  - {fileID: -3590501240244372067, guid: 1386351c96dc2f64b8c0c1629420a3dc, type: 3}
+  - {fileID: 4083589104488576155, guid: 69014b74bb0c9aa4c91a8d0cfbe90fe7, type: 3}
+  - {fileID: -6002437608134968703, guid: 84692f65cbd0d664184ef3c020f95203, type: 3}
+  - {fileID: -2249655615577663154, guid: 6def882f90875e14a89b61c70522e1b0, type: 3}
+  enableCharacterAliveFX: 1
+  enableTitleSlashFX: 1
   backgroundSlideshow:
   - {fileID: -5409611486675845757, guid: 0a6e07dc224ac0f46bee29dce2992ae5, type: 3}
   - {fileID: -4622405347849216440, guid: c96c51fe142ce62449503bc5e99aa213, type: 3}
@@ -1120,7 +1141,7 @@ MonoBehaviour:
   bgmAudioSource: {fileID: 0}
   sfxAudioSource: {fileID: 0}
   buttonClickSFX: {fileID: 0}
-  buttonHoverSFX: {fileID: 0}
+  buttonHoverSFX: {fileID: 8300000, guid: 2467f5b27df4f6c4fb18b9adf6a63544, type: 3}
   sfxVolume: 1
 --- !u!1 &679749269
 GameObject:
@@ -1160,8 +1181,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 236.86, y: 82.36078}
-  m_SizeDelta: {x: 500, y: 100}
+  m_AnchoredPosition: {x: 236.86, y: 94}
+  m_SizeDelta: {x: 500, y: 118}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &679749271
 MonoBehaviour:
@@ -1272,6 +1293,10 @@ MonoBehaviour:
   hoverScale: 1.12
   clickScale: 0.95
   animationSpeed: 12
+  enableSlashHoverFX: 1
+  hoverSlideX: 18
+  hoverPlateAlpha: 0.68
+  hoverSparkCount: 5
   hoverSFX: {fileID: 0}
   clickSFX: {fileID: 0}
 --- !u!1 &867437594
@@ -1391,8 +1416,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 236.86, y: -42.639175}
-  m_SizeDelta: {x: 500, y: 100}
+  m_AnchoredPosition: {x: 236.86, y: -42}
+  m_SizeDelta: {x: 500, y: 118}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &957813566
 MonoBehaviour:
@@ -1503,6 +1528,10 @@ MonoBehaviour:
   hoverScale: 1.12
   clickScale: 0.95
   animationSpeed: 12
+  enableSlashHoverFX: 1
+  hoverSlideX: 18
+  hoverPlateAlpha: 0.68
+  hoverSparkCount: 5
   hoverSFX: {fileID: 0}
   clickSFX: {fileID: 0}
 --- !u!1 &1140254213

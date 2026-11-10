@@ -316,6 +316,15 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Spawns rotating lock-on crosshair reticles and ascending 1x/2x/3x! combo popups on targeted enemies.")]
     [SerializeField] private bool enableTargetReticlesAndComboPopups = true;
 
+    [Header("Environmental Atmosphere")]
+    [Tooltip("Spawns a 2-layer one-direction wind stream using Leaf.prefab that reacts to dashes and slashes.")]
+    [SerializeField] private bool enableLeafWindAtmosphere = true;
+    [SerializeField] private GameObject ambientLeafPrefab;
+    [Tooltip("Loops Ambient1-Ambient2 across outdoor Stages 0-2 and CaveAmbient3-5 across cave Stages 3-5.")]
+    [SerializeField] private bool enableStageAmbientAudio = true;
+    [Range(0f, 1f)] [SerializeField] private float stageAmbientVolume = 0.45f;
+    [SerializeField] private AudioClip[] stageAmbientClips = new AudioClip[6];
+
     #endregion
 
     #region Private State
@@ -382,6 +391,8 @@ public class PlayerController : MonoBehaviour
     private Transform grappleTargetTransform;
     private Collider2D cachedGrappleEnemyCollider;
     private Vector2 currentHookTip;
+    private bool isReelingToPortal;
+    private bool isPortalTransitioning;
     private GameObject insGrappleTargetIndicator;
     private GameObject grapplePixelRopeContainer;
     private readonly List<SpriteRenderer> grapplePixelLinkRenderers = new List<SpriteRenderer>();
@@ -452,10 +463,15 @@ public class PlayerController : MonoBehaviour
 
     public bool IsDead => isDead;
     public float CurrentHealth { get; private set; }
-    public bool IsImmune => Time.unscaledTime < immunityEndTime || isDashing;
+    public bool IsImmune => Time.unscaledTime < immunityEndTime || isDashing || isPortalTransitioning || isReelingToPortal;
     public bool IsInMode { get; private set; }
+    public bool IsFocusing => isFocusing;
     public bool IsGrappling { get; private set; }
+    public bool IsPortalTransitioning => isPortalTransitioning;
     public Vector2 InputValue => inputValue;
+    public AudioClip SlashSFX => postSlashSFX;
+    public AudioClip GrappleHitSFX => grappleHitSFX;
+    public SpriteRenderer MainSpriteRenderer => spriteRenderer;
 
     public void SetPendingSpawnReset(bool value) => pendingSpawnReset = value;
 
@@ -618,6 +634,7 @@ public class PlayerController : MonoBehaviour
         SetupHealthUI();
         SetupGrappleIndicator();
         SetupModeDimOverlay();
+        EnsureEnvironmentalAtmosphere();
     }
 
     private void Update()
@@ -626,6 +643,13 @@ public class PlayerController : MonoBehaviour
         {
             if (rb != null) rb.linearVelocity = Vector2.zero;
             UpdatePlayerSpriteAnimation(false);
+            return;
+        }
+
+        if (isPortalTransitioning)
+        {
+            UpdatePlayerSpriteAnimation(IsGrounded());
+            UpdateAfterimageGhosts();
             return;
         }
 
@@ -691,11 +715,16 @@ public class PlayerController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (isDead || isDashing) return;
+        if (isDead || isDashing || isPortalTransitioning) return;
 
         if (moveAction != null)
         {
             inputValue = moveAction.ReadValue<Vector2>();
+
+            if (isReelingToPortal)
+            {
+                return;
+            }
 
             if (IsGrappling && springJoint != null && springJoint.enabled)
             {
@@ -771,6 +800,21 @@ public class PlayerController : MonoBehaviour
         }
 
         ResetStateForLoadedScene();
+        EnsureEnvironmentalAtmosphere();
+    }
+
+    private void EnsureEnvironmentalAtmosphere()
+    {
+        if (enableLeafWindAtmosphere)
+        {
+            LeafWindAtmosphere.EnsureForScene(ambientLeafPrefab);
+        }
+
+        if (enableStageAmbientAudio)
+        {
+            UnityEngine.Audio.AudioMixerGroup mixer = audioSource != null ? audioSource.outputAudioMixerGroup : null;
+            StageAmbientAudio.EnsureAndSync(stageAmbientClips, stageAmbientVolume, mixer);
+        }
     }
 
     #endregion
@@ -784,6 +828,8 @@ public class PlayerController : MonoBehaviour
     public void ReviveAndReset()
     {
         isDead = false;
+        isPortalTransitioning = false;
+        isReelingToPortal = false;
         CurrentHealth = maxHealth;
         currentMeter = maxMeter;
         pendingSpawnReset = true;
@@ -1761,6 +1807,11 @@ public class PlayerController : MonoBehaviour
         float finalDashSpeed = Mathf.Max(dashingPower, currentHorizontalSpeed);
 
         rb.linearVelocity = new Vector2(dashDirection * finalDashSpeed, 0f);
+
+        if (enableLeafWindAtmosphere)
+        {
+            LeafWindAtmosphere.ApplyWindBurst(transform.position, new Vector2(dashDirection, 0.25f), 7.5f, 3.6f);
+        }
 
         if (trailRenderer != null) trailRenderer.emitting = true;
 
@@ -2771,6 +2822,12 @@ public class PlayerController : MonoBehaviour
 
         float drawTimer = 0f;
         List<Vector3> drawPoints = new List<Vector3>(pointCount);
+        Vector3 lastLeafBurstPos = origPoints[0];
+        if (enableLeafWindAtmosphere && pointCount >= 2)
+        {
+            Vector2 startDir = (origPoints[1] - origPoints[0]).normalized;
+            LeafWindAtmosphere.ApplyWindBurst(origPoints[0], startDir, 8.5f, 3.4f);
+        }
 
         while (drawTimer < slashDrawDuration)
         {
@@ -2797,6 +2854,13 @@ public class PlayerController : MonoBehaviour
                     float segProgress = segLen > 0f ? (currentDrawDist - accumulated) / segLen : 0f;
                     Vector3 endPt = Vector3.Lerp(origPoints[i], origPoints[i + 1], segProgress);
                     drawPoints.Add(endPt);
+
+                    if (enableLeafWindAtmosphere && (endPt - lastLeafBurstPos).sqrMagnitude >= 2.25f)
+                    {
+                        Vector2 segDir = (origPoints[i + 1] - origPoints[i]).normalized;
+                        LeafWindAtmosphere.ApplyWindBurst(endPt, segDir, 8.5f, 3.4f);
+                        lastLeafBurstPos = endPt;
+                    }
 
                     if (slashPathParticlePrefab != null && Random.value > 0.5f)
                     {
@@ -3181,12 +3245,14 @@ public class PlayerController : MonoBehaviour
             spriteRenderer.flipX = dir.x < 0f;
         }
 
-        RaycastHit2D rayHit = FindGrappleHit(fireOrigin, dir, out EnemyBase hitEnemy);
+        RaycastHit2D rayHit = FindGrappleHit(fireOrigin, dir, out EnemyBase hitEnemy, out PortalNextLevel hitPortal);
         if (hitEnemy != null)
         {
             cachedGrappleEnemyCollider = hitEnemy.GetComponent<Collider2D>();
         }
-        grappleAnchorPoint = rayHit.collider != null ? rayHit.point : fireOrigin + (dir * maxGrappleRange);
+        grappleAnchorPoint = hitPortal != null
+            ? hitPortal.GetGrappleAnchorPosition()
+            : (rayHit.collider != null ? rayHit.point : fireOrigin + (dir * maxGrappleRange));
 
         grappleLine.positionCount = ropeSegments;
         grappleLine.enabled = false;
@@ -3206,7 +3272,11 @@ public class PlayerController : MonoBehaviour
         {
             timer += Time.deltaTime;
             float progress = Mathf.Clamp01(timer / duration);
-            if (hitEnemy != null && !hitEnemy.IsDead)
+            if (hitPortal != null)
+            {
+                grappleAnchorPoint = hitPortal.GetGrappleAnchorPosition();
+            }
+            else if (hitEnemy != null && !hitEnemy.IsDead)
             {
                 grappleAnchorPoint = GetEnemyGrapplePoint(hitEnemy);
             }
@@ -3224,6 +3294,57 @@ public class PlayerController : MonoBehaviour
             IsGrappling = true;
             PlaySFX(grappleHitSFX);
 
+            if (grappleImpactPrefab != null)
+            {
+                Instantiate(grappleImpactPrefab, grappleAnchorPoint, Quaternion.identity);
+            }
+
+            if (hitPortal != null)
+            {
+                if (!hitPortal.CanInteractWithPortal)
+                {
+                    DetachGrappling();
+                    yield break;
+                }
+
+                hitPortal.OnGrappleLatched();
+                isReelingToPortal = true;
+                doubleJump = true;
+                canDash = true;
+                if (rb != null) rb.gravityScale = 0f;
+
+                const float maxPortalReelDuration = 0.48f;
+                const float arriveRadiusSqr = 1.25f * 1.25f;
+                float reelSpeed = Mathf.Max(grappleSpeed * 0.9f, 28f);
+                float portalReelTimer = 0f;
+
+                while (IsGrappling && hitPortal != null && hitPortal.CanInteractWithPortal)
+                {
+                    portalReelTimer += Time.deltaTime;
+                    Vector2 anchor = hitPortal.GetGrappleAnchorPosition();
+                    Vector2 toPortal = anchor - (Vector2)transform.position;
+
+                    if (toPortal.sqrMagnitude <= arriveRadiusSqr || portalReelTimer >= maxPortalReelDuration)
+                    {
+                        Vector2 arrivalDir = toPortal.sqrMagnitude > 0.001f ? toPortal.normalized : dir;
+                        DetachGrappling();
+                        hitPortal.TriggerFromGrapple(this, arrivalDir);
+                        yield break;
+                    }
+
+                    if (rb != null)
+                    {
+                        rb.linearVelocity = toPortal.normalized * reelSpeed;
+                    }
+
+                    RenderProceduralRope(GetGrappleRopeStartPosition(true), anchor, 1f, false);
+                    yield return null;
+                }
+
+                DetachGrappling();
+                yield break;
+            }
+
             if (hitEnemy == null)
             {
                 hitEnemy = rayHit.collider.GetComponentInParent<EnemyBase>();
@@ -3231,11 +3352,6 @@ public class PlayerController : MonoBehaviour
                 {
                     cachedGrappleEnemyCollider = hitEnemy.GetComponent<Collider2D>();
                 }
-            }
-
-            if (grappleImpactPrefab != null)
-            {
-                Instantiate(grappleImpactPrefab, grappleAnchorPoint, Quaternion.identity);
             }
 
             if (hitEnemy != null && !hitEnemy.IsHeavyEnemy)
@@ -3354,26 +3470,44 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Finds the closest valid grapple target along the aim direction, detecting both grappleLayer walls and any EnemyBase colliders.
+    /// Finds the closest valid grapple target along the aim direction, detecting grappleLayer walls, EnemyBase colliders, and PortalNextLevel rifts.
     /// </summary>
-    private RaycastHit2D FindGrappleHit(Vector2 origin, Vector2 dir, out EnemyBase hitEnemy)
+    private RaycastHit2D FindGrappleHit(Vector2 origin, Vector2 dir, out EnemyBase hitEnemy, out PortalNextLevel hitPortal)
     {
         hitEnemy = null;
+        hitPortal = null;
 
         // 1. Check environment on grappleLayer
         RaycastHit2D wallHit = Physics2D.Raycast(origin, dir, maxGrappleRange, grappleLayer);
         float maxCheckDist = wallHit.collider != null ? wallHit.distance : maxGrappleRange;
 
-        // 2. Check for enemies along the ray
-        RaycastHit2D[] allHits = Physics2D.CircleCastAll(origin, 0.25f, dir, maxCheckDist);
+        // 2. Check for enemies & portals along the ray
+        RaycastHit2D[] allHits = Physics2D.CircleCastAll(origin, 0.3f, dir, maxCheckDist);
         float closestEnemyDist = float.MaxValue;
+        float closestPortalDist = float.MaxValue;
         RaycastHit2D bestEnemyHit = default;
+        RaycastHit2D bestPortalHit = default;
 
         for (int i = 0; i < allHits.Length; i++)
         {
             RaycastHit2D candidate = allHits[i];
-            if (candidate.collider == null || candidate.collider.isTrigger) continue;
+            if (candidate.collider == null) continue;
             if (candidate.collider.gameObject == gameObject || candidate.collider.transform.IsChildOf(transform)) continue;
+
+            PortalNextLevel portal = candidate.collider.GetComponentInParent<PortalNextLevel>();
+            if (portal != null && portal.CanInteractWithPortal)
+            {
+                Vector2 toPortal = (portal.GetGrappleAnchorPosition() - origin).normalized;
+                if (Vector2.Dot(toPortal, dir) >= 0.25f && candidate.distance < closestPortalDist)
+                {
+                    closestPortalDist = candidate.distance;
+                    bestPortalHit = candidate;
+                    hitPortal = portal;
+                }
+                continue;
+            }
+
+            if (candidate.collider.isTrigger) continue;
 
             EnemyBase enemy = candidate.collider.GetComponentInParent<EnemyBase>();
             if (enemy != null && !enemy.IsDead)
@@ -3390,6 +3524,13 @@ public class PlayerController : MonoBehaviour
             }
         }
 
+        if (hitPortal != null && (hitEnemy == null || closestPortalDist <= closestEnemyDist))
+        {
+            hitEnemy = null;
+            return bestPortalHit;
+        }
+
+        hitPortal = null;
         if (hitEnemy != null)
         {
             return bestEnemyHit;
@@ -3796,6 +3937,14 @@ public class PlayerController : MonoBehaviour
     {
         IsGrappling = false;
         isThrowingHook = false;
+        if (isReelingToPortal)
+        {
+            isReelingToPortal = false;
+            if (rb != null && defaultGravityScale > 0f)
+            {
+                rb.gravityScale = defaultGravityScale;
+            }
+        }
         grappleTargetTransform = null;
         cachedGrappleEnemyCollider = null;
         if (grappleLine != null) grappleLine.enabled = false;
@@ -3804,6 +3953,108 @@ public class PlayerController : MonoBehaviour
         {
             springJoint.anchor = Vector2.zero;
             springJoint.enabled = false;
+        }
+    }
+
+    public void SetPortalTransitionState(bool active)
+    {
+        isPortalTransitioning = active;
+        if (active)
+        {
+            isFocusing = false;
+            IsInMode = false;
+            ClearTargetReticles();
+            DetachGrappling();
+            FadeModeDimOverlay(0f);
+            if (insMouseTrail != null)
+            {
+                Destroy(insMouseTrail);
+                insMouseTrail = null;
+            }
+            if (insLineRendererObj != null)
+            {
+                Destroy(insLineRendererObj);
+                insLineRendererObj = null;
+                insLineRendererCom = null;
+                insLineRendererManager = null;
+            }
+        }
+    }
+
+    public void FaceWorldDirection(float dirX)
+    {
+        if (spriteRenderer != null && Mathf.Abs(dirX) > 0.01f)
+        {
+            spriteRenderer.flipX = dirX < 0f;
+        }
+    }
+
+    /// <summary>
+    /// Plays the stage-entry rift emergence burst with white pixel afterimages and landing dust puffs.
+    /// </summary>
+    public void TriggerStageArrivalBurst(int preferredFacingDir = 1, bool playSfx = false)
+    {
+        if (isDead) return;
+        StartCoroutine(StageArrivalBurstRoutine(preferredFacingDir, playSfx));
+    }
+
+    private IEnumerator StageArrivalBurstRoutine(int preferredFacingDir, bool playSfx)
+    {
+        int facing = preferredFacingDir >= 0 ? 1 : -1;
+        FaceWorldDirection(facing);
+
+        if (playSfx)
+        {
+            PlaySFX(dashSFX != null ? dashSFX : postSlashSFX);
+        }
+        SetPlayerAnimState(PlayerAnimState.Dash, true);
+        PixelMovementDustVFX.SpawnLandingPuffs(GetFeetPosition(), 6, Color.white);
+        if (enableLeafWindAtmosphere)
+        {
+            LeafWindAtmosphere.EnsureForScene(ambientLeafPrefab);
+            LeafWindAtmosphere.ApplyWindBurst(transform.position, new Vector2(facing, 0.2f), 8f, 4f);
+        }
+
+        bool canSlideForward = rb != null
+            && Physics2D.Raycast(transform.position + Vector3.right * (facing * 0.9f), Vector2.down, 3.2f, groundLayer).collider != null
+            && Physics2D.Raycast(transform.position, Vector2.right * facing, 1.1f, groundLayer).collider == null;
+
+        if (canSlideForward)
+        {
+            isDashing = true;
+            float savedGravity = rb.gravityScale;
+            rb.gravityScale = 0f;
+            rb.linearVelocity = new Vector2(facing * 7.8f, 0f);
+
+            const float burstDuration = 0.13f;
+            float elapsed = 0f;
+            float ghostTimer = 0f;
+            while (elapsed < burstDuration && !isDead)
+            {
+                elapsed += Time.deltaTime;
+                ghostTimer -= Time.deltaTime;
+                if (ghostTimer <= 0f && spriteRenderer != null)
+                {
+                    ghostTimer = 0.03f;
+                    PlayerAfterimageGhostVFX.Spawn(spriteRenderer, afterimageLifetime, Color.white, afterimageEndColor);
+                }
+                yield return null;
+            }
+
+            if (rb != null)
+            {
+                rb.gravityScale = savedGravity > 0f ? savedGravity : defaultGravityScale;
+                rb.linearVelocity = new Vector2(facing * 1.2f, rb.linearVelocityY);
+            }
+            isDashing = false;
+        }
+        else if (spriteRenderer != null)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                PlayerAfterimageGhostVFX.Spawn(spriteRenderer, afterimageLifetime, Color.white, afterimageEndColor);
+                yield return new WaitForSeconds(0.035f);
+            }
         }
     }
 

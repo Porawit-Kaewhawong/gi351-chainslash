@@ -1252,7 +1252,6 @@ MonoBehaviour:
   maxSoundPlaying: 3
   idleSprites:
   - {fileID: 725756294040167046, guid: ccb956e6e4d61664f9332e9403934287, type: 3}
-  - {fileID: 2756775943549882264, guid: a7163b4fc4a570640a3ab9f5f1b06202, type: 3}
   idleFPS: 4
   walkSprites:
   - {fileID: -7930355650201923474, guid: bce2590cbf2a1f741a4cd1b6bb9a6fdb, type: 3}
@@ -1299,6 +1298,17 @@ MonoBehaviour:
   cameraZoomSmoothSpeed: 9
   enableMovementDustVFX: 1
   enableTargetReticlesAndComboPopups: 1
+  enableLeafWindAtmosphere: 1
+  ambientLeafPrefab: {fileID: 3289582796770079495, guid: 1de2215a1c57df242b149959bfcd9d39, type: 3}
+  enableStageAmbientAudio: 1
+  stageAmbientVolume: 0.45
+  stageAmbientClips:
+  - {fileID: 8300000, guid: 2d8962ae63946194ea9522cf5200c326, type: 3}
+  - {fileID: 8300000, guid: 2d8962ae63946194ea9522cf5200c326, type: 3}
+  - {fileID: 8300000, guid: b64bb86d2b269ba4bba01b236857a225, type: 3}
+  - {fileID: 8300000, guid: 350c8839b922404f99c179b0f24fbd38, type: 3}
+  - {fileID: 8300000, guid: 42679f6714d045ceb6421c7bae7f426b, type: 3}
+  - {fileID: 8300000, guid: 1609b71433344a06957c14c51f06710d, type: 3}
 --- !u!114 &3093081682949568568
 MonoBehaviour:
   m_ObjectHideFlags: 0

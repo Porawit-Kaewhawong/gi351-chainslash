@@ -33,7 +33,7 @@ public class GameManager : MonoBehaviour
 
     public enum SpawnMode
     {
-        PerWaveCounts,   // Spawns specified spawnCount of each prefab every wave cycle
+        PerWaveCounts,   // Spawns specified spawnCount of each prefab in shuffled random order every wave cycle
         WeightedRandom   // Selects prefabs randomly based on their relative spawnWeight
     }
 
@@ -173,13 +173,13 @@ public class GameManager : MonoBehaviour
 
             if (player != null)
             {
-                if (spawnMode == SpawnMode.PerWaveCounts)
+                List<GameObject> waveQueue = spawnMode == SpawnMode.PerWaveCounts
+                    ? BuildShuffledWaveCountQueue()
+                    : (spawnMode == SpawnMode.WeightedRandom ? BuildWeightedRandomQueue() : null);
+
+                if (waveQueue != null && waveQueue.Count > 0)
                 {
-                    yield return StartCoroutine(SpawnByWaveCounts());
-                }
-                else if (spawnMode == SpawnMode.WeightedRandom)
-                {
-                    yield return StartCoroutine(SpawnByWeightedRandom());
+                    yield return StartCoroutine(SpawnEnemyQueueRoutine(waveQueue));
                 }
             }
 
@@ -293,40 +293,35 @@ public class GameManager : MonoBehaviour
         Instantiate(portalPrefab, spawnPos, Quaternion.identity);
     }
 
-    // Mode 1: Spawns specific quantities per enemy type per wave
-    private IEnumerator SpawnByWaveCounts()
+    /// <summary>
+    /// Collects each configured prefab's wave quota and Fisher-Yates shuffles the wave roster
+    /// so enemy types interleave unpredictably instead of finishing one type before the next.
+    /// </summary>
+    private List<GameObject> BuildShuffledWaveCountQueue()
     {
+        List<GameObject> queue = new List<GameObject>();
         int waveBonus = Mathf.Max(0, (CurrentWave - 1) * bonusEnemiesPerWave);
 
         for (int c = 0; c < enemyConfigs.Count; c++)
         {
             EnemySpawnConfig config = enemyConfigs[c];
-            if (config.prefab == null) continue;
+            if (config.prefab == null || config.spawnCount <= 0) continue;
 
-            int countToSpawn = config.spawnCount + (config.spawnCount > 0 ? waveBonus : 0);
-
+            int countToSpawn = config.spawnCount + waveBonus;
             for (int i = 0; i < countToSpawn; i++)
             {
-                // Wait if maxActiveEnemies cap is currently reached so the wave still spawns its full quota
-                while (activeEnemies.Count >= maxActiveEnemies)
-                {
-                    PruneNullEnemies();
-                    yield return null;
-                }
-
-                if (player != null && TryGetValidSpawnPoint(out Vector2 spawnPoint, config.prefab))
-                {
-                    GameObject spawnedEnemy = Instantiate(config.prefab, spawnPoint, Quaternion.identity);
-                    activeEnemies.Add(spawnedEnemy);
-                }
-
-                yield return waitForSpawnInterval;
+                queue.Add(config.prefab);
             }
         }
+
+        ShuffleList(queue);
+        return queue;
     }
 
-    // Mode 2: Randomly picks prefabs according to relative weight
-    private IEnumerator SpawnByWeightedRandom()
+    /// <summary>
+    /// Selects wave enemies randomly according to their relative spawnWeight.
+    /// </summary>
+    private List<GameObject> BuildWeightedRandomQueue()
     {
         int totalWeight = 0;
         for (int i = 0; i < enemyConfigs.Count; i++)
@@ -338,26 +333,55 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        if (totalWeight <= 0) yield break;
+        if (totalWeight <= 0) return null;
 
         int totalToSpawn = enemiesPerWave + Mathf.Max(0, (CurrentWave - 1) * bonusEnemiesPerWave);
+        List<GameObject> queue = new List<GameObject>(Mathf.Max(0, totalToSpawn));
 
         for (int i = 0; i < totalToSpawn; i++)
         {
+            GameObject selectedPrefab = GetRandomPrefabByWeight(totalWeight);
+            if (selectedPrefab != null)
+            {
+                queue.Add(selectedPrefab);
+            }
+        }
+
+        return queue;
+    }
+
+    private IEnumerator SpawnEnemyQueueRoutine(IReadOnlyList<GameObject> spawnQueue)
+    {
+        for (int i = 0; i < spawnQueue.Count; i++)
+        {
+            GameObject prefabToSpawn = spawnQueue[i];
+            if (prefabToSpawn == null) continue;
+
+            // Wait if maxActiveEnemies cap is currently reached so the wave still spawns its full quota
             while (activeEnemies.Count >= maxActiveEnemies)
             {
                 PruneNullEnemies();
                 yield return null;
             }
 
-            GameObject selectedPrefab = GetRandomPrefabByWeight(totalWeight);
-            if (player != null && selectedPrefab != null && TryGetValidSpawnPoint(out Vector2 spawnPoint, selectedPrefab))
+            if (player != null && TryGetValidSpawnPoint(out Vector2 spawnPoint, prefabToSpawn))
             {
-                GameObject spawnedEnemy = Instantiate(selectedPrefab, spawnPoint, Quaternion.identity);
+                GameObject spawnedEnemy = Instantiate(prefabToSpawn, spawnPoint, Quaternion.identity);
                 activeEnemies.Add(spawnedEnemy);
             }
 
             yield return waitForSpawnInterval;
+        }
+    }
+
+    private static void ShuffleList<T>(IList<T> list)
+    {
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int swapIndex = Random.Range(0, i + 1);
+            T temp = list[i];
+            list[i] = list[swapIndex];
+            list[swapIndex] = temp;
         }
     }
 

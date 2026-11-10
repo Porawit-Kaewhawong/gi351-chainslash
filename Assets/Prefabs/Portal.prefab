@@ -183,17 +183,23 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d743d0890d080d84cbf2717b4e428a9a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PortalNextLevel
-  teleportDelay: 0.1
+  teleportDelay: 0.03
+  slashCutSFX: {fileID: 8300000, guid: fc4a585deb93e0f4cb03f1016ce2fd22, type: 3}
   portalEnterSFX: {fileID: 8300000, guid: cb8cdd2c56f5c2440a92a295bf525259, type: 3}
+  chainSnapSFX: {fileID: 8300000, guid: af8269b9d5ed14b46bbf79d1c7b10fef, type: 3}
   portalSFXVolume: 1
+  useMonochromeSpaceTear: 1
   animateSpawnScale: 1
-  spawnAnimationDuration: 0.35
+  spawnAnimationDuration: 0.28
   animateIdlePulse: 1
-  idlePulseSpeed: 3
-  idlePulseAmount: 0.06
-  zoomInDuration: 0.85
-  zoomInOrthoSize: 1.8
-  fadeInStartNormalizedTime: 0.2
-  blackScreenHoldDuration: 0.1
-  fadeOutDuration: 0.6
-  portalEnterExpandMultiplier: 1.35
+  idlePulseSpeed: 3.5
+  idlePulseAmount: 0.045
+  targetJitterStrength: 0.04
+  virtualPixelHeight: 180
+  zoomPunchDuration: 0.22
+  zoomInOrthoSize: 2.6
+  katanaCutDuration: 0.09
+  screenSplitDuration: 0.3
+  blackScreenHoldDuration: 0.06
+  nextStageFadeOutDuration: 0.24
+  modeExitGracePeriod: 0.35
