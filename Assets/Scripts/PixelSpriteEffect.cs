@@ -96,10 +96,19 @@ public class PixelSpriteEffect : MonoBehaviour
         {
             if (sharedPixelMaterial == null)
             {
-                Shader shader = Shader.Find("Custom/Pixel2D_Sprite");
-                if (shader != null)
+                // Load serialized Resources material first so WebGL builds never lose it to shader stripping
+                Material resourceMat = Resources.Load<Material>("Pixel2D_Sprite_Shared");
+                if (resourceMat != null && resourceMat.shader != null && resourceMat.shader.isSupported)
                 {
-                    sharedPixelMaterial = new Material(shader) { name = "Pixel2D_Sprite_Shared" };
+                    sharedPixelMaterial = resourceMat;
+                }
+                else
+                {
+                    Shader shader = Shader.Find("Custom/Pixel2D_Sprite");
+                    if (shader != null)
+                    {
+                        sharedPixelMaterial = new Material(shader) { name = "Pixel2D_Sprite_Shared" };
+                    }
                 }
             }
             return sharedPixelMaterial;
@@ -235,7 +244,9 @@ public class PixelSpriteEffect : MonoBehaviour
                 spriteRenderer.sharedMaterial = pixelMaterial;
             }
         }
-        else if (spriteRenderer.sharedMaterial == null || !spriteRenderer.sharedMaterial.shader.name.Contains("Pixel2D_Sprite"))
+        else if (spriteRenderer.sharedMaterial == null
+            || spriteRenderer.sharedMaterial.shader == null
+            || !spriteRenderer.sharedMaterial.shader.name.Contains("Pixel2D_Sprite"))
         {
             Material shared = SharedPixelMaterial;
             if (shared != null)

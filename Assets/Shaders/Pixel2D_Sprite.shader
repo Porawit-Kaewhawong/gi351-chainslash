@@ -49,6 +49,7 @@ Shader "Custom/Pixel2D_Sprite"
         {
             "Queue" = "Transparent"
             "RenderType" = "Transparent"
+            "CanUseSpriteAtlas" = "True"
             "RenderPipeline" = "UniversalPipeline"
         }
 
@@ -108,13 +109,13 @@ Shader "Custom/Pixel2D_Sprite"
 
             Varyings PixelSpriteVertex(Attributes input)
             {
-                UNITY_SKINNED_VERTEX_COMPUTE(input);
-                SetUpSpriteInstanceProperties();
-                input.positionOS = UnityFlipSprite(input.positionOS, unity_SpriteProps.xy);
-
                 Varyings output = (Varyings)0;
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
+
+                UNITY_SKINNED_VERTEX_COMPUTE(input);
+                SetUpSpriteInstanceProperties();
+                input.positionOS = UnityFlipSprite(input.positionOS, unity_SpriteProps.xy);
 
                 float3 worldPos = TransformObjectToWorld(input.positionOS);
                 if (_SnapToPixelGrid > 0.5 && _PixelsPerUnit > 0.0)
@@ -191,18 +192,16 @@ Shader "Custom/Pixel2D_Sprite"
                     }
                 }
 
-                // 3. Retro Dither Dissolve
+                // 3. Retro Dither Dissolve (WebGL-safe float math: avoids uint2/modulo/const array indexing)
                 if (_EnableDither > 0.5 && _DitherFade > 0.001)
                 {
-                    static const float bayer4x4[16] = {
-                         0.0 / 16.0,  8.0 / 16.0,  2.0 / 16.0, 10.0 / 16.0,
-                        12.0 / 16.0,  4.0 / 16.0, 14.0 / 16.0,  6.0 / 16.0,
-                         3.0 / 16.0, 11.0 / 16.0,  1.0 / 16.0,  9.0 / 16.0,
-                        15.0 / 16.0,  7.0 / 16.0, 13.0 / 16.0,  5.0 / 16.0
-                    };
-
-                    uint2 screenPos = uint2(input.positionCS.xy) % 4;
-                    float threshold = bayer4x4[screenPos.y * 4 + screenPos.x];
+                    float2 grid4 = floor(input.positionCS.xy);
+                    float2 p4 = grid4 - 4.0 * floor(grid4 * 0.25);
+                    float2 b1 = floor(p4 * 0.5);
+                    float2 b0 = p4 - 2.0 * b1;
+                    float m0 = 2.0 * b0.x + b0.y * (3.0 - 4.0 * b0.x);
+                    float m1 = 2.0 * b1.x + b1.y * (3.0 - 4.0 * b1.x);
+                    float threshold = (4.0 * m0 + m1) * (1.0 / 16.0);
                     if (_DitherFade > threshold)
                     {
                         discard;
