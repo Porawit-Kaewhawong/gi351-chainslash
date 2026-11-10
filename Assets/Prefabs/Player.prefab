@@ -1074,7 +1074,7 @@ MonoBehaviour:
   healIndicatorObject: {fileID: 0}
   showBadgeOnBar: 1
   healBadgeScale: 1
-  healStartSFX: {fileID: 0}
+  healStartSFX: {fileID: 8300000, guid: 4a8d7cf8aa49275469ee9327a842bbd1, type: 3}
   healingGlowColor: {r: 0.25, g: 1, b: 0.55, a: 1}
   showFloatingHealSparks: 1
   healSparkScale: 1
@@ -1326,7 +1326,7 @@ MonoBehaviour:
   showPlayerSpotlight: 1
   spotlightColor: {r: 0.85, g: 0.15, b: 0.25, a: 0.42}
   transitionDuration: 0.55
-  slashFlashColor: {r: 0.55, g: 0.95, b: 1, a: 1}
+  slashFlashColor: {r: 1, g: 1, b: 1, a: 1}
   startTransitionSFX: {fileID: 0}
   gameOverCueSFX: {fileID: 0}
   buttonClickSFX: {fileID: 0}
