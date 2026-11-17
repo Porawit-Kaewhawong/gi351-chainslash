@@ -1560,89 +1560,143 @@ public class PlayerController : MonoBehaviour
         return walkSFXList[index];
     }
 
+    private static readonly RaycastHit2D[] stepRaycastBuffer = new RaycastHit2D[8];
+    private static readonly Collider2D[] stepOverlapBuffer = new Collider2D[8];
+
+    private bool TryRaycastSolidGround(Vector2 origin, Vector2 direction, float distance, out RaycastHit2D closestHit)
+    {
+        closestHit = default;
+        ContactFilter2D filter = new ContactFilter2D
+        {
+            useLayerMask = true,
+            layerMask = groundLayer,
+            useTriggers = false
+        };
+
+        int hitCount = Physics2D.Raycast(origin, direction, filter, stepRaycastBuffer, distance);
+        float bestDist = float.MaxValue;
+        bool found = false;
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            RaycastHit2D hit = stepRaycastBuffer[i];
+            Collider2D col = hit.collider;
+            if (col == null || col == playerCollider || col.isTrigger) continue;
+            if (Physics2D.GetIgnoreCollision(playerCollider, col)) continue;
+
+            if (hit.distance < bestDist)
+            {
+                bestDist = hit.distance;
+                closestHit = hit;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private bool HasBodyClearanceAt(Vector2 center, Vector2 size)
+    {
+        ContactFilter2D filter = new ContactFilter2D
+        {
+            useLayerMask = true,
+            layerMask = groundLayer,
+            useTriggers = false
+        };
+
+        int hitCount = Physics2D.OverlapBox(center, size, 0f, filter, stepOverlapBuffer);
+        for (int i = 0; i < hitCount; i++)
+        {
+            Collider2D col = stepOverlapBuffer[i];
+            if (col == null || col == playerCollider || col.isTrigger) continue;
+            if (col.usedByEffector) continue;
+            if (Physics2D.GetIgnoreCollision(playerCollider, col)) continue;
+            return false;
+        }
+
+        return true;
+    }
+
     /// <summary>
-    /// Smoothly steps up low obstacles, curbs, and stairs without requiring the player to jump.
-    /// Also handles downward stair snapping when descending stairs so running remains continuous.
+    /// Smoothly steps up low obstacles, tiny ledges, curbs, stairs, and slopes without requiring the player to jump.
+    /// Also handles downward stair/slope snapping when descending so running remains continuous.
     /// </summary>
     private void HandleStepClimb(float moveInputX)
     {
         if (playerCollider == null || rb == null) return;
         if (Mathf.Abs(moveInputX) < 0.05f) return;
-        if (rb.linearVelocityY > 0.25f) return; // Don't step-climb while actively jumping upward
+
+        bool grounded = IsGrounded();
+        if (!grounded && rb.linearVelocityY > 0.25f) return; // Don't step-climb while actively jumping upward in mid-air
 
         Bounds bounds = playerCollider.bounds;
         float halfWidth = bounds.extents.x;
         float currentFootY = bounds.min.y;
         float dirX = Mathf.Sign(moveInputX);
+        float frontX = bounds.center.x + dirX * halfWidth;
 
-        // 1. Check for a low vertical step / obstacle at foot level
-        float checkDist = halfWidth + stepCheckDistance;
-        Vector2 footOrigin = new Vector2(bounds.center.x, currentFootY + 0.05f);
-        RaycastHit2D footHit = Physics2D.Raycast(footOrigin, Vector2.right * dirX, checkDist, groundLayer);
-
-        if (footHit.collider != null && !footHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(playerCollider, footHit.collider))
+        // Establish baseline floor height under the player so flat floors with Box2D contact sink don't trigger micro-lifts
+        float referenceFootY = currentFootY;
+        if (TryRaycastSolidGround(new Vector2(bounds.center.x, currentFootY + 0.08f), Vector2.down, 0.16f, out RaycastHit2D underHit))
         {
-            // Only climb if this is a vertical riser / step (not already a flat surface)
-            if (footHit.normal.y < 0.7f)
+            if (underHit.distance > 0.001f && underHit.normal.y >= 0.5f)
             {
-                float distFromFront = Mathf.Abs(footHit.point.x - (bounds.center.x + dirX * halfWidth));
-                if (distFromFront <= 0.14f)
+                referenceFootY = Mathf.Max(currentFootY, underHit.point.y);
+            }
+        }
+
+        // Probe downward just ahead of the player's leading edge (catches even 0.005f-tall seams/lips, stairs, and slopes)
+        float probeTopY = currentFootY + maxStepHeight + 0.05f;
+        float probeDist = maxStepHeight + 0.08f;
+        float farOffset = Mathf.Max(0.08f, stepCheckDistance * 0.6f);
+
+        for (int p = 0; p < 2; p++)
+        {
+            float offset = (p == 0) ? 0.02f : farOffset;
+            Vector2 probeOrigin = new Vector2(frontX + dirX * offset, probeTopY);
+
+            if (!TryRaycastSolidGround(probeOrigin, Vector2.down, probeDist, out RaycastHit2D surfaceHit))
+            {
+                continue;
+            }
+
+            // If distance is ~0, the probe started inside a wall taller than maxStepHeight
+            if (surfaceHit.distance <= 0.001f) continue;
+            if (surfaceHit.normal.y < 0.5f) continue; // Too steep to be a walkable step/slope
+
+            float stepHeight = surfaceHit.point.y - currentFootY;
+            float heightAboveFloor = surfaceHit.point.y - referenceFootY;
+
+            if (heightAboveFloor > 0.003f && stepHeight > 0.002f && stepHeight <= maxStepHeight)
+            {
+                float liftY = stepHeight + 0.015f;
+                Vector2 targetCenter = (Vector2)bounds.center + new Vector2(0f, liftY);
+                Vector2 bodySize = new Vector2(bounds.size.x * 0.85f, bounds.size.y * 0.85f);
+
+                if (HasBodyClearanceAt(targetCenter, bodySize))
                 {
-                    // 2. Check if the space above maxStepHeight is clear (ensures it's a step/stair, not a full wall)
-                    Vector2 waistOrigin = new Vector2(bounds.center.x, currentFootY + maxStepHeight + 0.06f);
-                    RaycastHit2D waistHit = Physics2D.Raycast(waistOrigin, Vector2.right * dirX, checkDist, groundLayer);
-
-                    if (waistHit.collider == null || waistHit.collider.isTrigger || Physics2D.GetIgnoreCollision(playerCollider, waistHit.collider))
+                    rb.position += new Vector2(0f, liftY);
+                    if (rb.linearVelocityY < 0f)
                     {
-                        // 3. Probe downward onto the step to find its exact walkable surface height
-                        float probeX = footHit.point.x + (dirX * 0.15f);
-                        Vector2 probeOrigin = new Vector2(probeX, currentFootY + maxStepHeight + 0.08f);
-                        RaycastHit2D surfaceHit = Physics2D.Raycast(probeOrigin, Vector2.down, maxStepHeight + 0.12f, groundLayer);
-
-                        if (surfaceHit.collider != null && !surfaceHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(playerCollider, surfaceHit.collider))
-                        {
-                            if (surfaceHit.normal.y >= 0.55f) // Walkable floor on top of step
-                            {
-                                float stepHeight = surfaceHit.point.y - currentFootY;
-                                if (stepHeight > 0.01f && stepHeight <= maxStepHeight)
-                                {
-                                    // 4. Verify clearance for the player's full body above the step
-                                    Vector2 targetCenter = (Vector2)bounds.center + new Vector2(dirX * 0.04f, stepHeight + 0.02f);
-                                    Vector2 bodySize = new Vector2(bounds.size.x * 0.85f, bounds.size.y * 0.85f);
-                                    Collider2D overlap = Physics2D.OverlapBox(targetCenter, bodySize, 0f, groundLayer);
-
-                                    if (overlap == null || overlap == playerCollider || overlap.isTrigger || Physics2D.GetIgnoreCollision(playerCollider, overlap))
-                                    {
-                                        // 5. Smoothly step up onto the stair!
-                                        rb.position += new Vector2(dirX * 0.04f, stepHeight + 0.02f);
-                                        if (rb.linearVelocityY < 0f)
-                                        {
-                                            rb.linearVelocity = new Vector2(rb.linearVelocityX, 0f);
-                                        }
-                                        return;
-                                    }
-                                }
-                            }
-                        }
+                        rb.linearVelocity = new Vector2(rb.linearVelocityX, 0f);
                     }
+                    return;
                 }
             }
         }
 
-        // 6. Step Down Snapping: If grounded and walking down stairs, snap to lower step so movement remains smooth
-        if (inputValue.y >= -0.4f && rb.linearVelocityY <= 0.05f)
+        // Step Down Snapping: If grounded and walking down stairs or slopes, snap to lower surface so movement remains smooth
+        if (grounded && inputValue.y >= -0.4f && rb.linearVelocityY <= 0.05f)
         {
             Vector2 downProbeOrigin = new Vector2(bounds.center.x + (dirX * 0.12f), currentFootY + 0.08f);
-            RaycastHit2D downHit = Physics2D.Raycast(downProbeOrigin, Vector2.down, maxStepHeight + 0.15f, groundLayer);
-
-            if (downHit.collider != null && !downHit.collider.isTrigger && !Physics2D.GetIgnoreCollision(playerCollider, downHit.collider))
+            if (TryRaycastSolidGround(downProbeOrigin, Vector2.down, maxStepHeight + 0.15f, out RaycastHit2D downHit))
             {
-                if (downHit.normal.y >= 0.55f)
+                if (downHit.distance > 0.001f && downHit.normal.y >= 0.5f)
                 {
                     float dropDist = currentFootY - downHit.point.y;
-                    if (dropDist > 0.04f && dropDist <= maxStepHeight)
+                    if (dropDist > 0.02f && dropDist <= maxStepHeight)
                     {
-                        rb.position -= new Vector2(0f, dropDist - 0.01f);
+                        rb.position -= new Vector2(0f, dropDist - 0.005f);
                         rb.linearVelocity = new Vector2(rb.linearVelocityX, 0f);
                     }
                 }
