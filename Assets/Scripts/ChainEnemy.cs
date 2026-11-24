@@ -32,6 +32,7 @@ public class ChainEnemy : EnemyBase
     #region Public Properties
 
     protected override float CurrentMoveSpeed => isAggro ? moveSpeed * aggroSpeedMultiplier : moveSpeed;
+    protected override float EnemyAnimSpeedMultiplier => isAggro ? Mathf.Min(aggroSpeedMultiplier, 1.5f) : 1f;
 
     #endregion
 
@@ -153,6 +154,16 @@ public class ChainEnemy : EnemyBase
 
     #region Explosion & Helpers
 
+    protected override EnemyAnimState ResolveEnemyAnimState()
+    {
+        if (IsDead) return EnemyAnimState.Death;
+        if (isAggro && playerController != null && ((Vector2)transform.position - (Vector2)playerController.transform.position).sqrMagnitude <= 4f)
+        {
+            return EnemyAnimState.Attack;
+        }
+        return base.ResolveEnemyAnimState();
+    }
+
     private IEnumerator TargetFuseCountdown()
     {
         float timer = 0f;
@@ -169,6 +180,7 @@ public class ChainEnemy : EnemyBase
     private IEnumerator ExplosionSequence()
     {
         IsDead = true;
+        UpdateEnemySpriteAnimation(0f);
 
         if (GameManager.Instance != null)
         {

@@ -143,7 +143,14 @@ public class ThrowerNinja : EnemyBase
             playerController.PlaySFX(throwSFX);
         }
 
+        enemyAttackAnimTimer = 0.22f;
         isThrowing = false;
+    }
+
+    protected override EnemyAnimState ResolveEnemyAnimState()
+    {
+        if (!IsDead && isThrowing) return EnemyAnimState.Attack;
+        return base.ResolveEnemyAnimState();
     }
 
     private void SpawnDeathShurikens()

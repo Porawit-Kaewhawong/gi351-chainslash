@@ -265,6 +265,10 @@ public class LegendarySamurai : EnemyBase
     [SerializeField] private List<Sprite> windSlashSprites = new List<Sprite>();
     [SerializeField] private float windSlashFPS = 12f;
 
+    [Tooltip("Death / Defeat animation sprite frames.")]
+    [SerializeField] private List<Sprite> deathSprites = new List<Sprite>();
+    [SerializeField] private float deathFPS = 2f;
+
     [Header("Boss Events")]
     public UnityEvent<int, int> onBossHealthChanged;
     public UnityEvent onBossDefeated;
@@ -282,6 +286,8 @@ public class LegendarySamurai : EnemyBase
     public int CurrentAnimationFrame => currentAnimFrame;
     public bool UseSequentialIaiPatterns => useSequentialIaiPatterns;
     public int CurrentSequenceIndex => currentSequenceIndex;
+
+    protected override bool UseBaseEnemySpriteAnimation => false;
 
     public float BossMasterVolume
     {
@@ -342,9 +348,13 @@ public class LegendarySamurai : EnemyBase
         base.Awake();
 
         // Disable Animator if present so code sprite animation has full control
-        if (TryGetComponent<Animator>(out Animator anim))
+        Animator[] animators = GetComponentsInChildren<Animator>(true);
+        for (int i = 0; i < animators.Length; i++)
         {
-            anim.enabled = false;
+            if (animators[i] != null)
+            {
+                animators[i].enabled = false;
+            }
         }
 
         if (spriteRenderer != null && spriteRenderer.sprite != null)
@@ -2046,9 +2056,16 @@ public class LegendarySamurai : EnemyBase
         StopActionAnimation();
         FadeOutBossBGM(1.5f);
         isDashingSlash = false;
-        if (defaultBaseSprite != null && spriteRenderer != null)
+        if (spriteRenderer != null)
         {
-            spriteRenderer.sprite = defaultBaseSprite;
+            if (deathSprites != null && deathSprites.Count > 0 && deathSprites[0] != null)
+            {
+                spriteRenderer.sprite = deathSprites[0];
+            }
+            else if (defaultBaseSprite != null)
+            {
+                spriteRenderer.sprite = defaultBaseSprite;
+            }
         }
         if (dashTrailRenderer != null) dashTrailRenderer.emitting = false;
 
@@ -2116,6 +2133,14 @@ public class LegendarySamurai : EnemyBase
             elapsed += Time.unscaledDeltaTime;
             if (spriteRenderer != null)
             {
+                if (deathSprites != null && deathSprites.Count > 0)
+                {
+                    int frameIdx = Mathf.Clamp(Mathf.FloorToInt(elapsed * Mathf.Max(0.1f, deathFPS)), 0, deathSprites.Count - 1);
+                    if (deathSprites[frameIdx] != null && spriteRenderer.sprite != deathSprites[frameIdx])
+                    {
+                        spriteRenderer.sprite = deathSprites[frameIdx];
+                    }
+                }
                 spriteRenderer.color = (Mathf.Sin(elapsed * 25f) > 0f) ? Color.red : Color.white;
             }
             yield return null;

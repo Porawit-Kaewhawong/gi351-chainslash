@@ -194,6 +194,25 @@ MonoBehaviour:
   targetableOutlineColor: {r: 0.6509804, g: 0.7490196, b: 0.9019608, a: 1}
   targetableOutlineThickness: 0.055
   targetJitterStrength: 0.03
+  enemyIdleSprites:
+  - {fileID: -2528019037947217252, guid: 69fccd02ce2327c479dbc0235f1041bd, type: 3}
+  - {fileID: 7987762480810333993, guid: 2e97ee6a38784764e903729669aa5b03, type: 3}
+  enemyIdleFPS: 4
+  enemyRunSprites:
+  - {fileID: 6887411630804492409, guid: a04f322a43dc2a54e8ad625e4af56651, type: 3}
+  - {fileID: 1756629886948330377, guid: e545db293a9ac7d4ba35c2a3ce3e1a63, type: 3}
+  - {fileID: 8047113681467356439, guid: 58e7f9d203df7cd49a0d775330c03445, type: 3}
+  - {fileID: -8070164661632491944, guid: f2e47c99480f1e940b97f0a31926451c, type: 3}
+  enemyRunFPS: 7
+  enemyJumpSprites:
+  - {fileID: 4958006055555283402, guid: 8ae334d07b700464fa889121e9fa1b98, type: 3}
+  enemyJumpFPS: 8
+  enemyAttackSprites:
+  - {fileID: -5776688747870015732, guid: c8fcd56d8417d0848a077ff0a23b5224, type: 3}
+  enemyAttackFPS: 10
+  enemyDeathSprites:
+  - {fileID: -1535246376897832908, guid: f5ac83a9fe0ff7c43b5df477b0192eab, type: 3}
+  enemyDeathFPS: 6
   slowMoveSpeed: 1.35
   armorColor: {r: 0.65, g: 0.75, b: 0.9, a: 1}
   hitFlashColor: {r: 1, g: 1, b: 1, a: 1}
@@ -324,8 +343,8 @@ Transform:
   m_GameObject: {fileID: 5798969735150546856}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0.6, z: 0}
-  m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
+  m_LocalPosition: {x: 0, y: 0.65, z: 0}
+  m_LocalScale: {x: 1.3, y: 1.3, z: 1.3}
   m_ConstrainProportionsScale: 1
   m_Children: []
   m_Father: {fileID: 1785772515716116175}
@@ -379,12 +398,12 @@ SpriteRenderer:
   m_SortingLayer: 0
   m_SortingOrder: 3
   m_MaskInteraction: 0
-  m_Sprite: {fileID: -4860707273128907883, guid: 488f347ddd36d2a4bae9c7e9cff984b4, type: 3}
+  m_Sprite: {fileID: -2528019037947217252, guid: 69fccd02ce2327c479dbc0235f1041bd, type: 3}
   m_Color: {r: 0.15566039, g: 0.75932467, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0
-  m_Size: {x: 1.06, y: 1.04}
+  m_Size: {x: 0.75, y: 1}
   m_AdaptiveModeThreshold: 0.5
   m_SpriteTileMode: 0
   m_WasSpriteAssigned: 1
@@ -397,7 +416,7 @@ Animator:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 5798969735150546856}
-  m_Enabled: 1
+  m_Enabled: 0
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 9100000, guid: 7aaaef33c555a014a9452d9cf1ec7e22, type: 2}
   m_CullingMode: 0

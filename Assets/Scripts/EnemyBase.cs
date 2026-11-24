@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -16,6 +17,15 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         Telegraphing,
         Diving,
         Dodging
+    }
+
+    public enum EnemyAnimState
+    {
+        Idle,
+        Run,
+        Jump,
+        Attack,
+        Death
     }
 
     protected static readonly ContactFilter2D FlockingFilter = new ContactFilter2D { useTriggers = false };
@@ -96,6 +106,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     [SerializeField] protected float targetableOutlineThickness = 0.055f;
     [SerializeField] protected float targetJitterStrength = 0.03f;
 
+    [Header("Enemy Sprite Animations (No Animator)")]
+    [SerializeField] protected List<Sprite> enemyIdleSprites = new List<Sprite>();
+    [SerializeField] protected float enemyIdleFPS = 4f;
+    [SerializeField] protected List<Sprite> enemyRunSprites = new List<Sprite>();
+    [SerializeField] protected float enemyRunFPS = 9f;
+    [SerializeField] protected List<Sprite> enemyJumpSprites = new List<Sprite>();
+    [SerializeField] protected float enemyJumpFPS = 8f;
+    [SerializeField] protected List<Sprite> enemyAttackSprites = new List<Sprite>();
+    [SerializeField] protected float enemyAttackFPS = 10f;
+    [SerializeField] protected List<Sprite> enemyDeathSprites = new List<Sprite>();
+    [SerializeField] protected float enemyDeathFPS = 6f;
+
     #endregion
 
     #region Public Properties
@@ -107,6 +129,8 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     public State CurrentState => currentState;
 
     protected virtual float CurrentMoveSpeed => moveSpeed;
+    protected virtual bool UseBaseEnemySpriteAnimation => true;
+    protected virtual float EnemyAnimSpeedMultiplier => 1f;
 
     protected static Camera MainCamera
     {
@@ -146,6 +170,12 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     protected PixelSpriteEffect pixelEffect;
     protected PlayerController playerController;
     protected Color originalColor = Color.white;
+
+    protected EnemyAnimState currentEnemyAnimState = EnemyAnimState.Idle;
+    protected int currentEnemyAnimFrame = 0;
+    protected float enemyAnimTimer = 0f;
+    protected float enemyAttackAnimTimer = 0f;
+    protected Sprite defaultEnemySprite;
 
     private Material originalSpriteMaterial;
     private Vector3 originalSpriteLocalPos;
@@ -221,6 +251,26 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             {
                 CreateSpriteOutlineIndicator();
             }
+
+            if (UseBaseEnemySpriteAnimation && HasConfiguredEnemySprites())
+            {
+                Animator[] animators = GetComponentsInChildren<Animator>(true);
+                for (int i = 0; i < animators.Length; i++)
+                {
+                    if (animators[i] != null)
+                    {
+                        animators[i].enabled = false;
+                    }
+                }
+
+                defaultEnemySprite = GetFirstValidSprite(enemyIdleSprites)
+                    ?? GetFirstValidSprite(enemyRunSprites)
+                    ?? spriteRenderer.sprite;
+                if (defaultEnemySprite != null)
+                {
+                    spriteRenderer.sprite = defaultEnemySprite;
+                }
+            }
         }
 
         if (telegraphColor.a <= 0f)
@@ -236,7 +286,14 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
 
     protected virtual void Update()
     {
-        if (IsDead) return;
+        if (IsDead)
+        {
+            if (UseBaseEnemySpriteAnimation && enemyDeathSprites != null && enemyDeathSprites.Count > 0)
+            {
+                UpdateEnemySpriteAnimation(Time.deltaTime);
+            }
+            return;
+        }
 
         if (grappleStunTimer > 0f)
         {
@@ -247,9 +304,15 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             }
         }
 
+        if (enemyAttackAnimTimer > 0f)
+        {
+            enemyAttackAnimTimer = Mathf.Max(0f, enemyAttackAnimTimer - Time.deltaTime);
+        }
+
         UpdateTargetIndicator();
         CheckMouseHover();
         FlipAndRotate();
+        UpdateEnemySpriteAnimation(Time.deltaTime);
     }
 
     protected virtual void FixedUpdate()
@@ -1084,6 +1147,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             if (Time.time >= lastAttackTime + attackCooldown)
             {
                 lastAttackTime = Time.time;
+                enemyAttackAnimTimer = 0.25f;
 
                 // Deal extra damage if in Diving state
                 float damageToDeal = (currentState == State.Diving) ? contactDamage * 1.5f : contactDamage;
@@ -1122,6 +1186,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             if (Time.time >= lastAttackTime + attackCooldown)
             {
                 lastAttackTime = Time.time;
+                enemyAttackAnimTimer = 0.25f;
 
                 float damageToDeal = (currentState == State.Diving) ? contactDamage * 1.5f : contactDamage;
                 player.TakeDamage(damageToDeal);
@@ -1408,6 +1473,131 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         }
 
         return cachedPixelSlashFrames;
+    }
+
+    protected bool HasConfiguredEnemySprites()
+    {
+        return (enemyIdleSprites != null && enemyIdleSprites.Count > 0)
+            || (enemyRunSprites != null && enemyRunSprites.Count > 0)
+            || (enemyJumpSprites != null && enemyJumpSprites.Count > 0)
+            || (enemyAttackSprites != null && enemyAttackSprites.Count > 0)
+            || (enemyDeathSprites != null && enemyDeathSprites.Count > 0);
+    }
+
+    private static Sprite GetFirstValidSprite(List<Sprite> sprites)
+    {
+        if (sprites == null) return null;
+        for (int i = 0; i < sprites.Count; i++)
+        {
+            if (sprites[i] != null) return sprites[i];
+        }
+        return null;
+    }
+
+    protected virtual EnemyAnimState ResolveEnemyAnimState()
+    {
+        if (IsDead) return EnemyAnimState.Death;
+        if (enemyAttackAnimTimer > 0f || currentState == State.Telegraphing || currentState == State.Diving) return EnemyAnimState.Attack;
+        if (currentState == State.WallSticking || currentState == State.CeilingRunning) return EnemyAnimState.Run;
+
+        bool grounded = col == null || CheckGrounded(col.bounds);
+        if (!grounded) return EnemyAnimState.Jump;
+
+        if (rb != null && Mathf.Abs(rb.linearVelocityX) > 0.15f) return EnemyAnimState.Run;
+        return EnemyAnimState.Idle;
+    }
+
+    private List<Sprite> GetEnemyFramesForState(EnemyAnimState state)
+    {
+        switch (state)
+        {
+            case EnemyAnimState.Idle:
+                return (enemyIdleSprites != null && enemyIdleSprites.Count > 0) ? enemyIdleSprites : enemyRunSprites;
+            case EnemyAnimState.Run:
+                return (enemyRunSprites != null && enemyRunSprites.Count > 0) ? enemyRunSprites : enemyIdleSprites;
+            case EnemyAnimState.Jump:
+                return (enemyJumpSprites != null && enemyJumpSprites.Count > 0)
+                    ? enemyJumpSprites
+                    : ((enemyRunSprites != null && enemyRunSprites.Count > 0) ? enemyRunSprites : enemyIdleSprites);
+            case EnemyAnimState.Attack:
+                return (enemyAttackSprites != null && enemyAttackSprites.Count > 0)
+                    ? enemyAttackSprites
+                    : ((enemyRunSprites != null && enemyRunSprites.Count > 0) ? enemyRunSprites : enemyIdleSprites);
+            case EnemyAnimState.Death:
+                return (enemyDeathSprites != null && enemyDeathSprites.Count > 0) ? enemyDeathSprites : null;
+            default:
+                return enemyIdleSprites;
+        }
+    }
+
+    private float GetEnemyFPSForState(EnemyAnimState state)
+    {
+        switch (state)
+        {
+            case EnemyAnimState.Idle:
+                return Mathf.Max(0.1f, enemyIdleFPS);
+            case EnemyAnimState.Run:
+                return Mathf.Max(0.1f, enemyRunFPS * Mathf.Max(0.1f, EnemyAnimSpeedMultiplier));
+            case EnemyAnimState.Jump:
+                return Mathf.Max(0.1f, enemyJumpFPS);
+            case EnemyAnimState.Attack:
+                return Mathf.Max(0.1f, enemyAttackFPS);
+            case EnemyAnimState.Death:
+                return Mathf.Max(0.1f, enemyDeathFPS);
+            default:
+                return 8f;
+        }
+    }
+
+    protected virtual void UpdateEnemySpriteAnimation(float dt)
+    {
+        if (!UseBaseEnemySpriteAnimation || spriteRenderer == null || !HasConfiguredEnemySprites()) return;
+
+        EnemyAnimState targetState = ResolveEnemyAnimState();
+        if (targetState != currentEnemyAnimState)
+        {
+            currentEnemyAnimState = targetState;
+            currentEnemyAnimFrame = 0;
+            enemyAnimTimer = 0f;
+        }
+
+        List<Sprite> frames = GetEnemyFramesForState(currentEnemyAnimState);
+        if (frames == null || frames.Count == 0) return;
+
+        float fps = GetEnemyFPSForState(currentEnemyAnimState);
+        float frameDuration = 1f / fps;
+        enemyAnimTimer += dt;
+
+        if (enemyAnimTimer >= frameDuration)
+        {
+            int framesToAdvance = Mathf.FloorToInt(enemyAnimTimer / frameDuration);
+            enemyAnimTimer %= frameDuration;
+            currentEnemyAnimFrame += framesToAdvance;
+
+            bool shouldLoop = (currentEnemyAnimState == EnemyAnimState.Idle)
+                           || (currentEnemyAnimState == EnemyAnimState.Run);
+
+            if (currentEnemyAnimFrame >= frames.Count)
+            {
+                if (shouldLoop)
+                {
+                    currentEnemyAnimFrame %= frames.Count;
+                }
+                else
+                {
+                    currentEnemyAnimFrame = frames.Count - 1;
+                }
+            }
+        }
+
+        if (currentEnemyAnimFrame >= 0 && currentEnemyAnimFrame < frames.Count)
+        {
+            Sprite targetSprite = frames[currentEnemyAnimFrame];
+            if (targetSprite != null && spriteRenderer.sprite != targetSprite)
+            {
+                spriteRenderer.sprite = targetSprite;
+            }
+        }
     }
 
     #endregion

@@ -14,7 +14,7 @@ GameObject:
   - component: {fileID: 1455393332175313364}
   - component: {fileID: 6880963411520439303}
   m_Layer: 8
-  m_Name: ThrowerNinja
+  m_Name: SamuraiBoss
   m_TagString: Enemy
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -29,8 +29,8 @@ Transform:
   m_GameObject: {fileID: 3260056029298322424}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 1.375, y: -3.625, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1.6, y: 1.6, z: 1.6}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 5395424795633038845}
@@ -165,10 +165,10 @@ MonoBehaviour:
   m_GameObject: {fileID: 3260056029298322424}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 19946d8ce2e44b59a1b6dca430693724, type: 3}
+  m_Script: {fileID: 11500000, guid: fd40f1ea9fd04fac93f2c0a032a20976, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::ThrowerNinja
-  moveSpeed: 2.5
+  m_EditorClassIdentifier: Assembly-CSharp::LegendarySamurai
+  moveSpeed: 3.2
   maxStepHeight: 0.6
   stepCheckDistance: 0.22
   groundLayer:
@@ -180,32 +180,168 @@ MonoBehaviour:
   doubleJumpDelay: 0.15
   wallCheckDistance: 0.6
   groundCheckDistance: 0.6
+  smartPathfinding: 1
+  ledgeCheckDistance: 0.45
+  maxLeapGapDistance: 3.2
+  flockingSeparationRadius: 0.75
+  canCeilingRun: 1
+  ceilingClingForce: 3.5
+  maxCeilingRunDuration: 2.4
+  ceilingRunSpeedMultiplier: 1.4
   windUpDuration: 0.4
   showTelegraphColor: 0
   telegraphColor: {r: 1, g: 0, b: 0, a: 1}
-  contactDamage: 15
+  contactDamage: 20
   attackCooldown: 1
   knockbackForce: 8
-  isHeavyEnemy: 0
+  isHeavyEnemy: 1
   grappleStunDuration: 0.45
-  dieOnHighSpeedWallSlam: 1
+  dieOnHighSpeedWallSlam: 0
   wallSlamSpeedThreshold: 11
   targetIndicator: {fileID: 4618780478795535015}
-  targetableOutlineColor: {r: 1, g: 0.9681574, b: 0.5330188, a: 1}
+  targetableOutlineColor: {r: 1, g: 0.514151, b: 0.514151, a: 1}
   targetableOutlineThickness: 0.055
   targetJitterStrength: 0.03
+  bossMaxHits: 25
+  requiredWeakPoints: 5
+  weakPointPrefab: {fileID: 8851218834900263158, guid: e474d6092090fdd4fbc9d1ea3116430c, type: 3}
+  weakPointRadiusMin: 2.5
+  weakPointRadiusMax: 5
+  hitDamageSFX: {fileID: 8300000, guid: fc4a585deb93e0f4cb03f1016ce2fd22, type: 3}
+  deflectSFX: {fileID: 8300000, guid: 4479b1a8ec906564284337fd242e6102, type: 3}
+  hitVFX: {fileID: 1000000000000001, guid: 1a2b3c4d5e6f708192a3b4c5d6e7f801, type: 3}
+  useSequentialIaiPatterns: 1
+  showIaiGuideLine: 1
+  iaiPatternSpread: 2
+  iaiGuideColor: {r: 1, g: 0.85, b: 0.25, a: 0.45}
+  iaiGuideCompletedColor: {r: 0.2, g: 0.95, b: 1, a: 0.85}
+  iaiGuideLineWidth: 0.08
+  weakPointFontAsset: {fileID: 11400000, guid: 7b10e90a0f282904ea04394eb6724133, type: 2}
+  weakPointNumberFontSize: 2
+  pointSelectChimeSFX: {fileID: 0}
+  bossPatrolSpeed: 3.2
+  maxTimeBetweenAttacks: 4.5
+  minTimeBetweenAttacks: 1.5
+  bossRoarSFX: {fileID: 0}
+  bossDefeatSFX: {fileID: 8300000, guid: 3e47b9201948482ca0e5b9f71c49d88a, type: 3}
+  bossDefeatVFX: {fileID: 1000000000000002, guid: 2b3c4d5e6f708192a3b4c5d6e7f80112, type: 3}
+  bossMasterVolume: 1.8
+  slashDashVolume: 1.2
+  stompVolume: 1.3
+  shurikenBurstVolume: 1.2
+  windSlashVolume: 1.2
+  hiddenStabVolume: 1.3
+  hitDeflectVolume: 0.6
+  roarVolume: 1.4
+  defeatVolume: 1.5
+  bossVolumeSlider: {fileID: 0}
+  showOnScreenSlider: 0
+  phase1BGM: {fileID: 8300000, guid: 37c5b1ba72739a24cb22a6e06777ed2d, type: 3}
+  phase2BGM: {fileID: 8300000, guid: 4373068c530d2cf4e9ad6d5a8a9e1e9c, type: 3}
+  bossBGMVolume: 0.75
+  bgmCrossfadeDuration: 1.5
+  loopBGM: 1
+  bossHealthBarUI: {fileID: 0}
+  directTitleText: {fileID: 0}
+  directPhraseText: {fileID: 0}
+  directBackgroundBar: {fileID: 0}
+  directFillBar: {fileID: 0}
+  slashDashSpeed: 26
+  slashDashDuration: 0.45
+  slashDashWindup: 0.55
+  slashDashRecovery: 0.45
+  slashDashDamage: 18
+  postDashSlashDelay: 0.75
+  straightSlashDamage: 20
+  straightSlashRange: 6
+  straightSlashWidth: 1.5
+  slashDashTelegraphColor: {r: 1, g: 0, b: 0, a: 1}
+  slashDashSFX: {fileID: 8300000, guid: 1786b9d7ce153d544a5abfd970d1c66f, type: 3}
+  straightSlashSFX: {fileID: 8300000, guid: fc4a585deb93e0f4cb03f1016ce2fd22, type: 3}
+  straightSlashVFX: {fileID: 0}
+  slashDashVFX: {fileID: 1000000000000003, guid: 3c4d5e6f708192a3b4c5d6e7f8011223, type: 3}
+  dashTrailRenderer: {fileID: 0}
+  dashTrailColor: {r: 1, g: 0.15, b: 0.25, a: 0.85}
+  afterImageInterval: 0.045
+  stompJumpForce: 25
+  stompAirHangDuration: 0.3
+  stompSlamSpeed: 30
+  stompRadius: 5.5
+  stompDamage: 24
+  stompKnockback: 12
+  stompShakeDuration: 0.45
+  stompRecovery: 0.7
+  stompImpactSFX: {fileID: 8300000, guid: f735263930f1c6f47a2a3a6767fd68fc, type: 3}
+  stompShockwaveVFX: {fileID: 1000000000000004, guid: 4d5e6f708192a3b4c5d6e7f801122334, type: 3}
   shurikenPrefab: {fileID: 9179823344550816202, guid: b07dbac2f40f83843adf16a59089582d, type: 3}
-  throwInterval: 3
-  throwRange: 13
-  minThrowDistance: 2.5
-  shurikenSpeed: 11
-  shurikenDamage: 12
-  throwWindup: 0.25
-  throwTelegraphColor: {r: 1, g: 0.55, b: 0.1, a: 1}
-  throwPoint: {fileID: 0}
-  throwSFX: {fileID: 0}
-  deathProjectileCount: 2
-  deathProjectileSpeed: 13.5
+  shurikenCount360: 15
+  shurikenSpeed360: 10
+  shurikenDamage360: 15
+  shurikenWindup: 0.45
+  shurikenBurstSFX: {fileID: 8300000, guid: ea3392e3250cde445b2200e85bf26c59, type: 3}
+  windSlashLineCount: 3
+  windSlashTelegraphTime: 0.8
+  windSlashDamage: 22
+  windSlashTelegraphColor: {r: 1, g: 0.19999999, b: 0.26318777, a: 0.5}
+  windSlashActiveColor: {r: 1, g: 1, b: 1, a: 1}
+  windSlashSFX: {fileID: 8300000, guid: bb46c0b74c1a7fe4a8e27bfa8f5296ce, type: 3}
+  hiddenStabVanishDuration: 0.5
+  hiddenStabWindup: 0.4
+  hiddenStabSpeed: 28
+  hiddenStabDamage: 25
+  hiddenStabGlintColor: {r: 1, g: 0, b: 0, a: 1}
+  hiddenStabSFX: {fileID: 8300000, guid: ea3392e3250cde445b2200e85bf26c59, type: 3}
+  minionPrefabs:
+  - {fileID: 3260056029298322424, guid: c25d1c4c38a87f044b98c595233a0ff5, type: 3}
+  - {fileID: 2944547956908393011, guid: 530c120d452e89a49bfc1d7691ea81e2, type: 3}
+  - {fileID: 3260056029298322424, guid: a87d269a28554f8bb151b7eccfeecf93, type: 3}
+  - {fileID: 3260056029298322424, guid: 7afcea2bb7c84d12a1bbf5703eec3dd7, type: 3}
+  minionsPerPhrase: 0000000003000000050000000700000009000000
+  minionSummonSFX: {fileID: 8300000, guid: 98936b8a712d84748be947cc31bd8e4a, type: 3}
+  idleSprites:
+  - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
+  - {fileID: -7294925696281527151, guid: 20e0e2458196ba14cb6d33a28a8f9bf2, type: 3}
+  idleFPS: 4
+  walkSprites:
+  - {fileID: -5873200825359494715, guid: ca61ea8db7a102d47aa4032e827a52c2, type: 3}
+  - {fileID: -8679117856447472134, guid: 7a45e8341a46b6947a568a831939297e, type: 3}
+  - {fileID: -6618474283278196872, guid: 4439ab50656db06479c45ea6fcbc3237, type: 3}
+  walkFPS: 8
+  jumpSprites:
+  - {fileID: -4211096238504021655, guid: 24e4fc53bb0fc6a4bb1d8116eb8242c5, type: 3}
+  - {fileID: -6842799324293279519, guid: 78a656787dcdb45449d1ccae3c9dab1a, type: 3}
+  jumpFPS: 6
+  dashSlashSprites:
+  - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
+  - {fileID: -7294925696281527151, guid: 20e0e2458196ba14cb6d33a28a8f9bf2, type: 3}
+  dashSlashFPS: 10
+  stompSprites:
+  - {fileID: -4211096238504021655, guid: 24e4fc53bb0fc6a4bb1d8116eb8242c5, type: 3}
+  - {fileID: -6842799324293279519, guid: 78a656787dcdb45449d1ccae3c9dab1a, type: 3}
+  - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
+  stompFPS: 6
+  shuriken360Sprites:
+  - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
+  - {fileID: -7294925696281527151, guid: 20e0e2458196ba14cb6d33a28a8f9bf2, type: 3}
+  shuriken360FPS: 8
+  hiddenStabSprites:
+  - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
+  - {fileID: -7294925696281527151, guid: 20e0e2458196ba14cb6d33a28a8f9bf2, type: 3}
+  hiddenStabFPS: 10
+  windSlashSprites:
+  - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
+  - {fileID: -7294925696281527151, guid: 20e0e2458196ba14cb6d33a28a8f9bf2, type: 3}
+  windSlashFPS: 8
+  deathSprites:
+  - {fileID: -7660528447300141009, guid: 4e8369913f827554a858ff198d22f038, type: 3}
+  - {fileID: 5307176146141501265, guid: 489b742430f20f8429d0473ce60511ce, type: 3}
+  deathFPS: 2
+  onBossHealthChanged:
+    m_PersistentCalls:
+      m_Calls: []
+  onBossDefeated:
+    m_PersistentCalls:
+      m_Calls: []
 --- !u!1 &4618780478795535015
 GameObject:
   m_ObjectHideFlags: 0
@@ -288,7 +424,7 @@ SpriteRenderer:
   m_SortingOrder: 4
   m_MaskInteraction: 0
   m_Sprite: {fileID: 3625043607559282579, guid: 19fb86013d8c24d6cb8410c0aadf30fa, type: 3}
-  m_Color: {r: 0.9880041, g: 1, b: 0.6179246, a: 1}
+  m_Color: {r: 1, g: 0.504717, b: 0.5144285, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0
@@ -324,8 +460,8 @@ Transform:
   m_GameObject: {fileID: 5798969735150546856}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0.6, z: 0}
-  m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
+  m_LocalPosition: {x: 0, y: 0.75, z: 0}
+  m_LocalScale: {x: 1.5, y: 1.5, z: 1.5}
   m_ConstrainProportionsScale: 1
   m_Children: []
   m_Father: {fileID: 1785772515716116175}
@@ -379,12 +515,12 @@ SpriteRenderer:
   m_SortingLayer: 0
   m_SortingOrder: 3
   m_MaskInteraction: 0
-  m_Sprite: {fileID: -4860707273128907883, guid: 488f347ddd36d2a4bae9c7e9cff984b4, type: 3}
-  m_Color: {r: 1, g: 0.9618751, b: 0, a: 1}
+  m_Sprite: {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 0
-  m_Size: {x: 1.06, y: 1.04}
+  m_Size: {x: 0.71875, y: 1}
   m_AdaptiveModeThreshold: 0.5
   m_SpriteTileMode: 0
   m_WasSpriteAssigned: 1
@@ -397,7 +533,7 @@ Animator:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 5798969735150546856}
-  m_Enabled: 1
+  m_Enabled: 0
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 9100000, guid: 7aaaef33c555a014a9452d9cf1ec7e22, type: 2}
   m_CullingMode: 0
