@@ -3623,6 +3623,11 @@ public class PlayerController : MonoBehaviour
             {
                 grappleTargetTransform = hitEnemy.transform;
             }
+            else
+            {
+                // Hook struck a non-enemy object (wall, ground, ceiling, prop) -> spawn dark dirt/stone debris chips
+                SpawnGrappleTerrainDebris(grappleAnchorPoint, rayHit.normal);
+            }
 
             if (springJoint != null)
             {
@@ -3659,6 +3664,73 @@ public class PlayerController : MonoBehaviour
         else
         {
             DetachGrappling();
+        }
+    }
+
+    private void SpawnGrappleTerrainDebris(Vector2 hitPoint, Vector2 surfaceNormal)
+    {
+        Vector2 normal = surfaceNormal.sqrMagnitude > 0.001f ? surfaceNormal.normalized : Vector2.up;
+        int sortOrder = spriteRenderer != null ? spriteRenderer.sortingOrder + 2 : 10;
+
+        Color darkStone1 = new Color(0.08f, 0.08f, 0.10f, 1f);
+        Color darkStone2 = new Color(0.16f, 0.15f, 0.17f, 1f);
+        Color darkDirt = new Color(0.12f, 0.10f, 0.09f, 1f);
+
+        const int chipCount = 11;
+        for (int i = 0; i < chipCount; i++)
+        {
+            GameObject chip = new GameObject("GrappleTerrainChip");
+            chip.transform.position = EnemyBase.SnapToPixelGrid(hitPoint + normal * 0.04f);
+
+            int sizePx = (i % 3 == 0) ? 3 : ((i % 2 == 0) ? 2 : 1);
+            SpriteRenderer sr = chip.AddComponent<SpriteRenderer>();
+            sr.sprite = EnemyBase.GetSharedPixelBlockSprite(sizePx);
+            sr.sortingOrder = sortOrder;
+
+            Color c = (i % 3 == 0) ? darkStone1 : ((i % 3 == 1) ? darkStone2 : darkDirt);
+            sr.color = c;
+
+            Vector2 burstDir = (normal * 0.85f + Random.insideUnitCircle * 0.75f + Vector2.up * 0.25f).normalized;
+            Vector2 velocity = burstDir * Random.Range(2.8f, 7.2f);
+            float lifetime = Random.Range(0.38f, 0.62f);
+
+            StartCoroutine(AnimateGrappleDebrisChipRoutine(chip, sr, c, velocity, lifetime));
+        }
+    }
+
+    private static IEnumerator AnimateGrappleDebrisChipRoutine(
+        GameObject chip,
+        SpriteRenderer sr,
+        Color baseColor,
+        Vector2 velocity,
+        float lifetime)
+    {
+        float elapsed = 0f;
+        Vector2 pos = chip.transform.position;
+
+        while (elapsed < lifetime && chip != null)
+        {
+            float dt = Time.deltaTime;
+            elapsed += dt;
+
+            velocity.y -= 22f * dt;
+            velocity.x *= Mathf.Clamp01(1f - 2.0f * dt);
+            pos += velocity * dt;
+
+            chip.transform.position = EnemyBase.SnapToPixelGrid(pos);
+
+            if (sr != null)
+            {
+                float alpha = 1f - EnemyBase.QuantizeStep(elapsed / lifetime, 4);
+                sr.color = new Color(baseColor.r, baseColor.g, baseColor.b, alpha);
+            }
+
+            yield return null;
+        }
+
+        if (chip != null)
+        {
+            Destroy(chip);
         }
     }
 
