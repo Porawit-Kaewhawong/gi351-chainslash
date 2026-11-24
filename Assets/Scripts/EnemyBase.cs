@@ -94,6 +94,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     [SerializeField] protected float attackCooldown = 1f;
     [SerializeField] protected float knockbackForce = 8f;
 
+    [Header("Corpse Settings")]
+    [Tooltip("If true, splits the enemy into 2 halves on death that stick to the ground and bleed continuously.")]
+    [SerializeField] protected bool leaveCorpseOnDeath = true;
+    [Tooltip("Visual tint applied to the sliced corpse halves on the ground.")]
+    [SerializeField] protected Color corpseTint = new Color(0.72f, 0.68f, 0.72f, 1f);
+    [Tooltip("Optional vertical offset when the corpse halves settle onto the ground.")]
+    [SerializeField] protected float corpseGroundOffset = 0f;
+    [Tooltip("Number of pooled pixel blood droplets continuously spurting/dripping from the 2 halves.")]
+    [SerializeField] protected int corpseBloodPoolSize = 12;
+    [Tooltip("Continuous bleeding emission rate (droplets per second).")]
+    [SerializeField] protected float corpseBleedRate = 10f;
+
     [Header("Grapple Interaction Settings")]
     [SerializeField] protected bool isHeavyEnemy = false;
     [SerializeField] protected float grappleStunDuration = 0.45f;
@@ -1022,6 +1034,101 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     public abstract void OnDeath(Vector2 deathImpulse = default);
     public virtual void OnSlashed(Vector2 slashVector) => OnDeath(slashVector);
 
+    /// <summary>
+    /// Applies pure physical knockback without dealing damage or stunning the enemy
+    /// (e.g. when a hook-thrown corpse slams into a living enemy).
+    /// </summary>
+    public virtual void ApplyKnockbackOnly(Vector2 knockbackVelocity)
+    {
+        if (IsDead || knockbackVelocity.sqrMagnitude < 0.001f) return;
+
+        if (rb != null)
+        {
+            rb.gravityScale = defaultGravityScale;
+            rb.linearVelocity = knockbackVelocity;
+        }
+
+        TriggerHitFlash(0.12f, Color.white);
+    }
+
+    /// <summary>
+    /// Splits the dead enemy into 2 separate halves that fall, stick to the ground,
+    /// and bleed continuously (non-stop pixel blood droplets + blood puddles).
+    /// </summary>
+    protected virtual void LeaveCorpseOrDestroy(Vector2 deathImpulse = default)
+    {
+        if (!leaveCorpseOnDeath)
+        {
+            TrySpawnDeathSlice(deathImpulse);
+
+            if (deathImpulse != default && rb != null)
+            {
+                rb.AddForce(deathImpulse * 15f, ForceMode2D.Impulse);
+            }
+
+            Destroy(gameObject);
+            return;
+        }
+
+        isTarget = false;
+        currentState = State.Normal;
+        StopAllCoroutines();
+
+        // Clear targeting outlines and indicators
+        if (pixelEffect != null)
+        {
+            pixelEffect.SetOutline(false);
+        }
+        if (outlineContainer != null)
+        {
+            outlineContainer.SetActive(false);
+        }
+        if (targetIndicator != null)
+        {
+            targetIndicator.SetActive(false);
+        }
+
+        // Resolve slash direction for splitting the 2 halves apart
+        Vector2 slashDir = deathImpulse;
+        if (slashDir.sqrMagnitude < 0.001f)
+        {
+            if (playerController != null)
+            {
+                slashDir = ((Vector2)transform.position - (Vector2)playerController.transform.position).normalized;
+            }
+            if (slashDir.sqrMagnitude < 0.001f)
+            {
+                slashDir = Vector2.right;
+            }
+        }
+        else
+        {
+            slashDir.Normalize();
+        }
+
+        if (spriteRenderer != null && spriteRenderer.sprite != null && spriteRenderer.sprite.texture != null)
+        {
+            Color finalTint = new Color(
+                originalColor.r * corpseTint.r,
+                originalColor.g * corpseTint.g,
+                originalColor.b * corpseTint.b,
+                originalColor.a * corpseTint.a
+            );
+
+            SlicedCorpseOnGround.Spawn(
+                spriteRenderer,
+                slashDir,
+                finalTint,
+                groundLayer,
+                corpseGroundOffset,
+                corpseBloodPoolSize,
+                corpseBleedRate
+            );
+        }
+
+        Destroy(gameObject);
+    }
+
     public virtual void OnGrappled(Vector2 pullForce)
     {
         currentState = State.Normal;
@@ -1813,5 +1920,762 @@ public class EnemyDeathSliceVFX : MonoBehaviour
     {
         if (topSprite != null) Destroy(topSprite);
         if (bottomSprite != null) Destroy(bottomSprite);
+    }
+}
+
+/// <summary>
+/// Persistent 2-half sliced enemy corpse that splits apart, falls onto and sticks to the ground,
+/// and continuously bleeds non-stop using a zero-GC pooled pixel blood droplet system + floor blood puddles.
+/// </summary>
+public class SlicedCorpseOnGround : MonoBehaviour
+{
+    public static readonly List<SlicedCorpseOnGround> ActiveCorpses = new List<SlicedCorpseOnGround>();
+    private static readonly Collider2D[] ThrowImpactBuffer = new Collider2D[16];
+
+    private struct CorpseHalf
+    {
+        public Transform transform;
+        public SpriteRenderer renderer;
+        public Vector2 worldPos;
+        public Vector2 velocity;
+        public float halfHeight;
+        public float targetLieAngle;
+        public float currentAngle;
+        public float angularSpeed;
+        public bool landed;
+        public bool lostInVoid;
+        public float groundY;
+        public float fallenDistance;
+        public SpriteRenderer puddleRenderer;
+        public float puddleScaleX;
+        public float puddleMaxScaleX;
+    }
+
+    private struct BloodDroplet
+    {
+        public Transform transform;
+        public SpriteRenderer renderer;
+        public Vector2 worldPos;
+        public Vector2 velocity;
+        public float age;
+        public float lifetime;
+        public float floorY;
+        public bool hasFloor;
+        public bool active;
+        public Color baseColor;
+    }
+
+    private CorpseHalf topHalf;
+    private CorpseHalf bottomHalf;
+    private Sprite topSprite;
+    private Sprite bottomSprite;
+    private SpriteRenderer seamRenderer;
+
+    private BloodDroplet[] bloodPool;
+    private int nextDropletIndex;
+    private float bleedTimer;
+    private float bleedInterval;
+
+    private LayerMask groundLayer;
+    private float groundOffset;
+    private Color finalTint;
+    private float elapsed;
+
+    // Hook Grab & Throw state
+    private bool isReeling;
+    private bool isHeld;
+    private bool isThrown;
+    private Vector2 thrownPos;
+    private Vector2 thrownVelocity;
+    private float throwKnockbackForce = 20f;
+    private float throwKnockbackUpRatio = 0.35f;
+    private float thrownSpinAngle;
+    private float thrownFlightTime;
+
+    public bool CanBeGrappled => !isReeling && !isHeld && !isThrown && !(topHalf.lostInVoid && bottomHalf.lostInVoid);
+    public bool IsHeld => isHeld;
+    public bool IsThrown => isThrown;
+
+    private const float FlashDuration = 0.065f;
+    private const float SeamDuration = 0.16f;
+    private const float CorpseGravity = 26f;
+    private const float BloodGravity = 20f;
+    private const float MaxVoidFall = 40f;
+
+    private static readonly Color BloodBright = new Color(0.92f, 0.08f, 0.14f, 1f);
+    private static readonly Color BloodDark = new Color(0.52f, 0.02f, 0.06f, 1f);
+    private static readonly Color PuddleColor = new Color(0.45f, 0.02f, 0.05f, 0.92f);
+
+    public static void Spawn(
+        SpriteRenderer source,
+        Vector2 slashDir,
+        Color tint,
+        LayerMask groundMask,
+        float floorOffset = 0f,
+        int bloodPoolSize = 12,
+        float bleedRate = 10f)
+    {
+        if (source == null || source.sprite == null || source.sprite.texture == null) return;
+
+        Sprite orig = source.sprite;
+        Rect r = orig.textureRect;
+        if (r.width < 2f || r.height < 2f) return;
+
+        GameObject root = new GameObject("SlicedEnemyCorpse");
+        root.transform.position = source.bounds.center;
+
+        SlicedCorpseOnGround corpse = root.AddComponent<SlicedCorpseOnGround>();
+        corpse.Initialize(source, orig, r, slashDir, tint, groundMask, floorOffset, bloodPoolSize, bleedRate);
+    }
+
+    private void OnEnable()
+    {
+        if (!ActiveCorpses.Contains(this))
+        {
+            ActiveCorpses.Add(this);
+        }
+    }
+
+    private void OnDisable()
+    {
+        ActiveCorpses.Remove(this);
+    }
+
+    /// <summary>
+    /// Returns the world position the Grappling Hook should aim at and latch onto.
+    /// </summary>
+    public Vector2 GetGrappleAnchorPosition()
+    {
+        if (isHeld || isThrown) return thrownPos;
+        if (!topHalf.lostInVoid && !bottomHalf.lostInVoid)
+        {
+            return (topHalf.worldPos + bottomHalf.worldPos) * 0.5f;
+        }
+        if (!topHalf.lostInVoid) return topHalf.worldPos;
+        return bottomHalf.worldPos;
+    }
+
+    /// <summary>
+    /// Detaches both halves from the ground so the Grappling Hook can reel them toward the Player.
+    /// </summary>
+    public void BeginGrappleReel()
+    {
+        isReeling = true;
+        isHeld = false;
+        isThrown = false;
+        thrownPos = GetGrappleAnchorPosition();
+
+        topHalf.landed = false;
+        bottomHalf.landed = false;
+        if (topHalf.puddleRenderer != null) topHalf.puddleRenderer.enabled = false;
+        if (bottomHalf.puddleRenderer != null) bottomHalf.puddleRenderer.enabled = false;
+    }
+
+    /// <summary>
+    /// Moves the reeled or held corpse halves smoothly to the target world position.
+    /// </summary>
+    public void MoveCorpseBundleTo(Vector2 targetWorldPos, bool markHeld)
+    {
+        isReeling = !markHeld;
+        isHeld = markHeld;
+        isThrown = false;
+        thrownPos = targetWorldPos;
+        thrownSpinAngle += Time.deltaTime * 220f;
+
+        if (!topHalf.lostInVoid && topHalf.transform != null)
+        {
+            topHalf.worldPos = targetWorldPos + new Vector2(0.08f, 0.08f);
+            topHalf.transform.position = EnemyBase.SnapToPixelGrid(topHalf.worldPos);
+            topHalf.transform.rotation = Quaternion.Euler(0f, 0f, topHalf.targetLieAngle + (markHeld ? 0f : thrownSpinAngle));
+        }
+
+        if (!bottomHalf.lostInVoid && bottomHalf.transform != null)
+        {
+            bottomHalf.worldPos = targetWorldPos + new Vector2(-0.08f, -0.06f);
+            bottomHalf.transform.position = EnemyBase.SnapToPixelGrid(bottomHalf.worldPos);
+            bottomHalf.transform.rotation = Quaternion.Euler(0f, 0f, bottomHalf.targetLieAngle - (markHeld ? 0f : thrownSpinAngle));
+        }
+    }
+
+    /// <summary>
+    /// Drops a held corpse back down to fall onto the ground if cancelled.
+    /// </summary>
+    public void DropFromHold()
+    {
+        if (!isHeld && !isReeling) return;
+        isHeld = false;
+        isReeling = false;
+        isThrown = false;
+        topHalf.velocity = new Vector2(Random.Range(-1.5f, 1.5f), 1.5f);
+        bottomHalf.velocity = new Vector2(Random.Range(-1.5f, 1.5f), 1.0f);
+        topHalf.fallenDistance = 0f;
+        bottomHalf.fallenDistance = 0f;
+    }
+
+    /// <summary>
+    /// Throws this corpse as a high-speed projectile that pushes living enemies on impact.
+    /// </summary>
+    public void ThrowToward(Vector2 origin, Vector2 direction, float speed, float knockbackForce, float knockbackUpwardRatio = 0.35f)
+    {
+        isReeling = false;
+        isHeld = false;
+        isThrown = true;
+        thrownPos = origin;
+        Vector2 dir = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right;
+        thrownVelocity = dir * Mathf.Max(5f, speed);
+        throwKnockbackForce = knockbackForce;
+        throwKnockbackUpRatio = knockbackUpwardRatio;
+        thrownFlightTime = 0f;
+
+        if (topHalf.puddleRenderer != null) topHalf.puddleRenderer.enabled = false;
+        if (bottomHalf.puddleRenderer != null) bottomHalf.puddleRenderer.enabled = false;
+    }
+
+    private void Initialize(
+        SpriteRenderer source,
+        Sprite orig,
+        Rect r,
+        Vector2 slashDir,
+        Color tint,
+        LayerMask groundMask,
+        float floorOffset,
+        int bloodPoolSize,
+        float bleedRate)
+    {
+        groundLayer = groundMask;
+        groundOffset = floorOffset;
+        finalTint = tint.a > 0.1f ? tint : Color.white;
+        bleedInterval = 1f / Mathf.Max(1f, bleedRate);
+
+        float halfH = Mathf.Floor(r.height * 0.5f);
+        Rect bottomRect = new Rect(r.x, r.y, r.width, halfH);
+        Rect topRect = new Rect(r.x, r.y + halfH, r.width, r.height - halfH);
+
+        float ppu = Mathf.Max(1f, orig.pixelsPerUnit);
+        // Center pivot on each half so they rotate and rest cleanly on the ground
+        topSprite = Sprite.Create(orig.texture, topRect, new Vector2(0.5f, 0.5f), ppu);
+        bottomSprite = Sprite.Create(orig.texture, bottomRect, new Vector2(0.5f, 0.5f), ppu);
+
+        Vector3 lossyScale = source.transform.lossyScale;
+        int baseSortOrder = Mathf.Min(source.sortingOrder, 0) - 1;
+        float dirSignX = slashDir.x >= 0f ? 1f : -1f;
+
+        Vector2 center = source.bounds.center;
+        float quarterHeight = source.bounds.extents.y * 0.5f;
+
+        // Top half flies slightly forward along the slash and lands flat
+        topHalf = CreateHalf(
+            "TopHalf",
+            topSprite,
+            source,
+            lossyScale,
+            baseSortOrder,
+            center + Vector2.up * quarterHeight,
+            new Vector2(dirSignX * Random.Range(2.8f, 4.4f), Random.Range(3.2f, 4.8f)),
+            -dirSignX * 90f,
+            Random.Range(0.22f, 0.35f)
+        );
+
+        // Bottom half separates in the opposite direction and lands flat
+        bottomHalf = CreateHalf(
+            "BottomHalf",
+            bottomSprite,
+            source,
+            lossyScale,
+            baseSortOrder,
+            center - Vector2.up * quarterHeight,
+            new Vector2(-dirSignX * Random.Range(1.4f, 2.6f), Random.Range(1.6f, 2.8f)),
+            dirSignX * 90f,
+            Random.Range(0.18f, 0.30f)
+        );
+
+        // Brief 3-frame pixel slash seam flash at the cut point
+        GameObject seamObj = new GameObject("PixelSlashSeam");
+        seamObj.transform.position = EnemyBase.SnapToPixelGrid(center);
+        seamObj.transform.SetParent(transform, true);
+        seamObj.transform.localScale = Vector3.one * 1.5f;
+
+        Sprite[] slashFrames = EnemyBase.GetSharedPixelSlashFrames();
+        seamRenderer = seamObj.AddComponent<SpriteRenderer>();
+        seamRenderer.sprite = slashFrames[0];
+        seamRenderer.flipX = slashDir.x < 0f;
+        seamRenderer.flipY = slashDir.y < 0f;
+        seamRenderer.sortingLayerID = source.sortingLayerID;
+        seamRenderer.sortingOrder = source.sortingOrder + 3;
+
+        // Create pooled pixel blood droplets for continuous non-stop bleeding
+        int count = Mathf.Clamp(bloodPoolSize, 6, 32);
+        bloodPool = new BloodDroplet[count];
+        for (int i = 0; i < count; i++)
+        {
+            GameObject dropObj = new GameObject("BloodDroplet");
+            dropObj.transform.SetParent(transform, true);
+            dropObj.transform.localScale = Vector3.one;
+
+            SpriteRenderer sr = dropObj.AddComponent<SpriteRenderer>();
+            sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 3 == 0) ? 2 : 1);
+            sr.sortingLayerID = source.sortingLayerID;
+            sr.sortingOrder = baseSortOrder + 1;
+            sr.enabled = false;
+
+            bloodPool[i] = new BloodDroplet
+            {
+                transform = dropObj.transform,
+                renderer = sr,
+                active = false,
+                baseColor = Color.Lerp(BloodDark, BloodBright, Random.value)
+            };
+        }
+
+        // Initial arterial burst at the moment of slicing
+        int initialBurst = Mathf.Min(count / 2, 6);
+        for (int i = 0; i < initialBurst; i++)
+        {
+            EmitDroplet(center, slashDir * (i % 2 == 0 ? 1f : -1f), 4.5f, 8.5f);
+        }
+    }
+
+    private CorpseHalf CreateHalf(
+        string halfName,
+        Sprite spr,
+        SpriteRenderer source,
+        Vector3 worldScale,
+        int sortingOrder,
+        Vector2 startWorldPos,
+        Vector2 initialVelocity,
+        float lieAngle,
+        float halfHeightApprox)
+    {
+        GameObject halfObj = new GameObject(halfName);
+        halfObj.transform.SetParent(transform, true);
+        halfObj.transform.position = startWorldPos;
+        halfObj.transform.localScale = worldScale;
+
+        SpriteRenderer sr = halfObj.AddComponent<SpriteRenderer>();
+        sr.sprite = spr;
+        sr.flipX = source.flipX;
+        sr.flipY = source.flipY;
+        sr.sortingLayerID = source.sortingLayerID;
+        sr.sortingOrder = sortingOrder;
+        sr.color = Color.white;
+
+        // Pixel blood puddle beneath this half (becomes visible and expands once landed)
+        GameObject puddleObj = new GameObject(halfName + "_BloodPuddle");
+        puddleObj.transform.SetParent(transform, true);
+        puddleObj.transform.position = startWorldPos;
+        puddleObj.transform.localScale = new Vector3(0.1f, 0.25f, 1f);
+
+        SpriteRenderer puddleSr = puddleObj.AddComponent<SpriteRenderer>();
+        puddleSr.sprite = EnemyBase.GetSharedPixelBlockSprite(2);
+        puddleSr.sortingLayerID = source.sortingLayerID;
+        puddleSr.sortingOrder = sortingOrder - 1;
+        puddleSr.color = PuddleColor;
+        puddleSr.enabled = false;
+
+        return new CorpseHalf
+        {
+            transform = halfObj.transform,
+            renderer = sr,
+            worldPos = startWorldPos,
+            velocity = initialVelocity,
+            halfHeight = Mathf.Max(0.12f, halfHeightApprox),
+            targetLieAngle = lieAngle,
+            currentAngle = 0f,
+            angularSpeed = lieAngle * 4.2f,
+            landed = false,
+            lostInVoid = false,
+            groundY = startWorldPos.y,
+            fallenDistance = 0f,
+            puddleRenderer = puddleSr,
+            puddleScaleX = 0.4f,
+            puddleMaxScaleX = Random.Range(3.2f, 5.2f)
+        };
+    }
+
+    private void Update()
+    {
+        float dt = Time.deltaTime;
+        if (dt <= 0f) return;
+
+        elapsed += dt;
+
+        // 1. Update slash seam flash
+        if (seamRenderer != null && seamRenderer.enabled)
+        {
+            if (elapsed >= SeamDuration)
+            {
+                seamRenderer.enabled = false;
+            }
+            else
+            {
+                Sprite[] frames = EnemyBase.GetSharedPixelSlashFrames();
+                int idx = Mathf.Clamp(Mathf.FloorToInt((elapsed / SeamDuration) * 3f), 0, 2);
+                seamRenderer.sprite = frames[idx];
+            }
+        }
+
+        // 2. Flash white briefly then settle to corpse tint
+        Color targetCol = elapsed < FlashDuration ? new Color(0.95f, 1f, 1f, 1f) : finalTint;
+        if (topHalf.renderer != null) topHalf.renderer.color = targetCol;
+        if (bottomHalf.renderer != null) bottomHalf.renderer.color = targetCol;
+
+        // 3. Simulate halves (either flying as a thrown projectile, being held/reeled, or settling on the ground)
+        if (isThrown)
+        {
+            UpdateThrownFlight(dt);
+        }
+        else if (!isHeld && !isReeling)
+        {
+            UpdateHalf(ref topHalf, dt);
+            UpdateHalf(ref bottomHalf, dt);
+
+            if (topHalf.lostInVoid && bottomHalf.lostInVoid)
+            {
+                Destroy(gameObject);
+                return;
+            }
+        }
+
+        // 4. Continuous non-stop bleeding from both halves
+        bleedTimer += dt;
+        if (bleedTimer >= bleedInterval)
+        {
+            bleedTimer -= bleedInterval;
+
+            bool emitFromTop = (nextDropletIndex % 2 == 0);
+            if (emitFromTop && !topHalf.lostInVoid)
+            {
+                Vector2 dir = topHalf.landed ? new Vector2(Random.Range(-0.7f, 0.7f), 1f) : Vector2.up;
+                EmitDroplet(topHalf.worldPos, dir, 1.4f, 3.6f, topHalf.landed, topHalf.groundY);
+            }
+            else if (!bottomHalf.lostInVoid)
+            {
+                Vector2 dir = bottomHalf.landed ? new Vector2(Random.Range(-0.7f, 0.7f), 1f) : Vector2.up;
+                EmitDroplet(bottomHalf.worldPos, dir, 1.2f, 3.2f, bottomHalf.landed, bottomHalf.groundY);
+            }
+        }
+
+        // 5. Update active pooled blood droplets
+        UpdateBloodDroplets(dt);
+    }
+
+    private void UpdateHalf(ref CorpseHalf half, float dt)
+    {
+        if (half.lostInVoid || half.transform == null) return;
+
+        if (half.landed)
+        {
+            // Slowly grow the blood puddle on the ground beneath this half
+            if (half.puddleRenderer != null)
+            {
+                half.puddleScaleX = Mathf.MoveTowards(half.puddleScaleX, half.puddleMaxScaleX, dt * 0.45f);
+                half.puddleRenderer.transform.localScale = new Vector3(half.puddleScaleX, 0.32f, 1f);
+            }
+            return;
+        }
+
+        half.velocity.y -= CorpseGravity * dt;
+        half.velocity.x *= Mathf.Clamp01(1f - 1.8f * dt);
+
+        // Rotate smoothly toward lying flat
+        half.currentAngle = Mathf.MoveTowards(half.currentAngle, half.targetLieAngle, Mathf.Abs(half.angularSpeed) * dt);
+        half.transform.rotation = Quaternion.Euler(0f, 0f, half.currentAngle);
+
+        Vector2 delta = half.velocity * dt;
+
+        // Horizontal wall check so halves don't pass through walls
+        if (Mathf.Abs(delta.x) > 0.001f)
+        {
+            Vector2 hDir = new Vector2(Mathf.Sign(delta.x), 0f);
+            RaycastHit2D wallHit = Physics2D.Raycast(half.worldPos, hDir, Mathf.Abs(delta.x) + 0.15f, groundLayer);
+            if (wallHit.collider != null && !wallHit.collider.isTrigger)
+            {
+                half.velocity.x = -half.velocity.x * 0.25f;
+                delta.x = 0f;
+            }
+        }
+
+        // Downward ground check to stick firmly onto the floor
+        if (delta.y < 0f)
+        {
+            float downDist = Mathf.Abs(delta.y) + half.halfHeight + 0.08f;
+            RaycastHit2D groundHit = Physics2D.Raycast(half.worldPos + Vector2.up * 0.06f, Vector2.down, downDist, groundLayer);
+            if (groundHit.collider != null && !groundHit.collider.isTrigger)
+            {
+                half.worldPos = new Vector2(half.worldPos.x + delta.x, groundHit.point.y + half.halfHeight * 0.45f + groundOffset);
+                half.velocity = Vector2.zero;
+                half.currentAngle = half.targetLieAngle;
+                half.transform.position = EnemyBase.SnapToPixelGrid(half.worldPos);
+                half.transform.rotation = Quaternion.Euler(0f, 0f, half.targetLieAngle);
+                half.landed = true;
+                half.groundY = groundHit.point.y + 0.02f;
+
+                if (half.puddleRenderer != null)
+                {
+                    half.puddleRenderer.transform.position = EnemyBase.SnapToPixelGrid(new Vector3(half.worldPos.x, half.groundY, 0f));
+                    half.puddleRenderer.enabled = true;
+                }
+                return;
+            }
+
+            half.fallenDistance += Mathf.Abs(delta.y);
+            if (half.fallenDistance >= MaxVoidFall)
+            {
+                half.lostInVoid = true;
+                if (half.renderer != null) half.renderer.enabled = false;
+                if (half.puddleRenderer != null) half.puddleRenderer.enabled = false;
+                return;
+            }
+        }
+
+        half.worldPos += delta;
+        half.transform.position = EnemyBase.SnapToPixelGrid(half.worldPos);
+    }
+
+    private void EmitDroplet(Vector2 origin, Vector2 dirBias, float minSpd, float maxSpd, bool hasFloor = false, float floorY = 0f)
+    {
+        if (bloodPool == null || bloodPool.Length == 0) return;
+
+        int idx = nextDropletIndex % bloodPool.Length;
+        nextDropletIndex = (nextDropletIndex + 1) % bloodPool.Length;
+
+        Vector2 randomDir = (dirBias.normalized + Random.insideUnitCircle * 0.65f).normalized;
+        float speed = Random.Range(minSpd, maxSpd);
+
+        BloodDroplet d = bloodPool[idx];
+        d.worldPos = origin + Random.insideUnitCircle * 0.08f;
+        d.velocity = randomDir * speed;
+        d.age = 0f;
+        d.lifetime = Random.Range(0.45f, 0.85f);
+        d.hasFloor = hasFloor;
+        d.floorY = floorY;
+        d.active = true;
+        d.baseColor = Color.Lerp(BloodDark, BloodBright, Random.value);
+
+        if (d.renderer != null)
+        {
+            d.renderer.color = d.baseColor;
+            d.renderer.enabled = true;
+        }
+        if (d.transform != null)
+        {
+            d.transform.position = EnemyBase.SnapToPixelGrid(d.worldPos);
+        }
+
+        bloodPool[idx] = d;
+    }
+
+    private void UpdateBloodDroplets(float dt)
+    {
+        if (bloodPool == null) return;
+
+        for (int i = 0; i < bloodPool.Length; i++)
+        {
+            BloodDroplet d = bloodPool[i];
+            if (!d.active) continue;
+
+            d.age += dt;
+            if (d.age >= d.lifetime)
+            {
+                d.active = false;
+                if (d.renderer != null) d.renderer.enabled = false;
+                bloodPool[i] = d;
+                continue;
+            }
+
+            d.velocity.y -= BloodGravity * dt;
+            d.worldPos += d.velocity * dt;
+
+            // Clamp droplet onto the floor so it splatters/pools instead of falling through the ground
+            if (d.hasFloor && d.worldPos.y <= d.floorY)
+            {
+                d.worldPos.y = d.floorY;
+                d.velocity = Vector2.zero;
+            }
+
+            if (d.transform != null)
+            {
+                d.transform.position = EnemyBase.SnapToPixelGrid(d.worldPos);
+            }
+
+            if (d.renderer != null)
+            {
+                float alpha = 1f - EnemyBase.QuantizeStep(d.age / d.lifetime, 4);
+                Color c = d.baseColor;
+                c.a = alpha;
+                d.renderer.color = c;
+            }
+
+            bloodPool[i] = d;
+        }
+    }
+
+    private void UpdateThrownFlight(float dt)
+    {
+        thrownFlightTime += dt;
+        thrownVelocity.y -= CorpseGravity * 0.45f * dt;
+        Vector2 step = thrownVelocity * dt;
+        float stepDist = step.magnitude;
+        Vector2 moveDir = stepDist > 0.0001f ? step / stepDist : Vector2.right;
+
+        // 1. Check for living enemies along the throw path (Knockback Only, no damage)
+        int hitCount = Physics2D.OverlapCircle(thrownPos + step * 0.5f, 0.65f, ContactFilter2D.noFilter, ThrowImpactBuffer);
+        for (int i = 0; i < hitCount; i++)
+        {
+            Collider2D hitCol = ThrowImpactBuffer[i];
+            if (hitCol == null || hitCol.isTrigger) continue;
+
+            EnemyBase hitEnemy = hitCol.GetComponentInParent<EnemyBase>();
+            if (hitEnemy == null || hitEnemy.IsDead) continue;
+            if (hitEnemy is ArmoredNinjaWeakPoint || hitEnemy is BossTargetPoint) continue;
+
+            float knockDirX = Mathf.Abs(moveDir.x) > 0.05f ? Mathf.Sign(moveDir.x) : 1f;
+            Vector2 knockback = new Vector2(knockDirX, throwKnockbackUpRatio).normalized * throwKnockbackForce;
+            hitEnemy.ApplyKnockbackOnly(knockback);
+
+            // Spawn extra blood burst at the impact point
+            SpawnImpactBloodBurst(hitCol.bounds.center, moveDir);
+
+            // Play impact SFX, Camera Shake, and micro-hitstop
+            PlayerController player = PlayerController.Instance;
+            if (player != null)
+            {
+                if (player.GrappleHitSFX != null)
+                {
+                    player.PlayPitchedSFX(player.GrappleHitSFX, Random.Range(0.92f, 1.08f), 1f);
+                }
+                player.TriggerCameraShake(0.14f);
+                player.TriggerBriefHitstop(0.04f);
+            }
+
+            Destroy(gameObject);
+            return;
+        }
+
+        // 2. Check for walls or ground impact -> split back into 2 falling/sticking halves
+        RaycastHit2D wallOrFloorHit = Physics2D.Raycast(thrownPos, moveDir, stepDist + 0.25f, groundLayer);
+        if (wallOrFloorHit.collider != null && !wallOrFloorHit.collider.isTrigger)
+        {
+            isThrown = false;
+            Vector2 bounce = Vector2.Reflect(thrownVelocity, wallOrFloorHit.normal) * 0.25f;
+            topHalf.worldPos = wallOrFloorHit.point + wallOrFloorHit.normal * 0.2f;
+            bottomHalf.worldPos = wallOrFloorHit.point + wallOrFloorHit.normal * 0.15f;
+            topHalf.velocity = bounce + new Vector2(Random.Range(-1.5f, 1.5f), 2.0f);
+            bottomHalf.velocity = bounce + new Vector2(Random.Range(-1.5f, 1.5f), 1.0f);
+            topHalf.fallenDistance = 0f;
+            bottomHalf.fallenDistance = 0f;
+
+            // Emit blood splat against the wall/floor
+            for (int b = 0; b < 5; b++)
+            {
+                EmitDroplet(wallOrFloorHit.point, wallOrFloorHit.normal, 2.5f, 6.0f);
+            }
+            return;
+        }
+
+        // 3. Advance flying corpse halves with rapid spin
+        thrownPos += step;
+        thrownSpinAngle += dt * 720f;
+
+        if (!topHalf.lostInVoid && topHalf.transform != null)
+        {
+            topHalf.worldPos = thrownPos + new Vector2(0.08f, 0.06f);
+            topHalf.transform.position = EnemyBase.SnapToPixelGrid(topHalf.worldPos);
+            topHalf.transform.rotation = Quaternion.Euler(0f, 0f, thrownSpinAngle);
+        }
+        if (!bottomHalf.lostInVoid && bottomHalf.transform != null)
+        {
+            bottomHalf.worldPos = thrownPos + new Vector2(-0.08f, -0.06f);
+            bottomHalf.transform.position = EnemyBase.SnapToPixelGrid(bottomHalf.worldPos);
+            bottomHalf.transform.rotation = Quaternion.Euler(0f, 0f, -thrownSpinAngle);
+        }
+
+        if (thrownFlightTime > 4.5f)
+        {
+            Destroy(gameObject);
+        }
+    }
+
+    private static void SpawnImpactBloodBurst(Vector3 pos, Vector2 dir)
+    {
+        GameObject burstObj = new GameObject("CorpseImpactBloodBurst");
+        burstObj.transform.position = EnemyBase.SnapToPixelGrid(pos);
+        CorpseImpactBloodBurst burst = burstObj.AddComponent<CorpseImpactBloodBurst>();
+        burst.Initialize(dir);
+    }
+
+    private void OnDestroy()
+    {
+        ActiveCorpses.Remove(this);
+        if (topSprite != null) Destroy(topSprite);
+        if (bottomSprite != null) Destroy(bottomSprite);
+    }
+}
+
+/// <summary>
+/// Short-lived pixel blood burst spawned when a hook-thrown corpse impacts a living enemy.
+/// </summary>
+public class CorpseImpactBloodBurst : MonoBehaviour
+{
+    private Transform[] drops;
+    private SpriteRenderer[] renderers;
+    private Vector2[] positions;
+    private Vector2[] velocities;
+    private Color[] baseColors;
+    private float elapsed;
+    private const float Duration = 0.5f;
+
+    public void Initialize(Vector2 dir)
+    {
+        const int count = 16;
+        drops = new Transform[count];
+        renderers = new SpriteRenderer[count];
+        positions = new Vector2[count];
+        velocities = new Vector2[count];
+        baseColors = new Color[count];
+
+        Vector2 bias = dir.sqrMagnitude > 0.001f ? dir.normalized : Vector2.right;
+        Color bright = new Color(0.92f, 0.08f, 0.14f, 1f);
+        Color dark = new Color(0.52f, 0.02f, 0.06f, 1f);
+
+        for (int i = 0; i < count; i++)
+        {
+            GameObject g = new GameObject("BloodPixel");
+            g.transform.SetParent(transform, false);
+            SpriteRenderer sr = g.AddComponent<SpriteRenderer>();
+            sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 3 == 0) ? 3 : ((i % 2 == 0) ? 2 : 1));
+            sr.sortingOrder = 12;
+            Color c = Color.Lerp(dark, bright, Random.value);
+            sr.color = c;
+
+            Vector2 d = (bias * 0.8f + Random.insideUnitCircle.normalized * 0.7f + Vector2.up * 0.35f).normalized;
+            positions[i] = Random.insideUnitCircle * 0.1f;
+            velocities[i] = d * Random.Range(3.5f, 9.5f);
+            drops[i] = g.transform;
+            renderers[i] = sr;
+            baseColors[i] = c;
+        }
+    }
+
+    private void Update()
+    {
+        float dt = Time.deltaTime;
+        elapsed += dt;
+        float alpha = 1f - EnemyBase.QuantizeStep(elapsed / Duration, 4);
+
+        for (int i = 0; i < drops.Length; i++)
+        {
+            velocities[i].y -= 20f * dt;
+            positions[i] += velocities[i] * dt;
+            drops[i].localPosition = EnemyBase.SnapToPixelGrid(positions[i]);
+            Color c = baseColors[i];
+            c.a = alpha;
+            renderers[i].color = c;
+        }
+
+        if (elapsed >= Duration)
+        {
+            Destroy(gameObject);
+        }
     }
 }

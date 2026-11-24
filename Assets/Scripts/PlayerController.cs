@@ -236,6 +236,16 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float grappleKickKnockback = 22f;
     [SerializeField] private float grappleKickBounceForce = 12.5f;
 
+    [Header("Grapple Corpse Throw Settings")]
+    [Tooltip("Speed at which a hooked corpse is thrown toward the mouse cursor.")]
+    [SerializeField] private float corpseThrowSpeed = 26f;
+    [Tooltip("Knockback force applied to living enemies hit by a hook-thrown corpse (Knockback Only, no damage).")]
+    [SerializeField] private float corpseThrowKnockback = 20f;
+    [Tooltip("Upward lift ratio for the knockback when a thrown corpse hits an enemy.")]
+    [Range(0f, 0.8f)] [SerializeField] private float corpseThrowUpwardRatio = 0.35f;
+    [Tooltip("Aim tolerance radius when targeting a sliced corpse on the ground with the Grappling Hook.")]
+    [SerializeField] private float corpseGrabAimRadius = 1.0f;
+
     [Header("Grappling Visual & Polish")]
     [SerializeField] private int ropeSegments = 20;
     [SerializeField] private float waveFrequency = 12f;
@@ -390,6 +400,7 @@ public class PlayerController : MonoBehaviour
     private Vector2 grappleAnchorPoint;
     private Transform grappleTargetTransform;
     private Collider2D cachedGrappleEnemyCollider;
+    private SlicedCorpseOnGround heldCorpse;
     private Vector2 currentHookTip;
     private bool isReelingToPortal;
     private bool isPortalTransitioning;
@@ -656,6 +667,7 @@ public class PlayerController : MonoBehaviour
         RecordDrawnLinePoints();
         UpdateMouseTrail();
         UpdateGrappleIndicator();
+        UpdateHeldCorpsePosition();
         UpdateDynamicCameraZoom();
 
         if (wallJumpLockCounter > 0f)
@@ -3246,6 +3258,27 @@ public class PlayerController : MonoBehaviour
     {
         if (grappleAction == null) return;
 
+        // If holding a hooked corpse: hold Grapple to aim in slow-mo, release to throw it!
+        if (heldCorpse != null)
+        {
+            if (isFocusing && currentMeter <= 0)
+            {
+                ThrowHeldCorpse();
+                return;
+            }
+
+            if (grappleAction.IsPressed())
+            {
+                if (IsInMode) return;
+                if (!IsGrappling && !isThrowingHook && !isFocusing) GrapplingFocus();
+            }
+            else
+            {
+                if (!IsGrappling && !isThrowingHook && isFocusing) ThrowHeldCorpse();
+            }
+            return;
+        }
+
         if (isFocusing && currentMeter <= 0)
         {
             GrapplingHook();
@@ -3261,6 +3294,58 @@ public class PlayerController : MonoBehaviour
         {
             if (!IsGrappling && !isThrowingHook && isFocusing) GrapplingHook();
         }
+    }
+
+    private Vector2 GetHeldCorpseTargetPosition()
+    {
+        float facingDir = (spriteRenderer != null && spriteRenderer.flipX) ? -1f : 1f;
+        return (Vector2)transform.position + new Vector2(facingDir * 0.65f, 0.45f);
+    }
+
+    private void UpdateHeldCorpsePosition()
+    {
+        if (heldCorpse == null) return;
+        if (isDead || isPortalTransitioning)
+        {
+            heldCorpse.DropFromHold();
+            heldCorpse = null;
+            return;
+        }
+
+        heldCorpse.MoveCorpseBundleTo(GetHeldCorpseTargetPosition(), true);
+    }
+
+    private void ThrowHeldCorpse()
+    {
+        isFocusing = false;
+        Time.timeScale = 1.0f;
+        Time.fixedDeltaTime = defaultFixedDeltaTime;
+
+        if (heldCorpse == null) return;
+
+        SlicedCorpseOnGround corpseToThrow = heldCorpse;
+        heldCorpse = null;
+
+        Vector2 origin = GetHeldCorpseTargetPosition();
+        Vector2 mouseWorldPos = GetMouseWorldPosition();
+        Vector2 throwDir = (mouseWorldPos - origin).normalized;
+        if (throwDir.sqrMagnitude < 0.001f)
+        {
+            float facingDir = (spriteRenderer != null && spriteRenderer.flipX) ? -1f : 1f;
+            throwDir = new Vector2(facingDir, 0.15f).normalized;
+        }
+
+        if (spriteRenderer != null && Mathf.Abs(throwDir.x) > 0.05f)
+        {
+            spriteRenderer.flipX = throwDir.x < 0f;
+        }
+
+        corpseToThrow.ThrowToward(origin, throwDir, corpseThrowSpeed, corpseThrowKnockback, corpseThrowUpwardRatio);
+
+        releaseGrappleAnimTimer = releaseGrappleAnimDuration;
+        SetPlayerAnimState(PlayerAnimState.ReleaseGrapplingHook, true);
+        PlaySFX(grappleReleaseSFX != null ? grappleReleaseSFX : postSlashSFX);
+        TriggerCameraShake(0.08f);
     }
 
     private void GrapplingHook()
@@ -3299,14 +3384,16 @@ public class PlayerController : MonoBehaviour
             spriteRenderer.flipX = dir.x < 0f;
         }
 
-        RaycastHit2D rayHit = FindGrappleHit(fireOrigin, dir, out EnemyBase hitEnemy, out PortalNextLevel hitPortal);
+        RaycastHit2D rayHit = FindGrappleHit(fireOrigin, dir, out EnemyBase hitEnemy, out PortalNextLevel hitPortal, out SlicedCorpseOnGround hitCorpse);
         if (hitEnemy != null)
         {
             cachedGrappleEnemyCollider = hitEnemy.GetComponent<Collider2D>();
         }
         grappleAnchorPoint = hitPortal != null
             ? hitPortal.GetGrappleAnchorPosition()
-            : (rayHit.collider != null ? rayHit.point : fireOrigin + (dir * maxGrappleRange));
+            : (hitCorpse != null
+                ? hitCorpse.GetGrappleAnchorPosition()
+                : (rayHit.collider != null ? rayHit.point : fireOrigin + (dir * maxGrappleRange)));
 
         grappleLine.positionCount = ropeSegments;
         grappleLine.enabled = false;
@@ -3330,6 +3417,10 @@ public class PlayerController : MonoBehaviour
             {
                 grappleAnchorPoint = hitPortal.GetGrappleAnchorPosition();
             }
+            else if (hitCorpse != null && hitCorpse.CanBeGrappled)
+            {
+                grappleAnchorPoint = hitCorpse.GetGrappleAnchorPosition();
+            }
             else if (hitEnemy != null && !hitEnemy.IsDead)
             {
                 grappleAnchorPoint = GetEnemyGrapplePoint(hitEnemy);
@@ -3342,6 +3433,48 @@ public class PlayerController : MonoBehaviour
         }
 
         isThrowingHook = false;
+
+        if (hitCorpse != null && hitCorpse.CanBeGrappled)
+        {
+            IsGrappling = true;
+            PlaySFX(grappleHitSFX);
+
+            if (grappleImpactPrefab != null)
+            {
+                Instantiate(grappleImpactPrefab, grappleAnchorPoint, Quaternion.identity);
+            }
+
+            hitCorpse.BeginGrappleReel();
+            Vector2 currentCorpsePos = hitCorpse.GetGrappleAnchorPosition();
+            const float maxCorpseReelTime = 0.45f;
+            float corpseReelTimer = 0f;
+            float corpseReelSpeed = Mathf.Max(pullForce * 1.35f, 30f);
+
+            while (IsGrappling && hitCorpse != null && corpseReelTimer < maxCorpseReelTime)
+            {
+                corpseReelTimer += Time.deltaTime;
+                Vector2 targetHoldPos = GetHeldCorpseTargetPosition();
+                currentCorpsePos = Vector2.MoveTowards(currentCorpsePos, targetHoldPos, corpseReelSpeed * Time.deltaTime);
+                hitCorpse.MoveCorpseBundleTo(currentCorpsePos, false);
+
+                RenderProceduralRope(GetGrappleRopeStartPosition(true), currentCorpsePos, 1f, false);
+
+                if ((currentCorpsePos - targetHoldPos).sqrMagnitude <= 0.08f)
+                {
+                    break;
+                }
+                yield return null;
+            }
+
+            if (hitCorpse != null)
+            {
+                heldCorpse = hitCorpse;
+                heldCorpse.MoveCorpseBundleTo(GetHeldCorpseTargetPosition(), true);
+            }
+
+            DetachGrappling();
+            yield break;
+        }
 
         if (rayHit.collider != null)
         {
@@ -3524,16 +3657,37 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Finds the closest valid grapple target along the aim direction, detecting grappleLayer walls, EnemyBase colliders, and PortalNextLevel rifts.
+    /// Finds the closest valid grapple target along the aim direction, detecting grappleLayer walls, EnemyBase colliders, PortalNextLevel rifts, and sliced corpses on the ground.
     /// </summary>
-    private RaycastHit2D FindGrappleHit(Vector2 origin, Vector2 dir, out EnemyBase hitEnemy, out PortalNextLevel hitPortal)
+    private RaycastHit2D FindGrappleHit(Vector2 origin, Vector2 dir, out EnemyBase hitEnemy, out PortalNextLevel hitPortal, out SlicedCorpseOnGround hitCorpse)
     {
         hitEnemy = null;
         hitPortal = null;
+        hitCorpse = null;
 
         // 1. Check environment on grappleLayer
         RaycastHit2D wallHit = Physics2D.Raycast(origin, dir, maxGrappleRange, grappleLayer);
         float maxCheckDist = wallHit.collider != null ? wallHit.distance : maxGrappleRange;
+
+        // 1b. Check sliced corpses resting on the ground along the aim ray
+        float closestCorpseDist = float.MaxValue;
+        for (int i = 0; i < SlicedCorpseOnGround.ActiveCorpses.Count; i++)
+        {
+            SlicedCorpseOnGround corpse = SlicedCorpseOnGround.ActiveCorpses[i];
+            if (corpse == null || !corpse.CanBeGrappled) continue;
+
+            Vector2 toCorpse = corpse.GetGrappleAnchorPosition() - origin;
+            float proj = Vector2.Dot(toCorpse, dir);
+            if (proj <= 0.1f || proj > maxCheckDist + 0.5f) continue;
+
+            Vector2 closestPointOnRay = origin + dir * proj;
+            float perpDist = Vector2.Distance(closestPointOnRay, corpse.GetGrappleAnchorPosition());
+            if (perpDist <= corpseGrabAimRadius && proj < closestCorpseDist)
+            {
+                closestCorpseDist = proj;
+                hitCorpse = corpse;
+            }
+        }
 
         // 2. Check for enemies & portals along the ray
         RaycastHit2D[] allHits = Physics2D.CircleCastAll(origin, 0.3f, dir, maxCheckDist);
@@ -3581,13 +3735,21 @@ public class PlayerController : MonoBehaviour
         if (hitPortal != null && (hitEnemy == null || closestPortalDist <= closestEnemyDist))
         {
             hitEnemy = null;
+            hitCorpse = null;
             return bestPortalHit;
         }
 
         hitPortal = null;
-        if (hitEnemy != null)
+        if (hitEnemy != null && (hitCorpse == null || closestEnemyDist <= closestCorpseDist))
         {
+            hitCorpse = null;
             return bestEnemyHit;
+        }
+
+        if (hitCorpse != null)
+        {
+            hitEnemy = null;
+            return default;
         }
 
         return wallHit;

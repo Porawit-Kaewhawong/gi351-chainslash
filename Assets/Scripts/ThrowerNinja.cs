@@ -69,7 +69,6 @@ public class ThrowerNinja : EnemyBase
         if (IsDead) return;
         IsDead = true;
 
-        TrySpawnDeathSlice(deathImpulse);
         SpawnDeathShurikens();
 
         if (GameManager.Instance != null)
@@ -77,12 +76,7 @@ public class ThrowerNinja : EnemyBase
             GameManager.Instance.UnregisterEnemy(gameObject);
         }
 
-        if (deathImpulse != default && rb != null)
-        {
-            rb.AddForce(deathImpulse * 15f, ForceMode2D.Impulse);
-        }
-
-        Destroy(gameObject);
+        LeaveCorpseOrDestroy(deathImpulse);
     }
 
     #endregion

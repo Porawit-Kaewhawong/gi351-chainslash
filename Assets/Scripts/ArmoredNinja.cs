@@ -393,14 +393,10 @@ public class ArmoredNinja : EnemyBase
         isDefeated = true;
         IsDead = true;
 
-        TrySpawnDeathSlice(impulse);
-
         if (GameManager.Instance != null)
         {
             GameManager.Instance.UnregisterEnemy(gameObject);
         }
-
-        if (col != null) col.enabled = false;
 
         GameObject fx = armorShatterVFX != null ? armorShatterVFX : hitVFXPrefab;
         if (fx != null)
@@ -408,13 +404,8 @@ public class ArmoredNinja : EnemyBase
             Instantiate(fx, transform.position, Quaternion.identity);
         }
 
-        if (impulse != default && rb != null)
-        {
-            rb.AddForce(impulse * 15f, ForceMode2D.Impulse);
-        }
-
         CleanUpWeakPoints();
-        Destroy(gameObject);
+        LeaveCorpseOrDestroy(impulse);
     }
 
     private void CleanUpWeakPoints()
