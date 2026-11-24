@@ -2534,8 +2534,8 @@ public class SlicedCorpseOnGround : MonoBehaviour
             Vector2 knockback = new Vector2(knockDirX, throwKnockbackUpRatio).normalized * throwKnockbackForce;
             hitEnemy.ApplyKnockbackOnly(knockback);
 
-            // Spawn extra blood burst at the impact point
-            SpawnImpactBloodBurst(hitCol.bounds.center, moveDir);
+            // Randomly spawn either a big Blood Splatter burst OR Shattering Corpse Chunks!
+            SpawnRandomImpactBurst(hitCol.bounds.center, moveDir, topHalf.renderer, finalTint);
 
             // Play impact SFX, Camera Shake, and micro-hitstop
             PlayerController player = PlayerController.Instance;
@@ -2597,12 +2597,21 @@ public class SlicedCorpseOnGround : MonoBehaviour
         }
     }
 
-    private static void SpawnImpactBloodBurst(Vector3 pos, Vector2 dir)
+    private static void SpawnRandomImpactBurst(Vector3 pos, Vector2 dir, SpriteRenderer corpseSample, Color tint)
     {
-        GameObject burstObj = new GameObject("CorpseImpactBloodBurst");
+        GameObject burstObj = new GameObject("CorpseImpactRandomBurst");
         burstObj.transform.position = EnemyBase.SnapToPixelGrid(pos);
         CorpseImpactBloodBurst burst = burstObj.AddComponent<CorpseImpactBloodBurst>();
-        burst.Initialize(dir);
+
+        bool shatterIntoChunks = Random.value >= 0.5f && corpseSample != null && corpseSample.sprite != null && corpseSample.sprite.texture != null;
+        if (shatterIntoChunks)
+        {
+            burst.InitializeChunkShatter(dir, corpseSample, tint);
+        }
+        else
+        {
+            burst.InitializeBloodSplatter(dir);
+        }
     }
 
     private void OnDestroy()
@@ -2614,69 +2623,186 @@ public class SlicedCorpseOnGround : MonoBehaviour
 }
 
 /// <summary>
-/// Short-lived pixel blood burst spawned when a hook-thrown corpse impacts a living enemy.
+/// Randomized impact burst spawned when a hook-thrown corpse slams into a living enemy:
+/// either a heavy pixel Blood Splatter OR shattering pixel sprite chunks flying apart.
 /// </summary>
 public class CorpseImpactBloodBurst : MonoBehaviour
 {
-    private Transform[] drops;
+    private Transform[] pieces;
     private SpriteRenderer[] renderers;
     private Vector2[] positions;
     private Vector2[] velocities;
+    private float[] angularSpeeds;
     private Color[] baseColors;
+    private Sprite[] ownedSprites;
     private float elapsed;
-    private const float Duration = 0.5f;
+    private float duration = 0.65f;
 
-    public void Initialize(Vector2 dir)
+    /// <summary>
+    /// Mode 1: Heavy radial pixel Blood Splatter burst.
+    /// </summary>
+    public void InitializeBloodSplatter(Vector2 dir)
     {
-        const int count = 16;
-        drops = new Transform[count];
-        renderers = new SpriteRenderer[count];
-        positions = new Vector2[count];
-        velocities = new Vector2[count];
-        baseColors = new Color[count];
+        duration = 0.58f;
+        const int count = 24;
+        AllocateArrays(count);
 
         Vector2 bias = dir.sqrMagnitude > 0.001f ? dir.normalized : Vector2.right;
-        Color bright = new Color(0.92f, 0.08f, 0.14f, 1f);
-        Color dark = new Color(0.52f, 0.02f, 0.06f, 1f);
+        Color bright = new Color(0.98f, 0.10f, 0.16f, 1f);
+        Color dark = new Color(0.55f, 0.02f, 0.07f, 1f);
 
         for (int i = 0; i < count; i++)
         {
             GameObject g = new GameObject("BloodPixel");
             g.transform.SetParent(transform, false);
             SpriteRenderer sr = g.AddComponent<SpriteRenderer>();
-            sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 3 == 0) ? 3 : ((i % 2 == 0) ? 2 : 1));
-            sr.sortingOrder = 12;
+            sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 2 == 0) ? 3 : 2);
+            sr.sortingOrder = 14;
             Color c = Color.Lerp(dark, bright, Random.value);
             sr.color = c;
 
-            Vector2 d = (bias * 0.8f + Random.insideUnitCircle.normalized * 0.7f + Vector2.up * 0.35f).normalized;
-            positions[i] = Random.insideUnitCircle * 0.1f;
-            velocities[i] = d * Random.Range(3.5f, 9.5f);
-            drops[i] = g.transform;
+            Vector2 d = (bias * 0.75f + Random.insideUnitCircle.normalized * 0.85f + Vector2.up * 0.45f).normalized;
+            positions[i] = Random.insideUnitCircle * 0.14f;
+            velocities[i] = d * Random.Range(4.0f, 11.5f);
+            angularSpeeds[i] = 0f;
+            pieces[i] = g.transform;
             renderers[i] = sr;
             baseColors[i] = c;
         }
     }
 
+    /// <summary>
+    /// Mode 2: Shattering Corpse Chunks (slices the corpse sprite into spinning flying fragments + small blood sparks).
+    /// </summary>
+    public void InitializeChunkShatter(Vector2 dir, SpriteRenderer source, Color tint)
+    {
+        duration = 0.72f;
+        const int cols = 3;
+        const int rows = 2;
+        const int chunkCount = cols * rows;
+        const int extraBloodCount = 8;
+        int total = chunkCount + extraBloodCount;
+
+        AllocateArrays(total);
+        ownedSprites = new Sprite[chunkCount];
+
+        Sprite orig = source.sprite;
+        Rect r = orig.textureRect;
+        float ppu = Mathf.Max(1f, orig.pixelsPerUnit);
+        float cellW = Mathf.Max(1f, Mathf.Floor(r.width / cols));
+        float cellH = Mathf.Max(1f, Mathf.Floor(r.height / rows));
+        Vector3 worldScale = source.transform.lossyScale;
+        Vector2 bias = dir.sqrMagnitude > 0.001f ? dir.normalized : Vector2.right;
+
+        int idx = 0;
+        for (int row = 0; row < rows; row++)
+        {
+            for (int col = 0; col < cols; col++)
+            {
+                Rect subRect = new Rect(
+                    r.x + col * cellW,
+                    r.y + row * cellH,
+                    (col == cols - 1) ? Mathf.Max(1f, r.width - col * cellW) : cellW,
+                    (row == rows - 1) ? Mathf.Max(1f, r.height - row * cellH) : cellH
+                );
+                Sprite chunkSprite = Sprite.Create(orig.texture, subRect, new Vector2(0.5f, 0.5f), ppu);
+                ownedSprites[idx] = chunkSprite;
+
+                GameObject g = new GameObject($"CorpseChunk_{idx}");
+                g.transform.SetParent(transform, false);
+                g.transform.localScale = worldScale;
+
+                SpriteRenderer sr = g.AddComponent<SpriteRenderer>();
+                sr.sprite = chunkSprite;
+                sr.flipX = source.flipX;
+                sr.sortingLayerID = source.sortingLayerID;
+                sr.sortingOrder = 14;
+                Color c = tint.a > 0.1f ? tint : Color.white;
+                sr.color = c;
+
+                Vector2 scatter = (bias * 0.65f + Random.insideUnitCircle.normalized * 0.9f + Vector2.up * 0.6f).normalized;
+                positions[idx] = Random.insideUnitCircle * 0.18f;
+                velocities[idx] = scatter * Random.Range(4.5f, 10.5f);
+                angularSpeeds[idx] = Random.Range(-720f, 720f);
+                pieces[idx] = g.transform;
+                renderers[idx] = sr;
+                baseColors[idx] = c;
+                idx++;
+            }
+        }
+
+        // Mix a few small crimson droplets alongside the shattering chunks
+        Color bright = new Color(0.95f, 0.10f, 0.16f, 1f);
+        Color dark = new Color(0.55f, 0.03f, 0.07f, 1f);
+        for (int i = 0; i < extraBloodCount; i++)
+        {
+            GameObject g = new GameObject("ChunkBloodPixel");
+            g.transform.SetParent(transform, false);
+            SpriteRenderer sr = g.AddComponent<SpriteRenderer>();
+            sr.sprite = EnemyBase.GetSharedPixelBlockSprite(2);
+            sr.sortingOrder = 15;
+            Color c = Color.Lerp(dark, bright, Random.value);
+            sr.color = c;
+
+            Vector2 scatter = (bias * 0.7f + Random.insideUnitCircle.normalized * 0.85f + Vector2.up * 0.4f).normalized;
+            positions[idx] = Random.insideUnitCircle * 0.12f;
+            velocities[idx] = scatter * Random.Range(3.5f, 9.0f);
+            angularSpeeds[idx] = 0f;
+            pieces[idx] = g.transform;
+            renderers[idx] = sr;
+            baseColors[idx] = c;
+            idx++;
+        }
+    }
+
+    private void AllocateArrays(int count)
+    {
+        pieces = new Transform[count];
+        renderers = new SpriteRenderer[count];
+        positions = new Vector2[count];
+        velocities = new Vector2[count];
+        angularSpeeds = new float[count];
+        baseColors = new Color[count];
+    }
+
     private void Update()
     {
+        if (pieces == null) return;
+
         float dt = Time.deltaTime;
         elapsed += dt;
-        float alpha = 1f - EnemyBase.QuantizeStep(elapsed / Duration, 4);
+        float alpha = 1f - EnemyBase.QuantizeStep(elapsed / Mathf.Max(0.05f, duration), 4);
 
-        for (int i = 0; i < drops.Length; i++)
+        for (int i = 0; i < pieces.Length; i++)
         {
-            velocities[i].y -= 20f * dt;
+            if (pieces[i] == null) continue;
+            velocities[i].y -= 22f * dt;
             positions[i] += velocities[i] * dt;
-            drops[i].localPosition = EnemyBase.SnapToPixelGrid(positions[i]);
+            pieces[i].localPosition = EnemyBase.SnapToPixelGrid(positions[i]);
+            if (Mathf.Abs(angularSpeeds[i]) > 0.1f)
+            {
+                pieces[i].Rotate(0f, 0f, angularSpeeds[i] * dt);
+            }
+
             Color c = baseColors[i];
             c.a = alpha;
             renderers[i].color = c;
         }
 
-        if (elapsed >= Duration)
+        if (elapsed >= duration)
         {
             Destroy(gameObject);
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (ownedSprites != null)
+        {
+            for (int i = 0; i < ownedSprites.Length; i++)
+            {
+                if (ownedSprites[i] != null) Destroy(ownedSprites[i]);
+            }
         }
     }
 }

@@ -842,21 +842,29 @@ public class HealGuideBookUI : MonoBehaviour
         transitionCoroutine = null;
     }
 
-    private Vector2 SamplePlusPath(float time)
+    private bool SamplePlusPath(float time, out Vector2 pos, out int strokeIndex)
     {
         float cycle = (time * 0.55f) % 1f;
         if (cycle < 0f) cycle += 1f;
 
-        if (cycle < 0.5f)
+        if (cycle < 0.44f)
         {
-            float t = Mathf.Clamp01(cycle / 0.45f);
-            return Vector2.Lerp(PlusStrokePath[0], PlusStrokePath[1], t) * 74f;
+            strokeIndex = 0;
+            float t = Mathf.Clamp01(cycle / 0.44f);
+            pos = Vector2.Lerp(PlusStrokePath[0], PlusStrokePath[1], t) * 90f;
+            return true;
         }
-        else
+        if (cycle >= 0.50f && cycle < 0.94f)
         {
-            float t = Mathf.Clamp01((cycle - 0.5f) / 0.45f);
-            return Vector2.Lerp(PlusStrokePath[2], PlusStrokePath[3], t) * 74f;
+            strokeIndex = 1;
+            float t = Mathf.Clamp01((cycle - 0.50f) / 0.44f);
+            pos = Vector2.Lerp(PlusStrokePath[2], PlusStrokePath[3], t) * 90f;
+            return true;
         }
+
+        strokeIndex = -1;
+        pos = Vector2.zero;
+        return false;
     }
 
     private Vector2 SampleHeartPath(float time)
@@ -875,17 +883,29 @@ public class HealGuideBookUI : MonoBehaviour
     {
         if (plusGuideDot == null) return;
 
-        plusGuideDot.anchoredPosition = SamplePlusPath(strokeAnimTime);
-        float twinkle = 0.88f + Mathf.Sin(strokeAnimTime * 14f) * 0.18f;
-        plusGuideDot.localScale = new Vector3(twinkle, twinkle, 1f);
-        plusGuideDot.localRotation = Quaternion.Euler(0f, 0f, strokeAnimTime * 90f);
+        bool headVisible = SamplePlusPath(strokeAnimTime, out Vector2 headPos, out int headStroke);
+        plusGuideDot.gameObject.SetActive(headVisible);
+
+        if (headVisible)
+        {
+            plusGuideDot.anchoredPosition = headPos;
+            float twinkle = 0.88f + Mathf.Sin(strokeAnimTime * 14f) * 0.18f;
+            plusGuideDot.localScale = new Vector3(twinkle, twinkle, 1f);
+            plusGuideDot.localRotation = Quaternion.Euler(0f, 0f, strokeAnimTime * 90f);
+        }
 
         if (plusSparkleTrail != null)
         {
             for (int i = 0; i < plusSparkleTrail.Length; i++)
             {
                 if (plusSparkleTrail[i] == null) continue;
-                plusSparkleTrail[i].anchoredPosition = SamplePlusPath(strokeAnimTime - (i + 1) * 0.055f);
+                bool trailVisible = SamplePlusPath(strokeAnimTime - (i + 1) * 0.045f, out Vector2 trailPos, out int trailStroke)
+                    && (!headVisible || trailStroke == headStroke);
+                plusSparkleTrail[i].gameObject.SetActive(trailVisible);
+                if (trailVisible)
+                {
+                    plusSparkleTrail[i].anchoredPosition = trailPos;
+                }
             }
         }
     }
@@ -1214,7 +1234,7 @@ public class HealGuideBookUI : MonoBehaviour
     }
 
     /// <summary>
-    /// Plain single-color thin ink line drawing of 2 crossing lines (+).
+    /// Plain single-color thin ink line drawing of 2 crossing lines (+), aligned exactly to PlusStrokePath.
     /// </summary>
     private static Sprite BuildCrossingExampleSprite(int variant)
     {
@@ -1227,8 +1247,10 @@ public class HealGuideBookUI : MonoBehaviour
             for (int x = 0; x < s; x++)
                 tex.SetPixel(x, y, clear);
 
-        DrawPixelSegment(tex, s, new Vector2(15.5f, 4f), new Vector2(15.5f, 27f), 1.0f, inkLine, inkLine);
-        DrawPixelSegment(tex, s, new Vector2(4f, 15.5f), new Vector2(27f, 15.5f), 1.0f, inkLine, inkLine);
+        float half = (s - 1) * 0.5f;
+        float span = 10.8f; // Matches PlusStrokePath (+/- 0.68 of half-size)
+        DrawPixelSegment(tex, s, new Vector2(half, half - span), new Vector2(half, half + span), 1.05f, inkLine, inkLine);
+        DrawPixelSegment(tex, s, new Vector2(half - span, half), new Vector2(half + span, half), 1.05f, inkLine, inkLine);
 
         tex.Apply();
         return Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 16f);
