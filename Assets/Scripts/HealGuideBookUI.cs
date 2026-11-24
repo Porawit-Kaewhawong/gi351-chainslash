@@ -800,39 +800,82 @@ public class HealGuideBookUI : MonoBehaviour
         isOpen = open;
         if (bookOverlayObj != null) bookOverlayObj.SetActive(open);
         if (bookOverlayCanvasGroup != null) bookOverlayCanvasGroup.alpha = open ? 1f : 0f;
-        if (bookSpreadRect != null) bookSpreadRect.localScale = open ? Vector3.one : new Vector3(0.35f, 0.92f, 1f);
+        if (bookSpreadRect != null)
+        {
+            bookSpreadRect.localScale = open ? Vector3.one : Vector3.one * 0.22f;
+            bookSpreadRect.anchoredPosition = open ? Vector2.zero : new Vector2(0f, -48f);
+            bookSpreadRect.localRotation = Quaternion.identity;
+        }
     }
 
     private IEnumerator AnimateBookRoutine(bool opening)
     {
         if (bookOverlayObj == null || bookOverlayCanvasGroup == null || bookSpreadRect == null) yield break;
 
+        // Tactile click squish on the top-right scroll button
+        if (bookButtonRect != null)
+        {
+            bookButtonRect.localScale = new Vector3(0.84f, 0.84f, 1f);
+        }
+
         if (opening)
         {
             bookOverlayObj.SetActive(true);
+            bookSpreadRect.localScale = Vector3.one * 0.22f;
+            bookSpreadRect.anchoredPosition = new Vector2(0f, -48f);
+            bookSpreadRect.localRotation = Quaternion.Euler(0f, 0f, -3.5f);
         }
 
-        // Unfurl horizontally like an ancient scroll / tome opening
-        const float duration = 0.20f;
+        float duration = opening ? 0.28f : 0.18f;
         float elapsed = 0f;
         float startAlpha = bookOverlayCanvasGroup.alpha;
         float endAlpha = opening ? 1f : 0f;
-        Vector3 startScale = bookSpreadRect.localScale;
-        Vector3 endScale = opening ? Vector3.one : new Vector3(0.35f, 0.92f, 1f);
 
         while (elapsed < duration)
         {
             elapsed += Time.unscaledDeltaTime;
             float t = Mathf.Clamp01(elapsed / duration);
-            float ease = 1f - Mathf.Pow(1f - t, 3f);
 
-            bookOverlayCanvasGroup.alpha = Mathf.Lerp(startAlpha, endAlpha, ease);
-            bookSpreadRect.localScale = Vector3.Lerp(startScale, endScale, ease);
+            if (opening)
+            {
+                // Elastic Ease-Out Back pop-up overshoot (0.22 -> 1.08 -> 1.00)
+                const float c1 = 1.95f;
+                const float c3 = c1 + 1f;
+                float u = t - 1f;
+                float popCurve = 1f + c3 * u * u * u + c1 * u * u;
+
+                float scale = Mathf.LerpUnclamped(0.22f, 1f, popCurve);
+                float posY = Mathf.LerpUnclamped(-48f, 0f, popCurve);
+                float rotZ = Mathf.Lerp(-3.5f, 0f, 1f - Mathf.Pow(1f - t, 3f));
+
+                bookSpreadRect.localScale = new Vector3(scale, scale, 1f);
+                bookSpreadRect.anchoredPosition = new Vector2(0f, posY);
+                bookSpreadRect.localRotation = Quaternion.Euler(0f, 0f, rotZ);
+                bookOverlayCanvasGroup.alpha = Mathf.Lerp(startAlpha, endAlpha, Mathf.Clamp01(t * 1.6f));
+            }
+            else
+            {
+                // Snappy Ease-In Back pop-down (1.00 -> 1.04 -> 0.22)
+                const float c1 = 1.45f;
+                const float c3 = c1 + 1f;
+                float backIn = c3 * t * t * t - c1 * t * t;
+
+                float scale = Mathf.LerpUnclamped(1f, 0.22f, backIn);
+                float posY = Mathf.LerpUnclamped(0f, -36f, backIn);
+
+                bookSpreadRect.localScale = new Vector3(Mathf.Max(0.05f, scale), Mathf.Max(0.05f, scale), 1f);
+                bookSpreadRect.anchoredPosition = new Vector2(0f, posY);
+                bookSpreadRect.localRotation = Quaternion.identity;
+                bookOverlayCanvasGroup.alpha = Mathf.Lerp(startAlpha, endAlpha, t);
+            }
+
             yield return null;
         }
 
         bookOverlayCanvasGroup.alpha = endAlpha;
-        bookSpreadRect.localScale = endScale;
+        bookSpreadRect.localScale = opening ? Vector3.one : Vector3.one * 0.22f;
+        bookSpreadRect.anchoredPosition = opening ? Vector2.zero : new Vector2(0f, -48f);
+        bookSpreadRect.localRotation = Quaternion.identity;
 
         if (!opening)
         {
