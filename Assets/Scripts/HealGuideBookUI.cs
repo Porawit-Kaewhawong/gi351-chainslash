@@ -51,6 +51,8 @@ public class HealGuideBookUI : MonoBehaviour
     [SerializeField] private Key toggleKey = Key.B;
     [Tooltip("If true, pauses game time while reading the tome.")]
     [SerializeField] private bool pauseGameWhileReading = true;
+    [Tooltip("If false (default), resets every new game / Play session so starting a new game shows the wiggle & green aurora again until opened once.")]
+    [SerializeField] private bool saveFirstTimeState = false;
     [Tooltip("Sorting order of the overlay canvas.")]
     [SerializeField] private int canvasSortingOrder = 120;
 
@@ -80,11 +82,20 @@ public class HealGuideBookUI : MonoBehaviour
 
     #region Private UI & Animation State
 
+    private const string HasOpenedBookPrefKey = "HealGuideBook_HasOpenedOnce";
+
     private PlayerController boundPlayer;
     private AudioSource uiAudioSource;
     private Canvas rootCanvas;
     private RectTransform bookButtonRect;
     private GameObject bookButtonObj;
+    private GameObject auroraContainerObj;
+    private RectTransform auroraOuterRect;
+    private RectTransform auroraInnerRect;
+    private Image auroraOuterImg;
+    private Image auroraInnerImg;
+    private RectTransform[] auroraWisps;
+    private Image[] auroraWispImages;
     private GameObject bookOverlayObj;
     private CanvasGroup bookOverlayCanvasGroup;
     private RectTransform bookSpreadRect;
@@ -97,7 +108,9 @@ public class HealGuideBookUI : MonoBehaviour
     private RectTransform[] heartSparkleTrail;
 
     private bool isOpen;
+    private bool hasBeenOpenedOnce;
     private bool isHoveringToggleButton;
+    private float attentionAnimTime;
     private float savedTimeScale = 1f;
     private float savedFixedDeltaTime = 0.02f;
     private float strokeAnimTime;
@@ -111,6 +124,7 @@ public class HealGuideBookUI : MonoBehaviour
     private static Sprite cachedHeartDiagramSprite;
     private static Sprite cachedWhitePixelSprite;
     private static Sprite cachedGlowDotSprite;
+    private static Sprite cachedAuroraGlowSprite;
     private static AudioClip cachedScrollOpenClip;
     private static AudioClip cachedScrollCloseClip;
 
@@ -151,10 +165,22 @@ public class HealGuideBookUI : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
+        hasBeenOpenedOnce = saveFirstTimeState && PlayerPrefs.GetInt(HasOpenedBookPrefKey, 0) == 1;
+
         EnsureProceduralSprites();
         EnsureAudioSource();
         BuildUI();
         SetBookImmediate(false);
+        SetAuroraActive(!hasBeenOpenedOnce);
+    }
+
+    [ContextMenu("Reset First-Time Book Attention")]
+    public void ResetFirstTimeAttention()
+    {
+        PlayerPrefs.DeleteKey(HasOpenedBookPrefKey);
+        hasBeenOpenedOnce = false;
+        attentionAnimTime = 0f;
+        SetAuroraActive(true);
     }
 
     private void OnEnable()
@@ -190,10 +216,18 @@ public class HealGuideBookUI : MonoBehaviour
         if (isMenuScene)
         {
             if (rootCanvas != null) rootCanvas.enabled = false;
+
+            // Reset attention state on Main Menu so starting a New Game shows the wiggle & green aurora again
+            if (!saveFirstTimeState)
+            {
+                hasBeenOpenedOnce = false;
+                attentionAnimTime = 0f;
+            }
         }
         else
         {
             if (rootCanvas != null) rootCanvas.enabled = true;
+            SetAuroraActive(!hasBeenOpenedOnce);
             BindPlayer(PlayerController.Instance);
             RefreshStatsText();
         }
@@ -205,9 +239,34 @@ public class HealGuideBookUI : MonoBehaviour
 
         if (bookButtonRect != null)
         {
-            float targetScale = isHoveringToggleButton ? 1.10f : 1.0f;
+            float baseTargetScale = isHoveringToggleButton ? 1.10f : 1.0f;
+            float wiggleScaleBoost = 0f;
+            float targetRotZ = 0f;
+
+            // First-time attention wiggle + waving green Aurora glow until the player opens the book once
+            if (!hasBeenOpenedOnce && !isOpen)
+            {
+                attentionAnimTime += Time.unscaledDeltaTime;
+
+                // Periodic playful wiggle burst every ~1.85 seconds
+                float cycle = attentionAnimTime % 1.85f;
+                if (cycle < 0.62f)
+                {
+                    float burstT = cycle / 0.62f;
+                    float env = Mathf.Sin(burstT * Mathf.PI);
+                    targetRotZ = Mathf.Sin(burstT * Mathf.PI * 5f) * 11f * env;
+                    wiggleScaleBoost = 0.08f * env;
+                }
+
+                UpdateGreenAuroraEffect();
+            }
+
+            float targetScale = baseTargetScale + wiggleScaleBoost;
             float s = Mathf.Lerp(bookButtonRect.localScale.x, targetScale, Time.unscaledDeltaTime * 14f);
             bookButtonRect.localScale = new Vector3(s, s, 1f);
+
+            Quaternion desiredRot = Quaternion.Euler(0f, 0f, targetRotZ);
+            bookButtonRect.localRotation = Quaternion.Lerp(bookButtonRect.localRotation, desiredRot, Time.unscaledDeltaTime * 18f);
         }
 
         if (Keyboard.current != null)
@@ -254,6 +313,22 @@ public class HealGuideBookUI : MonoBehaviour
         if (isOpen) return;
         isOpen = true;
         strokeAnimTime = 0f;
+
+        // Mark first-time guide book as read so attention wiggle & green aurora disappear after reading
+        if (!hasBeenOpenedOnce)
+        {
+            hasBeenOpenedOnce = true;
+            if (saveFirstTimeState)
+            {
+                PlayerPrefs.SetInt(HasOpenedBookPrefKey, 1);
+                PlayerPrefs.Save();
+            }
+            SetAuroraActive(false);
+            if (bookButtonRect != null)
+            {
+                bookButtonRect.localRotation = Quaternion.identity;
+            }
+        }
 
         RefreshStatsText();
 
@@ -401,12 +476,20 @@ public class HealGuideBookUI : MonoBehaviour
         bookButtonObj = new GameObject("TopRightAncientScrollButton");
         bookButtonObj.transform.SetParent(parent, false);
 
+        // Center the pivot so wiggle rotation & scale pop happen cleanly around the book's center
         bookButtonRect = bookButtonObj.AddComponent<RectTransform>();
         bookButtonRect.anchorMin = new Vector2(1f, 1f);
         bookButtonRect.anchorMax = new Vector2(1f, 1f);
-        bookButtonRect.pivot = new Vector2(1f, 1f);
-        bookButtonRect.anchoredPosition = new Vector2(-buttonTopRightMargin.x, -buttonTopRightMargin.y);
+        bookButtonRect.pivot = new Vector2(0.5f, 0.5f);
+        bookButtonRect.anchoredPosition = new Vector2(
+            -(buttonTopRightMargin.x + buttonSize.x * 0.5f),
+            -(buttonTopRightMargin.y + buttonSize.y * 0.5f)
+        );
         bookButtonRect.sizeDelta = buttonSize;
+
+        // Green Aurora aura effect behind the button (visible only until the player opens the book once)
+        BuildGreenAuroraAroundButton(parent, bookButtonRect.anchoredPosition);
+        bookButtonObj.transform.SetAsLastSibling();
 
         // Dark lacquer backing with antique gold border
         Image bg = bookButtonObj.AddComponent<Image>();
@@ -458,6 +541,129 @@ public class HealGuideBookUI : MonoBehaviour
         EventTrigger.Entry exitEntry = new EventTrigger.Entry { eventID = EventTriggerType.PointerExit };
         exitEntry.callback.AddListener(_ => isHoveringToggleButton = false);
         trigger.triggers.Add(exitEntry);
+    }
+
+    private void BuildGreenAuroraAroundButton(Transform canvasParent, Vector2 centerPos)
+    {
+        auroraContainerObj = new GameObject("FirstTimeGreenAurora");
+        auroraContainerObj.transform.SetParent(canvasParent, false);
+        RectTransform containerRect = auroraContainerObj.AddComponent<RectTransform>();
+        containerRect.anchorMin = new Vector2(1f, 1f);
+        containerRect.anchorMax = new Vector2(1f, 1f);
+        containerRect.pivot = new Vector2(0.5f, 0.5f);
+        containerRect.anchoredPosition = centerPos;
+        containerRect.sizeDelta = new Vector2(190f, 190f);
+
+        // Outer flowing emerald-teal aurora curtain
+        GameObject outerObj = new GameObject("AuroraOuterWave");
+        outerObj.transform.SetParent(auroraContainerObj.transform, false);
+        auroraOuterRect = outerObj.AddComponent<RectTransform>();
+        auroraOuterRect.anchorMin = new Vector2(0.5f, 0.5f);
+        auroraOuterRect.anchorMax = new Vector2(0.5f, 0.5f);
+        auroraOuterRect.sizeDelta = new Vector2(178f, 162f);
+        auroraOuterImg = outerObj.AddComponent<Image>();
+        auroraOuterImg.sprite = cachedAuroraGlowSprite;
+        auroraOuterImg.color = new Color(0.12f, 0.96f, 0.56f, 0.55f);
+        auroraOuterImg.raycastTarget = false;
+
+        // Inner shimmering mint-cyan aurora core
+        GameObject innerObj = new GameObject("AuroraInnerWave");
+        innerObj.transform.SetParent(auroraContainerObj.transform, false);
+        auroraInnerRect = innerObj.AddComponent<RectTransform>();
+        auroraInnerRect.anchorMin = new Vector2(0.5f, 0.5f);
+        auroraInnerRect.anchorMax = new Vector2(0.5f, 0.5f);
+        auroraInnerRect.sizeDelta = new Vector2(142f, 152f);
+        auroraInnerImg = innerObj.AddComponent<Image>();
+        auroraInnerImg.sprite = cachedAuroraGlowSprite;
+        auroraInnerImg.color = new Color(0.38f, 1.0f, 0.78f, 0.65f);
+        auroraInnerImg.raycastTarget = false;
+
+        // 4 floating green aurora sparkle wisps orbiting the scroll button
+        const int wispCount = 4;
+        auroraWisps = new RectTransform[wispCount];
+        auroraWispImages = new Image[wispCount];
+        for (int i = 0; i < wispCount; i++)
+        {
+            GameObject wispObj = new GameObject($"AuroraWisp_{i}");
+            wispObj.transform.SetParent(auroraContainerObj.transform, false);
+            RectTransform rt = wispObj.AddComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(14f, 14f);
+
+            Image img = wispObj.AddComponent<Image>();
+            img.sprite = cachedGlowDotSprite;
+            img.color = new Color(0.45f, 1.0f, 0.70f, 0.85f);
+            img.raycastTarget = false;
+
+            auroraWisps[i] = rt;
+            auroraWispImages[i] = img;
+        }
+    }
+
+    private void SetAuroraActive(bool active)
+    {
+        if (auroraContainerObj != null)
+        {
+            auroraContainerObj.SetActive(active);
+        }
+    }
+
+    private void UpdateGreenAuroraEffect()
+    {
+        if (auroraContainerObj == null || !auroraContainerObj.activeSelf) return;
+
+        float t = attentionAnimTime;
+
+        // Shifting northern-lights green/emerald/cyan palette
+        Color emerald = new Color(0.10f, 0.95f, 0.45f, 1f);
+        Color auroraTeal = new Color(0.18f, 1.00f, 0.78f, 1f);
+        Color mintGlow = new Color(0.55f, 1.00f, 0.68f, 1f);
+
+        if (auroraOuterRect != null && auroraOuterImg != null)
+        {
+            float sx = 1.0f + Mathf.Sin(t * 2.3f) * 0.14f;
+            float sy = 1.0f + Mathf.Cos(t * 1.9f) * 0.16f;
+            auroraOuterRect.localScale = new Vector3(sx, sy, 1f);
+            auroraOuterRect.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(t * 1.1f) * 18f);
+
+            Color c = Color.Lerp(emerald, auroraTeal, 0.5f + 0.5f * Mathf.Sin(t * 2.1f));
+            c.a = 0.42f + 0.18f * Mathf.Sin(t * 3.0f);
+            auroraOuterImg.color = c;
+        }
+
+        if (auroraInnerRect != null && auroraInnerImg != null)
+        {
+            float sx = 1.0f + Mathf.Cos(t * 2.8f) * 0.12f;
+            float sy = 1.0f + Mathf.Sin(t * 2.5f) * 0.14f;
+            auroraInnerRect.localScale = new Vector3(sx, sy, 1f);
+            auroraInnerRect.localRotation = Quaternion.Euler(0f, 0f, -Mathf.Cos(t * 1.4f) * 22f);
+
+            Color c = Color.Lerp(auroraTeal, mintGlow, 0.5f + 0.5f * Mathf.Cos(t * 2.7f));
+            c.a = 0.48f + 0.22f * Mathf.Cos(t * 3.4f);
+            auroraInnerImg.color = c;
+        }
+
+        if (auroraWisps != null)
+        {
+            for (int i = 0; i < auroraWisps.Length; i++)
+            {
+                if (auroraWisps[i] == null) continue;
+                float angle = t * 1.45f + (i * Mathf.PI * 0.5f);
+                float radiusX = 56f + Mathf.Sin(t * 2.6f + i) * 8f;
+                float radiusY = 58f + Mathf.Cos(t * 2.2f + i) * 8f;
+                auroraWisps[i].anchoredPosition = new Vector2(Mathf.Cos(angle) * radiusX, Mathf.Sin(angle) * radiusY);
+
+                float twinkle = 0.65f + 0.45f * Mathf.Sin(t * 6.5f + i * 1.7f);
+                auroraWisps[i].localScale = new Vector3(twinkle, twinkle, 1f);
+                if (auroraWispImages[i] != null)
+                {
+                    Color wc = Color.Lerp(emerald, mintGlow, 0.5f + 0.5f * Mathf.Sin(t * 3f + i));
+                    wc.a = 0.45f + 0.45f * Mathf.Sin(t * 4.5f + i * 1.3f);
+                    auroraWispImages[i].color = wc;
+                }
+            }
+        }
     }
 
     private void BuildAncientTwoPageTome(Transform parent)
@@ -1055,6 +1261,40 @@ public class HealGuideBookUI : MonoBehaviour
         return trail;
     }
 
+    private TMP_FontAsset ResolveBookFont()
+    {
+        if (customFont != null) return customFont;
+
+        TMP_Text[] existingTexts = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < existingTexts.Length; i++)
+        {
+            if (existingTexts[i] != null && existingTexts[i].font != null &&
+                existingTexts[i].font.name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                customFont = existingTexts[i].font;
+                return customFont;
+            }
+        }
+
+        TMP_FontAsset[] loadedFonts = Resources.FindObjectsOfTypeAll<TMP_FontAsset>();
+        for (int i = 0; i < loadedFonts.Length; i++)
+        {
+            if (loadedFonts[i] != null &&
+                loadedFonts[i].name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                customFont = loadedFonts[i];
+                return customFont;
+            }
+        }
+
+#if UNITY_EDITOR
+        customFont = UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
+            "Assets/Fonts/PixelifySans-VariableFont_wght SDF.asset"
+        );
+#endif
+        return customFont;
+    }
+
     private TMP_Text CreateTMPText(
         Transform parent,
         string name,
@@ -1067,7 +1307,8 @@ public class HealGuideBookUI : MonoBehaviour
         GameObject obj = new GameObject(name);
         obj.transform.SetParent(parent, false);
         TextMeshProUGUI tmp = obj.AddComponent<TextMeshProUGUI>();
-        if (customFont != null) tmp.font = customFont;
+        TMP_FontAsset resolvedFont = ResolveBookFont();
+        if (resolvedFont != null) tmp.font = resolvedFont;
         tmp.text = content;
         tmp.fontSize = fontSize;
         tmp.color = color;
@@ -1135,6 +1376,30 @@ public class HealGuideBookUI : MonoBehaviour
             }
             tex.Apply();
             cachedGlowDotSprite = Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 16f);
+        }
+
+        if (cachedAuroraGlowSprite == null)
+        {
+            // Soft 32x32 radial aurora glow with wavy organic intensity falloff
+            const int s = 32;
+            Texture2D tex = new Texture2D(s, s, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+            float half = (s - 1) * 0.5f;
+            for (int y = 0; y < s; y++)
+            {
+                for (int x = 0; x < s; x++)
+                {
+                    float dx = (x - half) / half;
+                    float dy = (y - half) / half;
+                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                    float angle = Mathf.Atan2(dy, dx);
+                    float ribbonWave = 0.86f + 0.14f * Mathf.Sin(angle * 3f + dist * 4f);
+                    float radial = Mathf.Clamp01(1f - dist);
+                    float alpha = Mathf.Pow(radial, 1.85f) * ribbonWave;
+                    tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+                }
+            }
+            tex.Apply();
+            cachedAuroraGlowSprite = Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 16f);
         }
 
         if (cachedScrollIconSprite == null) cachedScrollIconSprite = BuildAncientScrollIconSprite();

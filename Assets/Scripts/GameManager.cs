@@ -1,6 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 public class GameManager : MonoBehaviour
 {
@@ -76,6 +79,20 @@ public class GameManager : MonoBehaviour
 
     [Header("Spawn Validation")]
     [SerializeField] private Vector2 checkExtent = new Vector2(0.8f, 0.8f);
+
+    [Header("Stage 2 Clear Player Dialogue")]
+    [SerializeField] private string stage2FirstLine = "At last...";
+    [SerializeField] private string stage2SecondLine = "Is it over?";
+    [Tooltip("Custom TMP Font Asset (auto-loads PixelifySans SDF if left empty).")]
+    [SerializeField] private TMP_FontAsset dialogueFontAsset;
+    [SerializeField] private float dialogueFadeInDuration = 0.35f;
+    [SerializeField] private float dialogueFadeOutDuration = 0.40f;
+    [SerializeField] private float firstLineHoldDuration = 1.4f;
+    [SerializeField] private float secondLineHoldDuration = 1.9f;
+    [SerializeField] private float delayBetweenLines = 0.25f;
+    [SerializeField] private float dialogueHeightAbovePlayer = 1.65f;
+    [Tooltip("Optional custom sigh SFX (auto-synthesizes a soft breath exhale sound if empty).")]
+    [SerializeField] private AudioClip playerSighSFX;
 
     #endregion
 
@@ -218,6 +235,342 @@ public class GameManager : MonoBehaviour
         Debug.Log($"All {totalWaves} waves completed!");
 
         SpawnNextLevelPortal();
+
+        // Only play this dialogue in Stage 2 after all enemies are defeated
+        if (SceneManager.GetActiveScene().name.Equals("Stage2", System.StringComparison.OrdinalIgnoreCase))
+        {
+            StartCoroutine(PlayStage2ClearDialogueRoutine());
+        }
+    }
+
+    private IEnumerator PlayStage2ClearDialogueRoutine()
+    {
+        EnsurePlayerReference();
+        if (player == null) yield break;
+
+        yield return new WaitForSeconds(0.35f);
+
+        GameObject canvasObj = new GameObject("Stage2ClearDialogueCanvas");
+        Canvas canvas = canvasObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.WorldSpace;
+        canvas.sortingOrder = 50;
+
+        CanvasGroup cg = canvasObj.AddComponent<CanvasGroup>();
+        cg.alpha = 0f;
+
+        RectTransform canvasRect = canvasObj.GetComponent<RectTransform>();
+        canvasRect.sizeDelta = new Vector2(360f, 90f);
+        canvasRect.localScale = Vector3.one * 0.012f;
+
+        // Container for pop animation (no black background box)
+        GameObject bgObj = new GameObject("DialogueContainer");
+        bgObj.transform.SetParent(canvasObj.transform, false);
+        RectTransform bgRect = bgObj.AddComponent<RectTransform>();
+        bgRect.anchorMin = new Vector2(0.5f, 0.5f);
+        bgRect.anchorMax = new Vector2(0.5f, 0.5f);
+        bgRect.sizeDelta = new Vector2(360f, 70f);
+
+        GameObject textObj = new GameObject("DialogueText");
+        textObj.transform.SetParent(bgObj.transform, false);
+        RectTransform textRect = textObj.AddComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = Vector2.zero;
+        textRect.offsetMax = Vector2.zero;
+
+        TextMeshProUGUI tmp = textObj.AddComponent<TextMeshProUGUI>();
+        TMP_FontAsset resolvedFont = ResolveDialogueFont();
+        if (resolvedFont != null)
+        {
+            tmp.font = resolvedFont;
+        }
+        tmp.fontSize = 36f;
+        tmp.fontStyle = FontStyles.Bold;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.color = Color.white;
+        tmp.outlineWidth = 0.2f;
+        tmp.outlineColor = new Color32(0, 0, 0, 220);
+        tmp.raycastTarget = false;
+
+        // 1. "At last..." + Stage 2 exclusive Player Sigh VFX & SFX -> Fade In -> Hold -> Fade Out
+        TriggerPlayerSighEffect();
+        yield return StartCoroutine(ShowDialogueLineRoutine(
+            canvasRect, bgRect, cg, tmp,
+            stage2FirstLine,
+            firstLineHoldDuration,
+            false
+        ));
+
+        float pauseElapsed = 0f;
+        while (pauseElapsed < delayBetweenLines)
+        {
+            pauseElapsed += Time.deltaTime;
+            UpdateDialogueFollowPosition(canvasRect, 0f);
+            yield return null;
+        }
+
+        // 2. "Is it over?" -> Pop + Fade In -> Hold -> Fade Out
+        yield return StartCoroutine(ShowDialogueLineRoutine(
+            canvasRect, bgRect, cg, tmp,
+            stage2SecondLine,
+            secondLineHoldDuration,
+            true
+        ));
+
+        Destroy(canvasObj);
+    }
+
+    private IEnumerator ShowDialogueLineRoutine(
+        RectTransform canvasRect,
+        RectTransform bgRect,
+        CanvasGroup cg,
+        TMP_Text textComp,
+        string line,
+        float holdDuration,
+        bool popOnEnter)
+    {
+        if (textComp == null || cg == null || canvasRect == null) yield break;
+
+        textComp.text = line;
+        if (bgRect != null)
+        {
+            float pillWidth = Mathf.Clamp(line.Length * 18f + 72f, 170f, 340f);
+            bgRect.sizeDelta = new Vector2(pillWidth, 60f);
+        }
+
+        // Fade In (with pop bounce for second line)
+        float elapsed = 0f;
+        float fadeIn = Mathf.Max(0.05f, dialogueFadeInDuration);
+        while (elapsed < fadeIn)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / fadeIn);
+            cg.alpha = t;
+
+            if (popOnEnter && bgRect != null)
+            {
+                const float c1 = 1.7f;
+                const float c3 = c1 + 1f;
+                float u = t - 1f;
+                float pop = 1f + c3 * u * u * u + c1 * u * u;
+                float s = Mathf.LerpUnclamped(0.6f, 1f, pop);
+                bgRect.localScale = new Vector3(s, s, 1f);
+            }
+            else if (bgRect != null)
+            {
+                bgRect.localScale = Vector3.one;
+            }
+
+            UpdateDialogueFollowPosition(canvasRect, (1f - t) * -0.15f);
+            yield return null;
+        }
+
+        cg.alpha = 1f;
+        if (bgRect != null) bgRect.localScale = Vector3.one;
+
+        // Hold visible above the player
+        float holdElapsed = 0f;
+        while (holdElapsed < holdDuration)
+        {
+            holdElapsed += Time.deltaTime;
+            float bob = Mathf.Sin(holdElapsed * 3.5f) * 0.04f;
+            UpdateDialogueFollowPosition(canvasRect, bob);
+            yield return null;
+        }
+
+        // Fade Out
+        elapsed = 0f;
+        float fadeOut = Mathf.Max(0.05f, dialogueFadeOutDuration);
+        while (elapsed < fadeOut)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / fadeOut);
+            cg.alpha = 1f - t;
+            UpdateDialogueFollowPosition(canvasRect, t * 0.18f);
+            yield return null;
+        }
+
+        cg.alpha = 0f;
+    }
+
+    private TMP_FontAsset ResolveDialogueFont()
+    {
+        if (dialogueFontAsset != null) return dialogueFontAsset;
+
+        // 1. Reuse PixelifySans SDF from any existing TMP_Text in the scene/memory
+        TMP_Text[] existingTexts = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < existingTexts.Length; i++)
+        {
+            if (existingTexts[i] != null && existingTexts[i].font != null &&
+                existingTexts[i].font.name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                dialogueFontAsset = existingTexts[i].font;
+                return dialogueFontAsset;
+            }
+        }
+
+        // 2. Fallback: find loaded PixelifySans SDF asset in memory
+        TMP_FontAsset[] loadedFonts = Resources.FindObjectsOfTypeAll<TMP_FontAsset>();
+        for (int i = 0; i < loadedFonts.Length; i++)
+        {
+            if (loadedFonts[i] != null &&
+                loadedFonts[i].name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                dialogueFontAsset = loadedFonts[i];
+                return dialogueFontAsset;
+            }
+        }
+
+#if UNITY_EDITOR
+        // 3. Editor fallback: load the project's PixelifySans SDF directly from Assets/Fonts
+        dialogueFontAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
+            "Assets/Fonts/PixelifySans-VariableFont_wght SDF.asset"
+        );
+#endif
+        return dialogueFontAsset;
+    }
+
+    private void UpdateDialogueFollowPosition(RectTransform canvasRect, float extraOffsetY)
+    {
+        if (canvasRect == null) return;
+        EnsurePlayerReference();
+        if (player == null) return;
+
+        Vector3 p = player.transform.position;
+        canvasRect.position = new Vector3(p.x, p.y + dialogueHeightAbovePlayer + extraOffsetY, 0f);
+    }
+
+    private static AudioClip cachedProceduralSighClip;
+
+    private void TriggerPlayerSighEffect()
+    {
+        EnsurePlayerReference();
+        if (player == null) return;
+
+        if (cachedProceduralSighClip == null)
+        {
+            cachedProceduralSighClip = BuildProceduralSighSFX();
+        }
+        AudioClip clip = playerSighSFX != null ? playerSighSFX : cachedProceduralSighClip;
+        if (clip != null)
+        {
+            player.PlayPitchedSFX(clip, 1f, 0.75f);
+        }
+
+        StartCoroutine(PlayerSighBreathVFXRoutine());
+    }
+
+    private IEnumerator PlayerSighBreathVFXRoutine()
+    {
+        if (player == null) yield break;
+
+        SpriteRenderer playerSR = player.MainSpriteRenderer;
+        Transform spriteTr = playerSR != null ? playerSR.transform : null;
+        Vector3 origScale = spriteTr != null ? spriteTr.localScale : Vector3.one;
+
+        const int puffCount = 7;
+        for (int i = 0; i < puffCount; i++)
+        {
+            if (player == null) yield break;
+
+            float facingDir = (playerSR != null && playerSR.flipX) ? -1f : 1f;
+            Vector3 mouthPos = player.transform.position + new Vector3(facingDir * 0.34f, 0.42f, 0f);
+            SpawnSingleBreathPuff(mouthPos, facingDir, playerSR != null ? playerSR.sortingOrder + 2 : 12);
+
+            if (spriteTr != null)
+            {
+                float progress = (float)i / (puffCount - 1);
+                float squashY = 1f - Mathf.Sin(progress * Mathf.PI) * 0.08f;
+                spriteTr.localScale = new Vector3(origScale.x, origScale.y * squashY, origScale.z);
+            }
+
+            yield return new WaitForSeconds(0.075f);
+        }
+
+        if (spriteTr != null)
+        {
+            spriteTr.localScale = origScale;
+        }
+    }
+
+    private void SpawnSingleBreathPuff(Vector3 startPos, float facingDir, int sortingOrder)
+    {
+        GameObject puff = new GameObject("PlayerSighBreathPuff");
+        puff.transform.position = startPos;
+        puff.transform.localScale = Vector3.one * Random.Range(0.8f, 1.2f);
+
+        SpriteRenderer sr = puff.AddComponent<SpriteRenderer>();
+        sr.sprite = EnemyBase.GetSharedPixelBlockSprite(3);
+        sr.sortingOrder = sortingOrder;
+        sr.color = new Color(0.92f, 0.96f, 1f, 0.72f);
+
+        StartCoroutine(AnimateBreathPuffRoutine(puff, sr, facingDir));
+    }
+
+    private static IEnumerator AnimateBreathPuffRoutine(GameObject puff, SpriteRenderer sr, float facingDir)
+    {
+        Vector2 velocity = new Vector2(facingDir * Random.Range(1.0f, 1.8f), Random.Range(0.15f, 0.45f));
+        Vector3 startScale = puff.transform.localScale;
+        float duration = Random.Range(0.65f, 0.95f);
+        float elapsed = 0f;
+
+        while (elapsed < duration && puff != null)
+        {
+            float dt = Time.deltaTime;
+            elapsed += dt;
+            float t = Mathf.Clamp01(elapsed / duration);
+
+            velocity.x *= Mathf.Clamp01(1f - 2.4f * dt);
+            velocity.y += 0.55f * dt;
+            puff.transform.position += (Vector3)(velocity * dt);
+            puff.transform.localScale = Vector3.Lerp(startScale, startScale * 1.9f, t);
+
+            if (sr != null)
+            {
+                float alpha = (1f - t) * 0.68f;
+                sr.color = new Color(0.92f, 0.96f, 1f, alpha);
+            }
+
+            yield return null;
+        }
+
+        if (puff != null)
+        {
+            Destroy(puff);
+        }
+    }
+
+    private static AudioClip BuildProceduralSighSFX()
+    {
+        const int sampleRate = 22050;
+        const float duration = 0.62f;
+        int sampleCount = Mathf.RoundToInt(sampleRate * duration);
+        float[] samples = new float[sampleCount];
+
+        uint seed = 0x42A17Fu;
+        float lp1 = 0f;
+        float lp2 = 0f;
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = (float)i / sampleCount;
+            seed = seed * 1664525u + 1013904223u;
+            float white = ((seed & 0xFFFF) / 32767.5f) - 1f;
+
+            float hiCut = Mathf.Lerp(0.24f, 0.08f, t);
+            float loCut = Mathf.Lerp(0.05f, 0.015f, t);
+            lp1 += (white - lp1) * hiCut;
+            lp2 += (white - lp2) * loCut;
+            float breath = lp1 - lp2;
+
+            float attack = Mathf.Clamp01(t / 0.16f);
+            float release = Mathf.Pow(1f - t, 1.35f);
+            samples[i] = Mathf.Clamp(breath * attack * release * 1.6f, -0.8f, 0.8f);
+        }
+
+        AudioClip clip = AudioClip.Create("PlayerSighSFX", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
     }
 
     /// <summary>
