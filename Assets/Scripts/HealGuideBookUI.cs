@@ -120,7 +120,7 @@ public class HealGuideBookUI : MonoBehaviour
     private static Sprite cachedScrollIconSprite;
     private static Sprite cachedParchmentSprite;
     private static Sprite cachedRedSealSprite;
-    private static Sprite[] cachedCrossExampleSprites;
+    private static Sprite cachedPlusDiagramSprite;
     private static Sprite cachedHeartDiagramSprite;
     private static Sprite cachedWhitePixelSprite;
     private static Sprite cachedGlowDotSprite;
@@ -830,7 +830,7 @@ public class HealGuideBookUI : MonoBehaviour
         RectTransform diagRect = diagramObj.AddComponent<RectTransform>();
         SetAnchoredBox(diagRect, new Vector2(0.5f, 0.55f), Vector2.zero, new Vector2(180f, 180f));
         Image diagImg = diagramObj.AddComponent<Image>();
-        diagImg.sprite = cachedCrossExampleSprites[0];
+        diagImg.sprite = cachedPlusDiagramSprite;
         diagImg.preserveAspect = true;
         diagImg.raycastTarget = false;
 
@@ -983,6 +983,12 @@ public class HealGuideBookUI : MonoBehaviour
         img.raycastTarget = false;
     }
 
+    private static string WrapNumbersWithNormalFont(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return input;
+        return System.Text.RegularExpressions.Regex.Replace(input, @"\d+", "<font=\"LiberationSans SDF\">$0</font>");
+    }
+
     private void RefreshStatsText()
     {
         float plusHeal = boundPlayer != null ? boundPlayer.PlusHealAmount : 25f;
@@ -992,11 +998,11 @@ public class HealGuideBookUI : MonoBehaviour
 
         if (leftStatsText != null)
         {
-            leftStatsText.text = $"+{Mathf.RoundToInt(plusHeal)} HP   •   {Mathf.RoundToInt(plusCost)} METER";
+            leftStatsText.text = WrapNumbersWithNormalFont($"+{Mathf.RoundToInt(plusHeal)} HP   •   {Mathf.RoundToInt(plusCost)} METER");
         }
         if (rightStatsText != null)
         {
-            rightStatsText.text = $"+{Mathf.RoundToInt(heartHeal)} HP   •   {Mathf.RoundToInt(heartCost)} METER";
+            rightStatsText.text = WrapNumbersWithNormalFont($"+{Mathf.RoundToInt(heartHeal)} HP   •   {Mathf.RoundToInt(heartCost)} METER");
         }
     }
 
@@ -1305,7 +1311,7 @@ public class HealGuideBookUI : MonoBehaviour
         TextMeshProUGUI tmp = obj.AddComponent<TextMeshProUGUI>();
         TMP_FontAsset resolvedFont = ResolveBookFont();
         if (resolvedFont != null) tmp.font = resolvedFont;
-        tmp.text = content;
+        tmp.text = WrapNumbersWithNormalFont(content);
         tmp.fontSize = fontSize;
         tmp.color = color;
         tmp.alignment = alignment;
@@ -1398,18 +1404,11 @@ public class HealGuideBookUI : MonoBehaviour
             cachedAuroraGlowSprite = Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 16f);
         }
 
-        if (cachedScrollIconSprite == null) cachedScrollIconSprite = BuildAncientScrollIconSprite();
-        if (cachedParchmentSprite == null) cachedParchmentSprite = BuildWeatheredParchmentSprite();
-        if (cachedRedSealSprite == null) cachedRedSealSprite = BuildRedSealSprite();
-        if (cachedCrossExampleSprites == null || cachedCrossExampleSprites.Length < 5)
-        {
-            cachedCrossExampleSprites = new Sprite[5];
-            for (int i = 0; i < 5; i++)
-            {
-                cachedCrossExampleSprites[i] = BuildCrossingExampleSprite(i);
-            }
-        }
-        if (cachedHeartDiagramSprite == null) cachedHeartDiagramSprite = BuildHeartDiagramSprite();
+        if (cachedScrollIconSprite == null || cachedScrollIconSprite.texture == null) cachedScrollIconSprite = BuildAncientScrollIconSprite();
+        if (cachedParchmentSprite == null || cachedParchmentSprite.texture == null) cachedParchmentSprite = BuildWeatheredParchmentSprite();
+        if (cachedRedSealSprite == null || cachedRedSealSprite.texture == null) cachedRedSealSprite = BuildRedSealSprite();
+        if (cachedPlusDiagramSprite == null || cachedPlusDiagramSprite.texture == null) cachedPlusDiagramSprite = BuildPlusLineSprite();
+        if (cachedHeartDiagramSprite == null || cachedHeartDiagramSprite.texture == null) cachedHeartDiagramSprite = BuildHeartDiagramSprite();
     }
 
     /// <summary>
@@ -1540,7 +1539,7 @@ public class HealGuideBookUI : MonoBehaviour
     /// <summary>
     /// Plain single-color thin ink line drawing of 2 crossing lines (+), aligned exactly to PlusStrokePath.
     /// </summary>
-    private static Sprite BuildCrossingExampleSprite(int variant)
+    private static Sprite BuildPlusLineSprite()
     {
         const int s = 32;
         Texture2D tex = new Texture2D(s, s, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point };

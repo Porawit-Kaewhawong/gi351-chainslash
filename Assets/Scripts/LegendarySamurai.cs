@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Cinemachine;
 using UnityEngine;
 using UnityEngine.Events;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
 
@@ -145,6 +147,23 @@ public class LegendarySamurai : EnemyBase
     [Header("Visual Dynamic Boss Healthbar")]
     [Tooltip("Reference to custom BossHealthBarUI. If left empty, automatically searches the scene.")]
     [SerializeField] private BossHealthBarUI bossHealthBarUI;
+
+    [Header("Stage 5 Boss Intro Cutscene (Staredown)")]
+    [Tooltip("If true, plays a dramatic staredown camera pan cutscene between Player and Boss before the fight begins.")]
+    [SerializeField] private bool enableIntroCutscene = true;
+    [SerializeField] private string cutsceneTitleText = "LEGENDARY SAMURAI";
+    [SerializeField] private string cutsceneSubtitleText = "~ FINAL SHOWDOWN ~";
+    [SerializeField] private string cutsceneBossDialogue = "Today is your last day";
+    [SerializeField] private string cutscenePlayerDialogue = "I've come to end this";
+    [SerializeField] private Color bossDialogueColor = new Color(0.96f, 0.22f, 0.24f, 1f);
+    [SerializeField] private Color playerDialogueColor = Color.white;
+    [SerializeField] private float playerCloseUpDuration = 1.15f;
+    [SerializeField] private float panToBossDuration = 1.65f;
+    [SerializeField] private float bossCloseUpDuration = 2.25f;
+    [SerializeField] private float wideStaredownDuration = 2.15f;
+    [SerializeField] private float closeUpZoomMultiplier = 0.72f;
+    [SerializeField] private float wideShotZoomMultiplier = 1.15f;
+    [SerializeField] private float letterboxBarHeight = 195f;
 
     [Header("Direct Boss Health Bar Elements (Optional Shortcut)")]
     [Tooltip("Direct reference to Title Text if you prefer wiring directly on the boss.")]
@@ -305,6 +324,7 @@ public class LegendarySamurai : EnemyBase
     private int slashedCirclesCount = 0;
     private int currentSequenceIndex = 0;
     private float modeExitTimer = 0f;
+    private bool isInIntroCutscene = false;
     private bool isDashingSlash = false;
     private bool hitDeductedInCurrentSlash = false;
     private bool isStompSlamming = false;
@@ -403,9 +423,6 @@ public class LegendarySamurai : EnemyBase
 
         CreateWeakPointContainer();
 
-        PlayBossSFX(bossRoarSFX, 1f, roarVolume);
-        StartBossBGM();
-
         if (bossHealthBarUI == null)
         {
             bossHealthBarUI = FindFirstObjectByType<BossHealthBarUI>();
@@ -418,6 +435,26 @@ public class LegendarySamurai : EnemyBase
             bossHealthBarUI.AssignDirectElements(directTitleText, directPhraseText, directBackgroundBar, directFillBar);
         }
 
+        bool shouldPlayCutscene = enableIntroCutscene &&
+            SceneManager.GetActiveScene().name.Equals("Stage5", System.StringComparison.OrdinalIgnoreCase);
+
+        if (shouldPlayCutscene)
+        {
+            StartCoroutine(Stage5StaredownCutsceneRoutine());
+        }
+        else
+        {
+            BeginBossEncounter();
+        }
+    }
+
+    private void BeginBossEncounter()
+    {
+        isInIntroCutscene = false;
+
+        PlayBossSFX(bossRoarSFX, 1f, roarVolume);
+        StartBossBGM();
+
         if (bossHealthBarUI != null)
         {
             bossHealthBarUI.Initialize(this);
@@ -426,6 +463,441 @@ public class LegendarySamurai : EnemyBase
         onBossHealthChanged?.Invoke(currentHits, bossMaxHits);
 
         aiLoopCoroutine = StartCoroutine(BossAILoop());
+    }
+
+    private IEnumerator Stage5StaredownCutsceneRoutine()
+    {
+        isInIntroCutscene = true;
+
+        // Wait one physics/render sync frame so persistent PlayerController & CinemachineCamera finish binding
+        GameObject overlayCanvasObj = CreateCutsceneOverlay(
+            out RectTransform topBar,
+            out RectTransform bottomBar,
+            out Image fadeScreenImg,
+            out CanvasGroup titleGroup,
+            out TMP_Text dialogueText,
+            out CanvasGroup dialogueGroup
+        );
+
+        // Start fully black so Stage 5 fades in smoothly onto both locked characters
+        float barHeight = Mathf.Max(80f, letterboxBarHeight);
+        topBar.sizeDelta = new Vector2(0f, barHeight);
+        bottomBar.sizeDelta = new Vector2(0f, barHeight);
+        if (fadeScreenImg != null)
+        {
+            fadeScreenImg.color = Color.black;
+        }
+
+        yield return null;
+
+        PlayerController player = playerController != null ? playerController : PlayerController.Instance;
+        if (player == null) player = FindFirstObjectByType<PlayerController>();
+        playerController = player;
+
+        CinemachineCamera cmCam = FindFirstObjectByType<CinemachineCamera>();
+        if (player == null || cmCam == null)
+        {
+            if (overlayCanvasObj != null) Destroy(overlayCanvasObj);
+            BeginBossEncounter();
+            yield break;
+        }
+
+        // 1. Lock BOTH characters immediately and force them to face each other
+        player.SetPortalTransitionState(true);
+        Rigidbody2D playerRb = player.GetComponent<Rigidbody2D>();
+        LockAndFaceEachOther(player, playerRb);
+
+        // Save original camera tracking target & ortho size
+        Transform origTrackingTarget = cmCam.Target.TrackingTarget;
+        float origOrthoSize = cmCam.Lens.OrthographicSize > 0.5f ? cmCam.Lens.OrthographicSize : 6.5f;
+
+        GameObject camAnchorObj = new GameObject("BossCutsceneCameraAnchor");
+        Transform camAnchor = camAnchorObj.transform;
+
+        Vector3 playerFocusPos = player.transform.position + new Vector3(0f, 0.45f, 0f);
+        Vector3 bossFocusPos = transform.position + new Vector3(0f, 0.85f, 0f);
+        Vector3 midpointFocusPos = (playerFocusPos + bossFocusPos) * 0.5f;
+
+        float closeSize = origOrthoSize * closeUpZoomMultiplier;
+        float wideSize = origOrthoSize * wideShotZoomMultiplier;
+
+        // Start framed on BOTH warriors facing each other before fading in from black
+        camAnchor.position = midpointFocusPos;
+        cmCam.Target.TrackingTarget = camAnchor;
+        cmCam.Lens.OrthographicSize = wideSize;
+
+        StartBossBGM();
+
+        bool skipped = false;
+
+        // --- BEAT 1: Smooth Fade-In from Black revealing BOTH locked characters facing each other ---
+        const float sceneFadeInDuration = 1.0f;
+        float elapsed = 0f;
+        while (elapsed < sceneFadeInDuration && !skipped)
+        {
+            if (IsCutsceneSkipPressed()) { skipped = true; break; }
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / sceneFadeInDuration);
+            LockAndFaceEachOther(player, playerRb);
+
+            if (fadeScreenImg != null)
+            {
+                fadeScreenImg.color = new Color(0f, 0f, 0f, 1f - (t * t * (3f - 2f * t)));
+            }
+            camAnchor.position = midpointFocusPos;
+            cmCam.Lens.OrthographicSize = wideSize;
+            yield return null;
+        }
+        if (fadeScreenImg != null) fadeScreenImg.color = new Color(0f, 0f, 0f, 0f);
+
+        // Brief dramatic hold showing both warriors locked in a staredown
+        if (!skipped)
+        {
+            elapsed = 0f;
+            while (elapsed < 0.65f && !skipped)
+            {
+                if (IsCutsceneSkipPressed()) { skipped = true; break; }
+                elapsed += Time.deltaTime;
+                LockAndFaceEachOther(player, playerRb);
+                yield return null;
+            }
+        }
+
+        // --- BEAT 2: Pan to Boss & Boss speaks ("Today is your last day" in Red on bottom bar) ---
+        if (!skipped)
+        {
+            if (dialogueText != null)
+            {
+                dialogueText.text = $"\"{cutsceneBossDialogue}\"";
+                dialogueText.color = bossDialogueColor;
+            }
+
+            elapsed = 0f;
+            while (elapsed < bossCloseUpDuration && !skipped)
+            {
+                if (IsCutsceneSkipPressed()) { skipped = true; break; }
+                elapsed += Time.deltaTime;
+                LockAndFaceEachOther(player, playerRb);
+
+                float panT = Mathf.Clamp01(elapsed / 0.55f);
+                float smoothPan = panT * panT * (3f - 2f * panT);
+                camAnchor.position = Vector3.Lerp(midpointFocusPos, bossFocusPos, smoothPan);
+                cmCam.Lens.OrthographicSize = Mathf.Lerp(wideSize, closeSize, smoothPan);
+
+                if (dialogueGroup != null)
+                {
+                    float fadeIn = Mathf.Clamp01((elapsed - 0.15f) / 0.35f);
+                    float fadeOut = Mathf.Clamp01((bossCloseUpDuration - elapsed) / 0.35f);
+                    dialogueGroup.alpha = Mathf.Min(fadeIn, fadeOut);
+                }
+                yield return null;
+            }
+        }
+
+        if (dialogueGroup != null) dialogueGroup.alpha = 0f;
+
+        // --- BEAT 3: Pan to Player & Player responds ("I've come to end this" in White on bottom bar) ---
+        if (!skipped)
+        {
+            if (dialogueText != null)
+            {
+                dialogueText.text = $"\"{cutscenePlayerDialogue}\"";
+                dialogueText.color = playerDialogueColor;
+            }
+
+            elapsed = 0f;
+            const float playerReplyDuration = 2.15f;
+            while (elapsed < playerReplyDuration && !skipped)
+            {
+                if (IsCutsceneSkipPressed()) { skipped = true; break; }
+                elapsed += Time.deltaTime;
+                LockAndFaceEachOther(player, playerRb);
+
+                float panT = Mathf.Clamp01(elapsed / 0.60f);
+                float smoothPan = panT * panT * (3f - 2f * panT);
+                camAnchor.position = Vector3.Lerp(bossFocusPos, playerFocusPos, smoothPan);
+                cmCam.Lens.OrthographicSize = closeSize;
+
+                if (dialogueGroup != null)
+                {
+                    float fadeIn = Mathf.Clamp01((elapsed - 0.2f) / 0.35f);
+                    float fadeOut = Mathf.Clamp01((playerReplyDuration - elapsed) / 0.35f);
+                    dialogueGroup.alpha = Mathf.Min(fadeIn, fadeOut);
+                }
+                yield return null;
+            }
+        }
+
+        if (dialogueGroup != null) dialogueGroup.alpha = 0f;
+
+        // --- BEAT 4: Wide Staredown Shot + Boss Roar + Boss Title Introduction ("LEGENDARY SAMURAI") ---
+        if (!skipped)
+        {
+            PlayBossSFX(bossRoarSFX, 1f, roarVolume);
+            player.TriggerCameraShake(0.24f);
+
+            elapsed = 0f;
+            Vector3 startPos = camAnchor.position;
+            float startSize = cmCam.Lens.OrthographicSize;
+
+            while (elapsed < wideStaredownDuration && !skipped)
+            {
+                if (IsCutsceneSkipPressed()) { skipped = true; break; }
+                elapsed += Time.deltaTime;
+                LockAndFaceEachOther(player, playerRb);
+
+                float pullT = Mathf.Clamp01(elapsed / (wideStaredownDuration * 0.45f));
+                float smooth = 1f - Mathf.Pow(1f - pullT, 3f);
+
+                camAnchor.position = Vector3.Lerp(startPos, midpointFocusPos, smooth);
+                cmCam.Lens.OrthographicSize = Mathf.Lerp(startSize, wideSize, smooth);
+
+                if (titleGroup != null)
+                {
+                    float fadeIn = Mathf.Clamp01(elapsed / 0.35f);
+                    float fadeOut = Mathf.Clamp01((wideStaredownDuration - elapsed) / 0.35f);
+                    titleGroup.alpha = Mathf.Min(fadeIn, fadeOut);
+                }
+                yield return null;
+            }
+        }
+
+        if (titleGroup != null) titleGroup.alpha = 0f;
+        if (fadeScreenImg != null) fadeScreenImg.color = new Color(0f, 0f, 0f, 0f);
+
+        // --- OUTRO: Letterbox slides out & camera returns cleanly to gameplay ---
+        float outroDuration = skipped ? 0.12f : 0.40f;
+        elapsed = 0f;
+        Vector3 outroStartPos = camAnchor.position;
+        float outroStartSize = cmCam.Lens.OrthographicSize;
+        float startBarH = topBar.sizeDelta.y;
+
+        while (elapsed < outroDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / outroDuration);
+            float smooth = t * t * (3f - 2f * t);
+
+            topBar.sizeDelta = new Vector2(0f, Mathf.Lerp(startBarH, 0f, smooth));
+            bottomBar.sizeDelta = new Vector2(0f, Mathf.Lerp(startBarH, 0f, smooth));
+
+            Vector3 targetPos = origTrackingTarget != null ? origTrackingTarget.position : playerFocusPos;
+            camAnchor.position = Vector3.Lerp(outroStartPos, targetPos, smooth);
+            cmCam.Lens.OrthographicSize = Mathf.Lerp(outroStartSize, origOrthoSize, smooth);
+            yield return null;
+        }
+
+        // Restore camera & player controls cleanly
+        cmCam.Target.TrackingTarget = origTrackingTarget != null ? origTrackingTarget : player.transform;
+        cmCam.Lens.OrthographicSize = origOrthoSize;
+        Destroy(camAnchorObj);
+        if (overlayCanvasObj != null) Destroy(overlayCanvasObj);
+
+        if (player != null)
+        {
+            player.SetPortalTransitionState(false);
+        }
+
+        // Start Boss Healthbar & AI Combat Loop!
+        isInIntroCutscene = false;
+        if (bossHealthBarUI != null)
+        {
+            bossHealthBarUI.Initialize(this);
+        }
+        onBossHealthChanged?.Invoke(currentHits, bossMaxHits);
+        aiLoopCoroutine = StartCoroutine(BossAILoop());
+    }
+
+    private static bool IsCutsceneSkipPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        var kb = UnityEngine.InputSystem.Keyboard.current;
+        if (kb != null && (kb.spaceKey.wasPressedThisFrame || kb.escapeKey.wasPressedThisFrame || kb.enterKey.wasPressedThisFrame))
+        {
+            return true;
+        }
+#endif
+        return false;
+    }
+
+    private void LockAndFaceEachOther(PlayerController player, Rigidbody2D playerRb)
+    {
+        if (playerRb != null)
+        {
+            playerRb.linearVelocity = new Vector2(0f, Mathf.Min(playerRb.linearVelocityY, 0f));
+        }
+        if (rb != null)
+        {
+            rb.linearVelocity = new Vector2(0f, Mathf.Min(rb.linearVelocityY, 0f));
+        }
+        if (player != null)
+        {
+            float toBossX = transform.position.x - player.transform.position.x;
+            player.FaceWorldDirection(toBossX >= 0f ? 1f : -1f);
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.flipX = toBossX >= 0f;
+            }
+        }
+    }
+
+    private GameObject CreateCutsceneOverlay(
+        out RectTransform topBar,
+        out RectTransform bottomBar,
+        out Image fadeScreenImg,
+        out CanvasGroup titleGroup,
+        out TMP_Text dialogueText,
+        out CanvasGroup dialogueGroup)
+    {
+        GameObject canvasObj = new GameObject("Stage5BossCutsceneCanvas");
+        Canvas canvas = canvasObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 200;
+
+        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.matchWidthOrHeight = 0.5f;
+
+        // Full-screen black Fade-In curtain (rendered behind letterbox bars so bars stay solid)
+        GameObject fadeObj = new GameObject("SceneFadeCurtain");
+        fadeObj.transform.SetParent(canvasObj.transform, false);
+        RectTransform fadeRect = fadeObj.AddComponent<RectTransform>();
+        fadeRect.anchorMin = Vector2.zero;
+        fadeRect.anchorMax = Vector2.one;
+        fadeRect.offsetMin = Vector2.zero;
+        fadeRect.offsetMax = Vector2.zero;
+        fadeScreenImg = fadeObj.AddComponent<Image>();
+        fadeScreenImg.color = Color.black;
+        fadeScreenImg.raycastTarget = false;
+
+        // Top Black Cinema Letterbox Bar
+        GameObject topObj = new GameObject("TopLetterbox");
+        topObj.transform.SetParent(canvasObj.transform, false);
+        topBar = topObj.AddComponent<RectTransform>();
+        topBar.anchorMin = new Vector2(0f, 1f);
+        topBar.anchorMax = new Vector2(1f, 1f);
+        topBar.pivot = new Vector2(0.5f, 1f);
+        topBar.anchoredPosition = Vector2.zero;
+        topBar.sizeDelta = Vector2.zero;
+        Image topImg = topObj.AddComponent<Image>();
+        topImg.color = Color.black;
+
+        // Bottom Black Cinema Letterbox Bar
+        GameObject botObj = new GameObject("BottomLetterbox");
+        botObj.transform.SetParent(canvasObj.transform, false);
+        bottomBar = botObj.AddComponent<RectTransform>();
+        bottomBar.anchorMin = new Vector2(0f, 0f);
+        bottomBar.anchorMax = new Vector2(1f, 0f);
+        bottomBar.pivot = new Vector2(0.5f, 0f);
+        bottomBar.anchoredPosition = Vector2.zero;
+        bottomBar.sizeDelta = Vector2.zero;
+        Image botImg = botObj.AddComponent<Image>();
+        botImg.color = Color.black;
+
+        // Resolve PixelifySans font if available
+        TMP_FontAsset pixelFont = null;
+        TMP_FontAsset[] loadedFonts = Resources.FindObjectsOfTypeAll<TMP_FontAsset>();
+        for (int i = 0; i < loadedFonts.Length; i++)
+        {
+            if (loadedFonts[i] != null && loadedFonts[i].name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                pixelFont = loadedFonts[i];
+                break;
+            }
+        }
+#if UNITY_EDITOR
+        if (pixelFont == null)
+        {
+            pixelFont = UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
+                "Assets/Fonts/PixelifySans-VariableFont_wght SDF.asset"
+            );
+        }
+#endif
+
+        // Boss Cinematic Title Card
+        GameObject titleContainer = new GameObject("BossTitleCard");
+        titleContainer.transform.SetParent(canvasObj.transform, false);
+        RectTransform titleRect = titleContainer.AddComponent<RectTransform>();
+        titleRect.anchorMin = new Vector2(0.5f, 0.27f);
+        titleRect.anchorMax = new Vector2(0.5f, 0.27f);
+        titleRect.sizeDelta = new Vector2(900f, 140f);
+        titleGroup = titleContainer.AddComponent<CanvasGroup>();
+        titleGroup.alpha = 0f;
+
+        GameObject mainTitleObj = new GameObject("TitleText");
+        mainTitleObj.transform.SetParent(titleContainer.transform, false);
+        RectTransform mainRect = mainTitleObj.AddComponent<RectTransform>();
+        mainRect.anchorMin = new Vector2(0f, 0.35f);
+        mainRect.anchorMax = new Vector2(1f, 1f);
+        mainRect.offsetMin = Vector2.zero;
+        mainRect.offsetMax = Vector2.zero;
+
+        TextMeshProUGUI mainTmp = mainTitleObj.AddComponent<TextMeshProUGUI>();
+        if (pixelFont != null) mainTmp.font = pixelFont;
+        mainTmp.text = cutsceneTitleText;
+        mainTmp.fontSize = 68f;
+        mainTmp.fontStyle = FontStyles.Bold;
+        mainTmp.alignment = TextAlignmentOptions.Center;
+        mainTmp.color = new Color(1f, 0.88f, 0.45f, 1f);
+        mainTmp.outlineWidth = 0.22f;
+        mainTmp.outlineColor = new Color32(20, 5, 5, 240);
+
+        GameObject subTitleObj = new GameObject("SubtitleText");
+        subTitleObj.transform.SetParent(titleContainer.transform, false);
+        RectTransform subRect = subTitleObj.AddComponent<RectTransform>();
+        subRect.anchorMin = new Vector2(0f, 0f);
+        subRect.anchorMax = new Vector2(1f, 0.42f);
+        subRect.offsetMin = Vector2.zero;
+        subRect.offsetMax = Vector2.zero;
+
+        TextMeshProUGUI subTmp = subTitleObj.AddComponent<TextMeshProUGUI>();
+        if (pixelFont != null) subTmp.font = pixelFont;
+        subTmp.text = cutsceneSubtitleText;
+        subTmp.fontSize = 28f;
+        subTmp.alignment = TextAlignmentOptions.Center;
+        subTmp.color = new Color(0.95f, 0.35f, 0.38f, 1f);
+
+        // Cutscene Dialogue Text centered directly on the Bottom Black Letterbox Bar
+        GameObject dlgObj = new GameObject("CutsceneDialogueText");
+        dlgObj.transform.SetParent(botObj.transform, false);
+        RectTransform dlgRect = dlgObj.AddComponent<RectTransform>();
+        dlgRect.anchorMin = new Vector2(0.5f, 0.5f);
+        dlgRect.anchorMax = new Vector2(0.5f, 0.5f);
+        dlgRect.pivot = new Vector2(0.5f, 0.5f);
+        dlgRect.anchoredPosition = new Vector2(0f, 6f);
+        dlgRect.sizeDelta = new Vector2(1380f, 110f);
+
+        dialogueGroup = dlgObj.AddComponent<CanvasGroup>();
+        dialogueGroup.alpha = 0f;
+
+        TextMeshProUGUI dlgTmp = dlgObj.AddComponent<TextMeshProUGUI>();
+        if (pixelFont != null) dlgTmp.font = pixelFont;
+        dlgTmp.text = string.Empty;
+        dlgTmp.fontSize = 44f;
+        dlgTmp.fontStyle = FontStyles.Bold;
+        dlgTmp.alignment = TextAlignmentOptions.Center;
+        dlgTmp.color = Color.white;
+        dialogueText = dlgTmp;
+
+        // Skip Hint inside bottom-right corner of bottom letterbox bar
+        GameObject skipObj = new GameObject("SkipHint");
+        skipObj.transform.SetParent(botObj.transform, false);
+        RectTransform skipRect = skipObj.AddComponent<RectTransform>();
+        skipRect.anchorMin = new Vector2(1f, 0f);
+        skipRect.anchorMax = new Vector2(1f, 0f);
+        skipRect.pivot = new Vector2(1f, 0f);
+        skipRect.anchoredPosition = new Vector2(-34f, 18f);
+        skipRect.sizeDelta = new Vector2(320f, 36f);
+
+        TextMeshProUGUI skipTmp = skipObj.AddComponent<TextMeshProUGUI>();
+        if (pixelFont != null) skipTmp.font = pixelFont;
+        skipTmp.text = "[SPACE] SKIP";
+        skipTmp.fontSize = 22f;
+        skipTmp.alignment = TextAlignmentOptions.Right;
+        skipTmp.color = new Color(0.85f, 0.85f, 0.85f, 0.65f);
+
+        return canvasObj;
     }
 
     protected override void Update()
@@ -555,7 +1027,7 @@ public class LegendarySamurai : EnemyBase
 
     protected override void Movement()
     {
-        if (IsDead || currentHits <= 0 || bossState != BossActionState.Moving) return;
+        if (IsDead || isInIntroCutscene || currentHits <= 0 || bossState != BossActionState.Moving) return;
         base.Movement();
     }
 
