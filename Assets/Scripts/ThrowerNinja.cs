@@ -69,6 +69,7 @@ public class ThrowerNinja : EnemyBase
         if (IsDead) return;
         IsDead = true;
 
+        HealGuideBookUI.NotifyEnemyDefeated(this);
         SpawnDeathShurikens();
 
         if (GameManager.Instance != null)

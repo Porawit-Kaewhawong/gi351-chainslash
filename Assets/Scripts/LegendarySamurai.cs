@@ -452,6 +452,9 @@ public class LegendarySamurai : EnemyBase
     {
         isInIntroCutscene = false;
 
+        // Unlock Boss entry in Guide Book immediately when encountering the Boss
+        HealGuideBookUI.NotifyEnemyDefeated(this);
+
         PlayBossSFX(bossRoarSFX, 1f, roarVolume);
         StartBossBGM();
 
@@ -700,6 +703,10 @@ public class LegendarySamurai : EnemyBase
 
         // Start Boss Healthbar & AI Combat Loop!
         isInIntroCutscene = false;
+
+        // Unlock Boss entry in Guide Book right after the Stage 5 Cutscene finishes
+        HealGuideBookUI.NotifyEnemyDefeated(this);
+
         if (bossHealthBarUI != null)
         {
             bossHealthBarUI.Initialize(this);
@@ -2521,6 +2528,7 @@ public class LegendarySamurai : EnemyBase
     {
         if (IsDead) return;
         IsDead = true;
+        HealGuideBookUI.NotifyEnemyDefeated(this);
         currentHits = 0;
         bossState = BossActionState.Defeated;
 

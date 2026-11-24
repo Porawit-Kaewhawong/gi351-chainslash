@@ -180,6 +180,7 @@ public class ChainEnemy : EnemyBase
     private IEnumerator ExplosionSequence()
     {
         IsDead = true;
+        HealGuideBookUI.NotifyEnemyDefeated(this);
         UpdateEnemySpriteAnimation(0f);
 
         if (GameManager.Instance != null)
