@@ -98,7 +98,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     [Tooltip("If true, splits the enemy into 2 halves on death that stick to the ground and bleed continuously.")]
     [SerializeField] protected bool leaveCorpseOnDeath = true;
     [Tooltip("Visual tint applied to the sliced corpse halves on the ground.")]
-    [SerializeField] protected Color corpseTint = new Color(0.72f, 0.68f, 0.72f, 1f);
+    [SerializeField] protected Color corpseTint = new Color(0.92f, 0.86f, 0.88f, 1f);
     [Tooltip("Optional vertical offset when the corpse halves settle onto the ground.")]
     [SerializeField] protected float corpseGroundOffset = 0f;
     [Tooltip("Number of pooled pixel blood droplets continuously spurting/dripping from the 2 halves.")]
@@ -2002,9 +2002,9 @@ public class SlicedCorpseOnGround : MonoBehaviour
     private const float BloodGravity = 20f;
     private const float MaxVoidFall = 40f;
 
-    private static readonly Color BloodBright = new Color(0.92f, 0.08f, 0.14f, 1f);
-    private static readonly Color BloodDark = new Color(0.52f, 0.02f, 0.06f, 1f);
-    private static readonly Color PuddleColor = new Color(0.45f, 0.02f, 0.05f, 0.92f);
+    private static readonly Color BloodBright = new Color(0.98f, 0.10f, 0.16f, 1f);
+    private static readonly Color BloodDark = new Color(0.62f, 0.03f, 0.08f, 1f);
+    private static readonly Color PuddleColor = new Color(0.58f, 0.03f, 0.07f, 0.95f);
 
     public static void Spawn(
         SpriteRenderer source,
@@ -2157,11 +2157,12 @@ public class SlicedCorpseOnGround : MonoBehaviour
         bottomSprite = Sprite.Create(orig.texture, bottomRect, new Vector2(0.5f, 0.5f), ppu);
 
         Vector3 lossyScale = source.transform.lossyScale;
-        int baseSortOrder = Mathf.Min(source.sortingOrder, 0) - 1;
+        // Keep corpse halves strictly in front of ground/background tilemaps (Enemies use order 3-4)
+        int baseSortOrder = Mathf.Max(source.sortingOrder, 3);
         float dirSignX = slashDir.x >= 0f ? 1f : -1f;
 
         Vector2 center = source.bounds.center;
-        float quarterHeight = source.bounds.extents.y * 0.5f;
+        float quarterHeight = Mathf.Max(0.22f, source.bounds.extents.y * 0.5f);
 
         // Top half flies slightly forward along the slash and lands flat
         topHalf = CreateHalf(
@@ -2169,11 +2170,11 @@ public class SlicedCorpseOnGround : MonoBehaviour
             topSprite,
             source,
             lossyScale,
-            baseSortOrder,
+            baseSortOrder + 1,
             center + Vector2.up * quarterHeight,
             new Vector2(dirSignX * Random.Range(2.8f, 4.4f), Random.Range(3.2f, 4.8f)),
             -dirSignX * 90f,
-            Random.Range(0.22f, 0.35f)
+            quarterHeight
         );
 
         // Bottom half separates in the opposite direction and lands flat
@@ -2182,11 +2183,11 @@ public class SlicedCorpseOnGround : MonoBehaviour
             bottomSprite,
             source,
             lossyScale,
-            baseSortOrder,
+            baseSortOrder + 1,
             center - Vector2.up * quarterHeight,
             new Vector2(-dirSignX * Random.Range(1.4f, 2.6f), Random.Range(1.6f, 2.8f)),
             dirSignX * 90f,
-            Random.Range(0.18f, 0.30f)
+            quarterHeight
         );
 
         // Brief 3-frame pixel slash seam flash at the cut point
@@ -2201,7 +2202,7 @@ public class SlicedCorpseOnGround : MonoBehaviour
         seamRenderer.flipX = slashDir.x < 0f;
         seamRenderer.flipY = slashDir.y < 0f;
         seamRenderer.sortingLayerID = source.sortingLayerID;
-        seamRenderer.sortingOrder = source.sortingOrder + 3;
+        seamRenderer.sortingOrder = baseSortOrder + 4;
 
         // Create pooled pixel blood droplets for continuous non-stop bleeding
         int count = Mathf.Clamp(bloodPoolSize, 6, 32);
@@ -2213,9 +2214,9 @@ public class SlicedCorpseOnGround : MonoBehaviour
             dropObj.transform.localScale = Vector3.one;
 
             SpriteRenderer sr = dropObj.AddComponent<SpriteRenderer>();
-            sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 3 == 0) ? 2 : 1);
+            sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 2 == 0) ? 3 : 2);
             sr.sortingLayerID = source.sortingLayerID;
-            sr.sortingOrder = baseSortOrder + 1;
+            sr.sortingOrder = baseSortOrder + 2;
             sr.enabled = false;
 
             bloodPool[i] = new BloodDroplet
@@ -2368,8 +2369,8 @@ public class SlicedCorpseOnGround : MonoBehaviour
             // Slowly grow the blood puddle on the ground beneath this half
             if (half.puddleRenderer != null)
             {
-                half.puddleScaleX = Mathf.MoveTowards(half.puddleScaleX, half.puddleMaxScaleX, dt * 0.45f);
-                half.puddleRenderer.transform.localScale = new Vector3(half.puddleScaleX, 0.32f, 1f);
+                half.puddleScaleX = Mathf.MoveTowards(half.puddleScaleX, half.puddleMaxScaleX, dt * 0.65f);
+                half.puddleRenderer.transform.localScale = new Vector3(half.puddleScaleX, 0.65f, 1f);
             }
             return;
         }
@@ -2402,13 +2403,13 @@ public class SlicedCorpseOnGround : MonoBehaviour
             RaycastHit2D groundHit = Physics2D.Raycast(half.worldPos + Vector2.up * 0.06f, Vector2.down, downDist, groundLayer);
             if (groundHit.collider != null && !groundHit.collider.isTrigger)
             {
-                half.worldPos = new Vector2(half.worldPos.x + delta.x, groundHit.point.y + half.halfHeight * 0.45f + groundOffset);
+                half.worldPos = new Vector2(half.worldPos.x + delta.x, groundHit.point.y + half.halfHeight * 0.65f + groundOffset);
                 half.velocity = Vector2.zero;
                 half.currentAngle = half.targetLieAngle;
                 half.transform.position = EnemyBase.SnapToPixelGrid(half.worldPos);
                 half.transform.rotation = Quaternion.Euler(0f, 0f, half.targetLieAngle);
                 half.landed = true;
-                half.groundY = groundHit.point.y + 0.02f;
+                half.groundY = groundHit.point.y + 0.06f;
 
                 if (half.puddleRenderer != null)
                 {

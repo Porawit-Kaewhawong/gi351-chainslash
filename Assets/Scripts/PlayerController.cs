@@ -483,6 +483,11 @@ public class PlayerController : MonoBehaviour
     public AudioClip SlashSFX => postSlashSFX;
     public AudioClip GrappleHitSFX => grappleHitSFX;
     public SpriteRenderer MainSpriteRenderer => spriteRenderer;
+    public bool EnableDrawToHeal => enableDrawToHeal;
+    public float PlusHealAmount => plusHealAmount;
+    public float HeartHealAmount => heartHealAmount;
+    public float PlusHealMeterCost => plusHealMeterCost;
+    public float HeartHealMeterCost => heartHealMeterCost;
 
     public void SetPendingSpawnReset(bool value) => pendingSpawnReset = value;
 
@@ -646,6 +651,11 @@ public class PlayerController : MonoBehaviour
         SetupGrappleIndicator();
         SetupModeDimOverlay();
         EnsureEnvironmentalAtmosphere();
+
+        if (enableDrawToHeal)
+        {
+            HealGuideBookUI.EnsureInstance(this);
+        }
     }
 
     private void Update()
@@ -811,8 +821,14 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
+        heldCorpse = null;
         ResetStateForLoadedScene();
         EnsureEnvironmentalAtmosphere();
+
+        if (enableDrawToHeal)
+        {
+            HealGuideBookUI.EnsureInstance(this);
+        }
     }
 
     private void EnsureEnvironmentalAtmosphere()
@@ -1974,6 +1990,7 @@ public class PlayerController : MonoBehaviour
     private void HandleCombatInput()
     {
         if (attackAction == null) return;
+        if (HealGuideBookUI.IsBookOpen || HealGuideBookUI.IsPointerOverBookButton) return;
 
         if (attackAction.IsPressed() && currentMeter <= 0)
         {
@@ -3257,6 +3274,7 @@ public class PlayerController : MonoBehaviour
     private void HandleGrappleInput()
     {
         if (grappleAction == null) return;
+        if (HealGuideBookUI.IsBookOpen || HealGuideBookUI.IsPointerOverBookButton) return;
 
         // If holding a hooked corpse: hold Grapple to aim in slow-mo, release to throw it!
         if (heldCorpse != null)
