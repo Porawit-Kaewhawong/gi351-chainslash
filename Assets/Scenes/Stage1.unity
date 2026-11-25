@@ -5319,6 +5319,18 @@ MonoBehaviour:
   raycastHeight: 12
   spawnHeightOffset: 0.5
   checkExtent: {x: 0.8, y: 0.8}
+  enableStage1AmbushCutscene: 1
+  stage1LetterboxHeight: 165
+  stage2FirstLine: At last...
+  stage2SecondLine: Is it over?
+  dialogueFontAsset: {fileID: 0}
+  dialogueFadeInDuration: 0.35
+  dialogueFadeOutDuration: 0.4
+  firstLineHoldDuration: 1.4
+  secondLineHoldDuration: 1.9
+  delayBetweenLines: 0.25
+  dialogueHeightAbovePlayer: 1.65
+  playerSighSFX: {fileID: 0}
 --- !u!4 &1350042117
 Transform:
   m_ObjectHideFlags: 0
