@@ -1540,7 +1540,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         cachedPixelSlashFrames = new Sprite[3];
         Color clear = new Color(0f, 0f, 0f, 0f);
         Color coreWhite = Color.white;
-        Color edgeCyan = new Color(0.35f, 0.96f, 1f, 1f);
+        Color edgeCyan = new Color(0.90f, 0.90f, 0.92f, 1f);
 
         for (int f = 0; f < 3; f++)
         {
@@ -1809,7 +1809,7 @@ public class EnemyDeathSliceVFX : MonoBehaviour
             sr.sprite = EnemyBase.GetSharedPixelBlockSprite((i % 2 == 0) ? 2 : 1);
             sr.sortingLayerID = source.sortingLayerID;
             sr.sortingOrder = source.sortingOrder + 4;
-            sr.color = (i % 3 == 0) ? new Color(0.3f, 0.95f, 1f, 1f) : new Color(1f, 0.25f, 0.35f, 1f);
+            sr.color = (i % 3 == 0) ? new Color(1f, 0.92f, 0.92f, 1f) : new Color(1f, 0.25f, 0.35f, 1f);
 
             sparkTransforms[i] = spark.transform;
             sparkRenderers[i] = sr;

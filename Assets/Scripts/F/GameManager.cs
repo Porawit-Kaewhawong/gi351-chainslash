@@ -622,8 +622,17 @@ public class GameManager : MonoBehaviour
 
         SpawnNextLevelPortal();
 
+        string activeSceneName = SceneManager.GetActiveScene().name;
+
+        // Stage 1 Clear: last enemy drops the Ancient Guide Book -> zoom -> rapid page flip -> dock to top-right!
+        if (activeSceneName.Equals("Stage1", System.StringComparison.OrdinalIgnoreCase))
+        {
+            Vector3 fallbackPos = player != null ? player.transform.position : Vector3.zero;
+            HealGuideBookUI.TriggerStage1GuideBookDrop(fallbackPos);
+        }
+
         // Only play this dialogue in Stage 2 after all enemies are defeated
-        if (SceneManager.GetActiveScene().name.Equals("Stage2", System.StringComparison.OrdinalIgnoreCase))
+        if (activeSceneName.Equals("Stage2", System.StringComparison.OrdinalIgnoreCase))
         {
             StartCoroutine(PlayStage2ClearDialogueRoutine());
         }

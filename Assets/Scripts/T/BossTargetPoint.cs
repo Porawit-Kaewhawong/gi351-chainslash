@@ -157,7 +157,8 @@ public class BossTargetPoint : EnemyBase
     public void SetSequenceIndex(int index, int totalCount, TMP_FontAsset customFont = null, float customFontSize = -1f)
     {
         pointIndex = index;
-        if (customFont != null) fontAsset = customFont;
+        TMP_FontAsset normalFont = ResolveNormalNumberFont();
+        fontAsset = normalFont != null ? normalFont : customFont;
         if (customFontSize > 0f) numberFontSize = customFontSize;
         EnsureNumberLabel();
         if (numberText != null)
@@ -390,23 +391,32 @@ public class BossTargetPoint : EnemyBase
         numberText.fontStyle = FontStyles.Bold;
         numberText.sortingOrder = LABEL_SORTING_ORDER;
 
-        if (fontAsset != null)
+        TMP_FontAsset normalFont = ResolveNormalNumberFont();
+        if (normalFont != null)
+        {
+            numberText.font = normalFont;
+            fontAsset = normalFont;
+        }
+        else if (fontAsset != null)
         {
             numberText.font = fontAsset;
         }
-        else
-        {
-#if UNITY_EDITOR
-            TMP_FontAsset pixelFont = UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>("Assets/Fonts/PixelifySans-VariableFont_wght SDF.asset");
-            if (pixelFont != null)
-            {
-                numberText.font = pixelFont;
-                fontAsset = pixelFont;
-            }
-#endif
-        }
 
         numberText.color = Color.white;
+    }
+
+    private static TMP_FontAsset ResolveNormalNumberFont()
+    {
+        TMP_FontAsset defaultFont = TMP_Settings.defaultFontAsset;
+        if (defaultFont != null && defaultFont.name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return defaultFont;
+        }
+
+        TMP_FontAsset liberation = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+        if (liberation != null) return liberation;
+
+        return defaultFont;
     }
 
     private static float DistanceSqPointToLineSegment(Vector2 point, Vector2 lineStart, Vector2 lineEnd)

@@ -102,7 +102,25 @@ public class HealGuideBookUI : MonoBehaviour
 
         if (Instance != null)
         {
+            Instance.RecordLastEnemyDefeatPosition(enemy.transform.position);
             Instance.UnlockBestiaryEntry(id, capturedSprite, capturedTint);
+        }
+    }
+
+    /// <summary>
+    /// Called by GameManager when Stage 1 is cleared: drops the Guide Book from the last slain enemy,
+    /// zooms it to center, rapidly flips pages to the newly unlocked enemy, and docks it to the top-right on close.
+    /// </summary>
+    public static void TriggerStage1GuideBookDrop(Vector3 fallbackWorldPos)
+    {
+        if (Instance == null && PlayerController.Instance != null)
+        {
+            EnsureInstance(PlayerController.Instance);
+        }
+
+        if (Instance != null)
+        {
+            Instance.StartStage1DropSequence(fallbackWorldPos);
         }
     }
 
@@ -115,8 +133,12 @@ public class HealGuideBookUI : MonoBehaviour
     [SerializeField] private Key toggleKey = Key.B;
     [Tooltip("If true, pauses game time while reading the tome.")]
     [SerializeField] private bool pauseGameWhileReading = true;
-    [Tooltip("If true (default), saves opened state and unlocked Bestiary progress across deaths, restarts, and returning to Main Menu.")]
-    [SerializeField] private bool saveFirstTimeState = true;
+    [Tooltip("If false (default), Guide Book & Bestiary persist across stages and death Restarts, and reset fresh when returning to Main Menu.")]
+    [SerializeField] private bool saveFirstTimeState = false;
+    [Tooltip("If true (default), automatically opens the Guide Book with a Golden Aurora effect when defeating a new enemy type for the first time.")]
+    [SerializeField] private bool autoOpenOnNewEnemyUnlock = true;
+    [Tooltip("Delay in seconds (realtime) after killing a new enemy before popping open the Bestiary with Golden Aurora.")]
+    [SerializeField] private float autoOpenUnlockDelay = 0.38f;
     [Tooltip("Sorting order of the overlay canvas.")]
     [SerializeField] private int canvasSortingOrder = 120;
 
@@ -240,6 +262,32 @@ public class HealGuideBookUI : MonoBehaviour
     private Image pageFlipShadowImg;
     private GameObject[] spreadContainers = new GameObject[TotalSpreads];
 
+    // Golden Aurora showcase behind the open tome on new enemy unlock
+    private GameObject bookGoldAuroraContainer;
+    private RectTransform bookGoldAuroraOuterRect;
+    private RectTransform bookGoldAuroraInnerRect;
+    private Image bookGoldAuroraOuterImg;
+    private Image bookGoldAuroraInnerImg;
+    private RectTransform[] bookGoldAuroraWisps;
+    private Image[] bookGoldAuroraWispImages;
+    private GameObject newEnemyBannerObj;
+    private TMP_Text newEnemyBannerText;
+    private bool isGoldenUnlockAuroraActive;
+    private Coroutine autoOpenUnlockCoroutine;
+    private BestiaryEnemyId pendingAutoOpenEnemyId;
+
+    // Stage 1 Guide Book Drop -> Zoom -> Rapid Page Flip -> Dock-to-Corner Tutorial state
+    private bool hasAcquiredGuideBook = true;
+    private bool pendingDockToCornerOnClose;
+    private bool isPlayingStage1DropSequence;
+    private bool hasLastSlainEnemyPos;
+    private Vector3 lastSlainEnemyWorldPos;
+    private Coroutine stage1DropCoroutine;
+    private Coroutine dockHintCoroutine;
+    private GameObject pressBHintObj;
+    private CanvasGroup pressBHintCanvasGroup;
+    private RectTransform pressBHintRect;
+
     private Button prevPageButton;
     private Button nextPageButton;
     private TMP_Text spreadCounterText;
@@ -284,6 +332,7 @@ public class HealGuideBookUI : MonoBehaviour
     private static AudioClip cachedScrollOpenClip;
     private static AudioClip cachedScrollCloseClip;
     private static AudioClip cachedPageFlipClip;
+    private static AudioClip cachedGoldenUnlockClip;
 
     #endregion
 
@@ -306,9 +355,20 @@ public class HealGuideBookUI : MonoBehaviour
         EnsureProceduralSprites();
         EnsureAudioSource();
         BuildUI();
+        BuildPressBHintCallout(rootCanvas.transform);
         SetBookImmediate(false);
         ApplySpreadVisibility(0);
         RefreshAllBestiaryCards();
+
+        string initScene = SceneManager.GetActiveScene().name;
+        if (initScene.Equals("Stage1", System.StringComparison.OrdinalIgnoreCase) ||
+            initScene.Equals("Stage0", System.StringComparison.OrdinalIgnoreCase) ||
+            SceneManager.GetActiveScene().buildIndex == 0)
+        {
+            hasAcquiredGuideBook = false;
+            if (bookButtonObj != null) bookButtonObj.SetActive(false);
+        }
+
         UpdateAttentionVisuals();
     }
 
@@ -370,15 +430,61 @@ public class HealGuideBookUI : MonoBehaviour
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         isHoveringToggleButton = false;
+        if (autoOpenUnlockCoroutine != null)
+        {
+            StopCoroutine(autoOpenUnlockCoroutine);
+            autoOpenUnlockCoroutine = null;
+        }
         CloseBook();
 
         bool isMenuScene = scene.buildIndex == 0 || FindFirstObjectByType<MainMenu>() != null;
         if (isMenuScene)
         {
+            if (stage1DropCoroutine != null) { StopCoroutine(stage1DropCoroutine); stage1DropCoroutine = null; }
+            if (dockHintCoroutine != null) { StopCoroutine(dockHintCoroutine); dockHintCoroutine = null; }
+            isPlayingStage1DropSequence = false;
+            pendingDockToCornerOnClose = false;
+            hasAcquiredGuideBook = false;
+            hasLastSlainEnemyPos = false;
+            if (pressBHintObj != null) pressBHintObj.SetActive(false);
+
             SetRootCanvasVisible(false);
+            SetBookGoldenAuroraActive(false);
+
+            // Reset Guide Book & Bestiary for a fresh New Game whenever returning to Main Menu
+            unlockedEnemies.Clear();
+            newlyUnlockedHighlights.Clear();
+            hasUnreadAttention = true;
+            attentionAnimTime = 0f;
+            currentSpreadIndex = 0;
+            ApplySpreadVisibility(0);
+            RefreshAllBestiaryCards();
+            UpdateAttentionVisuals();
         }
         else
         {
+            bool isStage1 = scene.name.Equals("Stage1", System.StringComparison.OrdinalIgnoreCase);
+            bool isStage0 = scene.name.Equals("Stage0", System.StringComparison.OrdinalIgnoreCase);
+
+            // In Stage 1 (before clearing Stage 1), keep the top-right Guide Book button hidden until the final enemy drops it!
+            if (isStage1 && !hasAcquiredGuideBook)
+            {
+                if (bookButtonObj != null) bookButtonObj.SetActive(false);
+            }
+            else if (!isStage0 && !isStage1)
+            {
+                hasAcquiredGuideBook = true;
+                if (bookButtonObj != null) bookButtonObj.SetActive(true);
+            }
+            else if (isStage0)
+            {
+                if (bookButtonObj != null) bookButtonObj.SetActive(hasAcquiredGuideBook);
+            }
+            else
+            {
+                if (bookButtonObj != null) bookButtonObj.SetActive(true);
+            }
+
             SetRootCanvasVisible(true);
             UpdateAttentionVisuals();
             BindPlayer(PlayerController.Instance);
@@ -410,7 +516,7 @@ public class HealGuideBookUI : MonoBehaviour
             float wiggleScaleBoost = 0f;
             float targetRotZ = 0f;
 
-            if (hasUnreadAttention && !isOpen)
+            if (hasAcquiredGuideBook && hasUnreadAttention && !isOpen)
             {
                 attentionAnimTime += Time.unscaledDeltaTime;
 
@@ -434,11 +540,11 @@ public class HealGuideBookUI : MonoBehaviour
             bookButtonRect.localRotation = Quaternion.Lerp(bookButtonRect.localRotation, desiredRot, Time.unscaledDeltaTime * 18f);
         }
 
-        if (Keyboard.current != null)
+        if (Keyboard.current != null && !isPlayingStage1DropSequence)
         {
             if (toggleKey != Key.None && Keyboard.current[toggleKey].wasPressedThisFrame)
             {
-                if (boundPlayer == null || !boundPlayer.IsDead)
+                if ((hasAcquiredGuideBook || isOpen) && (boundPlayer == null || !boundPlayer.IsDead))
                 {
                     ToggleBook();
                 }
@@ -469,6 +575,10 @@ public class HealGuideBookUI : MonoBehaviour
                 UpdateHeartStrokeGuide();
             }
             UpdateGoldenHighlightEffects();
+            if (isGoldenUnlockAuroraActive)
+            {
+                UpdateBookGoldenAuroraEffect();
+            }
         }
     }
 
@@ -484,6 +594,21 @@ public class HealGuideBookUI : MonoBehaviour
             SetRootCanvasVisible(true);
         }
         RefreshStatsText();
+    }
+
+    public void RecordLastEnemyDefeatPosition(Vector3 worldPos)
+    {
+        lastSlainEnemyWorldPos = worldPos;
+        hasLastSlainEnemyPos = true;
+    }
+
+    public void StartStage1DropSequence(Vector3 fallbackWorldPos)
+    {
+        if (hasAcquiredGuideBook || isPlayingStage1DropSequence) return;
+
+        Vector3 origin = hasLastSlainEnemyPos ? lastSlainEnemyWorldPos : (fallbackWorldPos + new Vector3(0f, 0.8f, 0f));
+        if (stage1DropCoroutine != null) StopCoroutine(stage1DropCoroutine);
+        stage1DropCoroutine = StartCoroutine(Stage1GuideBookDropRoutine(origin));
     }
 
     public void UnlockBestiaryEntry(BestiaryEnemyId id, Sprite capturedSprite, Color capturedTint)
@@ -505,12 +630,34 @@ public class HealGuideBookUI : MonoBehaviour
 
             newlyUnlockedHighlights.Add(id);
 
-            // Notify via Wiggle + Green Aurora on the top-right scroll button so the player can open it themselves
+            // Notify via Wiggle on the top-right scroll button (Stage 1 plays full drop + sound at stage clear; Stage 2-5 wiggle silently)
             hasUnreadAttention = true;
             attentionAnimTime = 0f;
+            pendingAutoOpenEnemyId = id;
             UpdateAttentionVisuals();
         }
         RefreshBestiaryCard(id);
+    }
+
+    private static int GetSpreadIndexForEnemy(BestiaryEnemyId id)
+    {
+        return id == BestiaryEnemyId.LegendarySamurai ? 2 : 1;
+    }
+
+    private IEnumerator AutoOpenNewUnlockRoutine()
+    {
+        float delay = Mathf.Max(0.05f, autoOpenUnlockDelay);
+        yield return new WaitForSecondsRealtime(delay);
+
+        autoOpenUnlockCoroutine = null;
+
+        if (rootCanvas == null || !rootCanvas.enabled) yield break;
+        if (boundPlayer != null && boundPlayer.IsDead) yield break;
+
+        ApplySpreadVisibility(GetSpreadIndexForEnemy(pendingAutoOpenEnemyId));
+        SetBookGoldenAuroraActive(true);
+        PlayGoldenUnlockSFX();
+        OpenBook();
     }
 
     public void ToggleBook()
@@ -524,6 +671,12 @@ public class HealGuideBookUI : MonoBehaviour
         if (isOpen) return;
         isOpen = true;
         strokeAnimTime = 0f;
+
+        if (newlyUnlockedHighlights.Count > 0)
+        {
+            ApplySpreadVisibility(GetSpreadIndexForEnemy(pendingAutoOpenEnemyId));
+            SetBookGoldenAuroraActive(true);
+        }
 
         if (hasUnreadAttention)
         {
@@ -561,7 +714,8 @@ public class HealGuideBookUI : MonoBehaviour
         if (!isOpen) return;
         isOpen = false;
 
-        // Clear newly-unlocked golden portrait border highlights once the player closes the book
+        // Clear newly-unlocked golden portrait border highlights & Golden Aurora once the player closes the book
+        SetBookGoldenAuroraActive(false);
         if (newlyUnlockedHighlights.Count > 0)
         {
             newlyUnlockedHighlights.Clear();
@@ -577,8 +731,405 @@ public class HealGuideBookUI : MonoBehaviour
         PlayBookSFX(false);
 
         if (transitionCoroutine != null) StopCoroutine(transitionCoroutine);
-        transitionCoroutine = StartCoroutine(AnimateBookRoutine(false));
+        if (pendingDockToCornerOnClose)
+        {
+            pendingDockToCornerOnClose = false;
+            transitionCoroutine = StartCoroutine(FlyAndDockToTopRightRoutine());
+        }
+        else
+        {
+            transitionCoroutine = StartCoroutine(AnimateBookRoutine(false));
+        }
     }
+
+    #region Stage 1 Guide Book Drop, Zoom, Rapid Page-Flip & Dock-to-Corner Tutorial
+
+    private void BuildPressBHintCallout(Transform canvasParent)
+    {
+        pressBHintObj = new GameObject("PressBToOpenHintCallout");
+        pressBHintObj.transform.SetParent(canvasParent, false);
+        pressBHintRect = pressBHintObj.AddComponent<RectTransform>();
+        pressBHintRect.anchorMin = new Vector2(1f, 1f);
+        pressBHintRect.anchorMax = new Vector2(1f, 1f);
+        pressBHintRect.pivot = new Vector2(1f, 1f);
+        pressBHintRect.anchoredPosition = new Vector2(-(buttonTopRightMargin.x + buttonSize.x + 18f), -(buttonTopRightMargin.y + 14f));
+        pressBHintRect.sizeDelta = new Vector2(276f, 62f);
+
+        pressBHintCanvasGroup = pressBHintObj.AddComponent<CanvasGroup>();
+        pressBHintCanvasGroup.alpha = 0f;
+        pressBHintCanvasGroup.blocksRaycasts = false;
+        pressBHintCanvasGroup.interactable = false;
+
+        Image bg = pressBHintObj.AddComponent<Image>();
+        bg.sprite = cachedWhitePixelSprite;
+        bg.color = new Color(0.11f, 0.08f, 0.05f, 0.94f);
+        bg.raycastTarget = false;
+
+        Outline outline = pressBHintObj.AddComponent<Outline>();
+        outline.effectColor = new Color(1.00f, 0.84f, 0.24f, 1f);
+        outline.effectDistance = new Vector2(3f, -3f);
+
+        TMP_Text hintLabel = CreateTMPText(
+            pressBHintObj.transform,
+            "HintLabel",
+            WrapNumbersWithNormalFont($"PRESS [<font=\"LiberationSans SDF\">{toggleKey}</font>] TO OPEN  >"),
+            22f,
+            new Color(1.00f, 0.92f, 0.45f, 1f),
+            TextAlignmentOptions.Center,
+            FontStyles.Bold
+        );
+        StretchFill(hintLabel.rectTransform);
+        hintLabel.rectTransform.offsetMin = new Vector2(10f, 6f);
+        hintLabel.rectTransform.offsetMax = new Vector2(-10f, -6f);
+        hintLabel.raycastTarget = false;
+
+        pressBHintObj.SetActive(false);
+    }
+
+    private IEnumerator Stage1GuideBookDropRoutine(Vector3 dropOriginWorld)
+    {
+        isPlayingStage1DropSequence = true;
+        EnsureProceduralSprites();
+        EnsureAudioSource();
+        SetRootCanvasVisible(true);
+
+        // --- STEP 1: World-Space Ancient Guide Book Scroll drops out of the last slain enemy! ---
+        GameObject worldDropObj = new GameObject("Stage1DroppedGuideBook");
+        worldDropObj.transform.position = dropOriginWorld;
+        worldDropObj.transform.localScale = Vector3.one * 0.45f;
+
+        SpriteRenderer dropSr = worldDropObj.AddComponent<SpriteRenderer>();
+        dropSr.sprite = cachedScrollIconSprite;
+        dropSr.sortingOrder = 20;
+
+        // Golden Aurora glow behind the dropped world scroll
+        GameObject dropGlowObj = new GameObject("DropGoldenGlow");
+        dropGlowObj.transform.SetParent(worldDropObj.transform, false);
+        dropGlowObj.transform.localPosition = Vector3.zero;
+        dropGlowObj.transform.localScale = Vector3.one * 2.2f;
+        SpriteRenderer dropGlowSr = dropGlowObj.AddComponent<SpriteRenderer>();
+        dropGlowSr.sprite = cachedAuroraGlowSprite;
+        dropGlowSr.color = new Color(1.00f, 0.82f, 0.22f, 0.85f);
+        dropGlowSr.sortingOrder = 19;
+
+        PlayGoldenUnlockSFX();
+
+        // Parabolic pop-up and soft bounce on the battlefield
+        const float popDur = 0.78f;
+        float elapsed = 0f;
+        Vector3 landingPos = dropOriginWorld + new Vector3(0f, 0.35f, 0f);
+        while (elapsed < popDur)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / popDur);
+
+            float arcY;
+            if (t < 0.72f)
+            {
+                float u = t / 0.72f;
+                arcY = Mathf.Sin(u * Mathf.PI) * 1.95f;
+            }
+            else
+            {
+                float u = (t - 0.72f) / 0.28f;
+                arcY = Mathf.Sin(u * Mathf.PI) * 0.42f;
+            }
+
+            worldDropObj.transform.position = Vector3.Lerp(dropOriginWorld, landingPos, t) + new Vector3(0f, arcY, 0f);
+            float spinZ = Mathf.Lerp(260f, 0f, 1f - Mathf.Pow(1f - t, 3f));
+            worldDropObj.transform.rotation = Quaternion.Euler(0f, 0f, spinZ);
+            float scale = Mathf.Lerp(0.35f, 1.05f, 1f - Mathf.Pow(1f - t, 2f));
+            worldDropObj.transform.localScale = Vector3.one * scale;
+            dropGlowSr.color = new Color(1.00f, 0.84f, 0.28f, 0.55f + 0.35f * Mathf.Sin(elapsed * 14f));
+            yield return null;
+        }
+
+        // Brief hover shimmer before zooming toward the camera/screen center
+        float hoverElapsed = 0f;
+        const float hoverDur = 0.28f;
+        while (hoverElapsed < hoverDur)
+        {
+            hoverElapsed += Time.deltaTime;
+            worldDropObj.transform.position = landingPos + new Vector3(0f, Mathf.Sin(hoverElapsed * 12f) * 0.08f, 0f);
+            yield return null;
+        }
+
+        // Convert world drop position to Canvas local coordinates
+        Vector2 startCanvasPos = Vector2.zero;
+        Camera activeCam = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        RectTransform canvasRect = rootCanvas != null ? rootCanvas.GetComponent<RectTransform>() : null;
+        if (activeCam != null && canvasRect != null)
+        {
+            Vector3 screenPt = activeCam.WorldToScreenPoint(worldDropObj.transform.position);
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screenPt, null, out startCanvasPos);
+        }
+
+        Destroy(worldDropObj);
+
+        // --- STEP 2: Pause gameplay & zoom the Guide Book from drop spot into the screen center ---
+        if (pauseGameWhileReading)
+        {
+            savedTimeScale = Time.timeScale > 0.01f ? Time.timeScale : 1f;
+            savedFixedDeltaTime = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : 0.02f;
+            Time.timeScale = 0f;
+        }
+
+        GameObject zoomObj = new GameObject("ZoomingGuideBookScroll");
+        zoomObj.transform.SetParent(rootCanvas.transform, false);
+        RectTransform zoomRect = zoomObj.AddComponent<RectTransform>();
+        zoomRect.anchorMin = new Vector2(0.5f, 0.5f);
+        zoomRect.anchorMax = new Vector2(0.5f, 0.5f);
+        zoomRect.anchoredPosition = startCanvasPos;
+        zoomRect.sizeDelta = new Vector2(140f, 140f);
+
+        GameObject zoomGlow = new GameObject("ZoomGoldenGlow");
+        zoomGlow.transform.SetParent(zoomObj.transform, false);
+        RectTransform zoomGlowRect = zoomGlow.AddComponent<RectTransform>();
+        zoomGlowRect.anchorMin = new Vector2(0.5f, 0.5f);
+        zoomGlowRect.anchorMax = new Vector2(0.5f, 0.5f);
+        zoomGlowRect.sizeDelta = new Vector2(360f, 360f);
+        Image zoomGlowImg = zoomGlow.AddComponent<Image>();
+        zoomGlowImg.sprite = cachedAuroraGlowSprite;
+        zoomGlowImg.color = new Color(1.00f, 0.84f, 0.24f, 0.85f);
+        zoomGlowImg.raycastTarget = false;
+
+        Image zoomIconImg = zoomObj.AddComponent<Image>();
+        zoomIconImg.sprite = cachedScrollIconSprite;
+        zoomIconImg.preserveAspect = true;
+        zoomIconImg.raycastTarget = false;
+
+        const float zoomDur = 0.52f;
+        elapsed = 0f;
+        while (elapsed < zoomDur)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / zoomDur);
+            float ease = 1f - Mathf.Pow(1f - t, 3f);
+
+            zoomRect.anchoredPosition = Vector2.Lerp(startCanvasPos, Vector2.zero, ease);
+            float scale = Mathf.Lerp(0.65f, 2.75f, ease);
+            zoomRect.localScale = new Vector3(scale, scale, 1f);
+            zoomRect.localRotation = Quaternion.Euler(0f, 0f, Mathf.Lerp(-16f, 0f, ease));
+            zoomGlowImg.color = new Color(1.00f, 0.88f, 0.35f, Mathf.Lerp(0.65f, 1f, ease));
+            yield return null;
+        }
+
+        Destroy(zoomObj);
+
+        // --- STEP 3: Open Book with Golden Aurora & Rapidly Flip Pages to the Newly Slain Enemy! ---
+        isOpen = true;
+        strokeAnimTime = 0f;
+        hasUnreadAttention = false;
+        pendingDockToCornerOnClose = true;
+
+        // Ensure at least ShadowNinja is unlocked & highlighted as NEW!
+        if (unlockedEnemies.Count == 0)
+        {
+            unlockedEnemies.Add(BestiaryEnemyId.ShadowNinja);
+            newlyUnlockedHighlights.Add(BestiaryEnemyId.ShadowNinja);
+            pendingAutoOpenEnemyId = BestiaryEnemyId.ShadowNinja;
+        }
+
+        RefreshStatsText();
+        RefreshAllBestiaryCards();
+        ApplySpreadVisibility(0);
+        SetBookGoldenAuroraActive(true);
+        PlayBookSFX(true);
+
+        if (bookOverlayObj != null) bookOverlayObj.SetActive(true);
+        if (bookOverlayCanvasGroup != null) bookOverlayCanvasGroup.alpha = 1f;
+        if (bookSpreadRect != null)
+        {
+            bookSpreadRect.anchoredPosition = Vector2.zero;
+            bookSpreadRect.localRotation = Quaternion.identity;
+            bookSpreadRect.localScale = Vector3.one * 0.45f;
+        }
+
+        // Quick pop-open scale into full tome
+        const float openPopDur = 0.22f;
+        elapsed = 0f;
+        while (elapsed < openPopDur)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / openPopDur);
+            float u = t - 1f;
+            float pop = 1f + 2.5f * u * u * u + 1.5f * u * u;
+            float s = Mathf.LerpUnclamped(0.45f, 1f, pop);
+            if (bookSpreadRect != null) bookSpreadRect.localScale = new Vector3(s, s, 1f);
+            yield return null;
+        }
+        if (bookSpreadRect != null) bookSpreadRect.localScale = Vector3.one;
+
+        // Rapid page-flipping animation through the tome before landing on the NEW enemy page!
+        int targetSpread = GetSpreadIndexForEnemy(pendingAutoOpenEnemyId);
+        int[] flipSequence = { 2, 0, 2, targetSpread };
+        for (int f = 0; f < flipSequence.Length; f++)
+        {
+            bool isFinalLanding = (f == flipSequence.Length - 1);
+            float foldDur = isFinalLanding ? 0.085f : 0.055f;
+            float unfoldDur = isFinalLanding ? 0.14f : 0.055f;
+
+            // Play crisp page flip SFX pitched progressively faster/higher
+            EnsureAudioSource();
+            AudioClip flipClip = pageFlipSFX != null ? pageFlipSFX : cachedPageFlipClip;
+            if (flipClip != null && uiAudioSource != null)
+            {
+                uiAudioSource.pitch = 1.05f + f * 0.10f;
+                uiAudioSource.PlayOneShot(flipClip, bookSFXVolume * 0.85f);
+            }
+
+            float ft = 0f;
+            while (ft < foldDur)
+            {
+                ft += Time.unscaledDeltaTime;
+                float p = Mathf.Clamp01(ft / foldDur);
+                if (pagesContentRect != null) pagesContentRect.localScale = new Vector3(Mathf.Lerp(1f, 0.04f, p * p), 1f, 1f);
+                if (pageFlipShadowImg != null) pageFlipShadowImg.color = new Color(0.10f, 0.06f, 0.03f, p * 0.35f);
+                yield return null;
+            }
+
+            ApplySpreadVisibility(flipSequence[f]);
+            RefreshAllBestiaryCards();
+
+            ft = 0f;
+            while (ft < unfoldDur)
+            {
+                ft += Time.unscaledDeltaTime;
+                float p = Mathf.Clamp01(ft / unfoldDur);
+                float easeOut = 1f - Mathf.Pow(1f - p, 3f);
+                if (pagesContentRect != null) pagesContentRect.localScale = new Vector3(Mathf.Lerp(0.04f, 1f, easeOut), 1f, 1f);
+                if (pageFlipShadowImg != null) pageFlipShadowImg.color = new Color(0.10f, 0.06f, 0.03f, (1f - easeOut) * 0.35f);
+                yield return null;
+            }
+        }
+
+        if (pagesContentRect != null) pagesContentRect.localScale = Vector3.one;
+        if (pageFlipShadowImg != null) pageFlipShadowImg.color = new Color(0.10f, 0.06f, 0.03f, 0f);
+
+        // Celebratory chime on landing on the newly unlocked enemy!
+        PlayGoldenUnlockSFX();
+
+        isPlayingStage1DropSequence = false;
+        stage1DropCoroutine = null;
+    }
+
+    private IEnumerator FlyAndDockToTopRightRoutine()
+    {
+        if (bookOverlayObj == null || bookOverlayCanvasGroup == null || bookSpreadRect == null)
+        {
+            hasAcquiredGuideBook = true;
+            if (bookButtonObj != null) bookButtonObj.SetActive(true);
+            transitionCoroutine = null;
+            yield break;
+        }
+
+        // Calculate top-right button destination in bookSpreadRect's parent (bookOverlayObj) local space
+        Vector2 targetAnchoredPos = new Vector2(820f, 440f);
+        if (bookButtonRect != null && bookOverlayObj != null)
+        {
+            RectTransform overlayRect = bookOverlayObj.GetComponent<RectTransform>();
+            Vector2 half = overlayRect.rect.size * 0.5f;
+            targetAnchoredPos = new Vector2(
+                half.x - buttonTopRightMargin.x - buttonSize.x * 0.5f,
+                half.y - buttonTopRightMargin.y - buttonSize.y * 0.5f
+            );
+        }
+
+        const float flyDur = 0.48f;
+        float elapsed = 0f;
+        Vector2 startPos = bookSpreadRect.anchoredPosition;
+        Vector2 controlPt = new Vector2((startPos.x + targetAnchoredPos.x) * 0.35f, targetAnchoredPos.y + 85f);
+
+        while (elapsed < flyDur)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / flyDur);
+            float ease = t * t * (3f - 2f * t);
+
+            // Quadratic Bezier curve sweeping smoothly up into the top-right corner
+            float inv = 1f - ease;
+            Vector2 pos = (inv * inv * startPos) + (2f * inv * ease * controlPt) + (ease * ease * targetAnchoredPos);
+            bookSpreadRect.anchoredPosition = pos;
+
+            float scale = Mathf.Lerp(1f, 0.09f, ease);
+            bookSpreadRect.localScale = new Vector3(scale, scale, 1f);
+            bookSpreadRect.localRotation = Quaternion.Euler(0f, 0f, Mathf.Lerp(0f, -14f, ease));
+            bookOverlayCanvasGroup.alpha = Mathf.Lerp(1f, 0.15f, ease * ease);
+            yield return null;
+        }
+
+        bookOverlayCanvasGroup.alpha = 0f;
+        bookSpreadRect.anchoredPosition = Vector2.zero;
+        bookSpreadRect.localScale = Vector3.one * 0.22f;
+        bookSpreadRect.localRotation = Quaternion.identity;
+        bookOverlayObj.SetActive(false);
+
+        // Reveal and bounce-pop the Top-Right Guide Book button!
+        hasAcquiredGuideBook = true;
+        if (bookButtonObj != null) bookButtonObj.SetActive(true);
+        if (bookButtonRect != null)
+        {
+            bookButtonRect.localScale = Vector3.one * 1.42f;
+        }
+        UpdateAttentionVisuals();
+        PlayGoldenUnlockSFX();
+
+        // Show the "PRESS [B] TO OPEN >" callout pointing directly at the newly docked top-right icon
+        if (dockHintCoroutine != null) StopCoroutine(dockHintCoroutine);
+        dockHintCoroutine = StartCoroutine(ShowPressBHintRoutine());
+
+        transitionCoroutine = null;
+    }
+
+    private IEnumerator ShowPressBHintRoutine()
+    {
+        if (pressBHintObj == null || pressBHintCanvasGroup == null || pressBHintRect == null) yield break;
+
+        pressBHintObj.SetActive(true);
+        Vector2 basePos = new Vector2(-(buttonTopRightMargin.x + buttonSize.x + 18f), -(buttonTopRightMargin.y + 14f));
+
+        // Fade & slide in
+        float elapsed = 0f;
+        const float fadeInDur = 0.25f;
+        while (elapsed < fadeInDur)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / fadeInDur);
+            pressBHintCanvasGroup.alpha = t;
+            pressBHintRect.anchoredPosition = basePos + new Vector2((1f - t) * -28f, 0f);
+            yield return null;
+        }
+
+        // Gentle beckoning horizontal bob pointing toward the top-right [B] scroll icon
+        elapsed = 0f;
+        const float holdDur = 3.6f;
+        while (elapsed < holdDur && !isOpen)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float bobX = Mathf.Sin(elapsed * 6.5f) * 6f;
+            pressBHintRect.anchoredPosition = basePos + new Vector2(bobX, 0f);
+            pressBHintCanvasGroup.alpha = 1f;
+            yield return null;
+        }
+
+        // Smooth fade out
+        elapsed = 0f;
+        const float fadeOutDur = 0.40f;
+        float startAlpha = pressBHintCanvasGroup.alpha;
+        while (elapsed < fadeOutDur)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / fadeOutDur);
+            pressBHintCanvasGroup.alpha = Mathf.Lerp(startAlpha, 0f, t);
+            yield return null;
+        }
+
+        pressBHintCanvasGroup.alpha = 0f;
+        pressBHintObj.SetActive(false);
+        dockHintCoroutine = null;
+    }
+
+    #endregion
 
     public void NextSpread()
     {
@@ -596,15 +1147,15 @@ public class HealGuideBookUI : MonoBehaviour
 
     private void UpdateAttentionVisuals()
     {
-        SetAuroraActive(hasUnreadAttention && !isOpen);
+        SetAuroraActive(hasAcquiredGuideBook && hasUnreadAttention && !isOpen);
         if (scrollButtonLabel != null)
         {
             string label = (hasUnreadAttention && unlockedEnemies.Count > 0)
-                ? $"NEW! [{toggleKey}]"
-                : $"SCROLL [{toggleKey}]";
+                ? $"NEW! [<font=\"LiberationSans SDF\">{toggleKey}</font>]"
+                : $"SCROLL [<font=\"LiberationSans SDF\">{toggleKey}</font>]";
             scrollButtonLabel.text = WrapNumbersWithNormalFont(label);
             scrollButtonLabel.color = (hasUnreadAttention && unlockedEnemies.Count > 0)
-                ? new Color(0.45f, 1.0f, 0.72f, 1f)
+                ? new Color(1.0f, 0.88f, 0.35f, 1f)
                 : new Color(0.96f, 0.85f, 0.56f, 1f);
         }
     }
@@ -627,6 +1178,53 @@ public class HealGuideBookUI : MonoBehaviour
         if (cachedScrollOpenClip == null) cachedScrollOpenClip = BuildProceduralPaperSFX(0.26f, true, false);
         if (cachedScrollCloseClip == null) cachedScrollCloseClip = BuildProceduralPaperSFX(0.21f, false, false);
         if (cachedPageFlipClip == null) cachedPageFlipClip = BuildProceduralPaperSFX(0.17f, true, true);
+        if (cachedGoldenUnlockClip == null) cachedGoldenUnlockClip = BuildGoldenUnlockChimeSFX();
+    }
+
+    private void PlayGoldenUnlockSFX()
+    {
+        EnsureAudioSource();
+        if (cachedGoldenUnlockClip != null && uiAudioSource != null)
+        {
+            uiAudioSource.pitch = 1f;
+            uiAudioSource.PlayOneShot(cachedGoldenUnlockClip, bookSFXVolume * 0.85f);
+        }
+    }
+
+    private static AudioClip BuildGoldenUnlockChimeSFX()
+    {
+        const int sampleRate = 44100;
+        const float duration = 0.85f;
+        int sampleCount = Mathf.RoundToInt(sampleRate * duration);
+        float[] samples = new float[sampleCount];
+
+        // Warm pentatonic golden shimmer chord (D5, A5, D6, F#6)
+        float[] freqs = { 587.33f, 880.00f, 1174.66f, 1479.98f };
+        float[] delays = { 0.00f, 0.055f, 0.115f, 0.175f };
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = (float)i / sampleRate;
+            float val = 0f;
+
+            for (int n = 0; n < freqs.Length; n++)
+            {
+                float nt = t - delays[n];
+                if (nt < 0f) continue;
+
+                float attack = Mathf.Clamp01(nt / 0.014f);
+                float decay = Mathf.Exp(-nt * (4.2f + n * 0.6f));
+                float wave = Mathf.Sin(2f * Mathf.PI * freqs[n] * nt)
+                           + 0.30f * Mathf.Sin(2f * Mathf.PI * freqs[n] * 2f * nt);
+                val += wave * attack * decay * (0.22f - n * 0.025f);
+            }
+
+            samples[i] = Mathf.Clamp(val, -0.85f, 0.85f);
+        }
+
+        AudioClip clip = AudioClip.Create("GoldenUnlockAuroraChime", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
     }
 
     private void PlayBookSFX(bool opening)
@@ -771,7 +1369,7 @@ public class HealGuideBookUI : MonoBehaviour
         scrollButtonLabel = CreateTMPText(
             bookButtonObj.transform,
             "ScrollKeyLabel",
-            $"SCROLL [{toggleKey}]",
+            $"SCROLL [<font=\"LiberationSans SDF\">{toggleKey}</font>]",
             13f,
             new Color(0.96f, 0.85f, 0.56f, 1f),
             TextAlignmentOptions.Center,
@@ -865,9 +1463,10 @@ public class HealGuideBookUI : MonoBehaviour
         if (auroraContainerObj == null || !auroraContainerObj.activeSelf) return;
 
         float t = attentionAnimTime;
-        Color emerald = new Color(0.10f, 0.95f, 0.45f, 1f);
-        Color auroraTeal = new Color(0.18f, 1.00f, 0.78f, 1f);
-        Color mintGlow = new Color(0.55f, 1.00f, 0.68f, 1f);
+        bool useGoldenAurora = newlyUnlockedHighlights.Count > 0 || unlockedEnemies.Count > 0;
+        Color primaryCol = useGoldenAurora ? new Color(1.00f, 0.72f, 0.12f, 1f) : new Color(0.10f, 0.95f, 0.45f, 1f);
+        Color midCol = useGoldenAurora ? new Color(1.00f, 0.88f, 0.34f, 1f) : new Color(0.18f, 1.00f, 0.78f, 1f);
+        Color brightCol = useGoldenAurora ? new Color(1.00f, 0.96f, 0.72f, 1f) : new Color(0.55f, 1.00f, 0.68f, 1f);
 
         if (auroraOuterRect != null && auroraOuterImg != null)
         {
@@ -876,8 +1475,8 @@ public class HealGuideBookUI : MonoBehaviour
             auroraOuterRect.localScale = new Vector3(sx, sy, 1f);
             auroraOuterRect.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(t * 1.1f) * 18f);
 
-            Color c = Color.Lerp(emerald, auroraTeal, 0.5f + 0.5f * Mathf.Sin(t * 2.1f));
-            c.a = 0.42f + 0.18f * Mathf.Sin(t * 3.0f);
+            Color c = Color.Lerp(primaryCol, midCol, 0.5f + 0.5f * Mathf.Sin(t * 2.1f));
+            c.a = 0.44f + 0.18f * Mathf.Sin(t * 3.0f);
             auroraOuterImg.color = c;
         }
 
@@ -888,8 +1487,8 @@ public class HealGuideBookUI : MonoBehaviour
             auroraInnerRect.localScale = new Vector3(sx, sy, 1f);
             auroraInnerRect.localRotation = Quaternion.Euler(0f, 0f, -Mathf.Cos(t * 1.4f) * 22f);
 
-            Color c = Color.Lerp(auroraTeal, mintGlow, 0.5f + 0.5f * Mathf.Cos(t * 2.7f));
-            c.a = 0.48f + 0.22f * Mathf.Cos(t * 3.4f);
+            Color c = Color.Lerp(midCol, brightCol, 0.5f + 0.5f * Mathf.Cos(t * 2.7f));
+            c.a = 0.50f + 0.22f * Mathf.Cos(t * 3.4f);
             auroraInnerImg.color = c;
         }
 
@@ -907,11 +1506,163 @@ public class HealGuideBookUI : MonoBehaviour
                 auroraWisps[i].localScale = new Vector3(twinkle, twinkle, 1f);
                 if (auroraWispImages[i] != null)
                 {
-                    Color wc = Color.Lerp(emerald, mintGlow, 0.5f + 0.5f * Mathf.Sin(t * 3f + i));
-                    wc.a = 0.45f + 0.45f * Mathf.Sin(t * 4.5f + i * 1.3f);
+                    Color wc = Color.Lerp(primaryCol, brightCol, 0.5f + 0.5f * Mathf.Sin(t * 3f + i));
+                    wc.a = 0.48f + 0.45f * Mathf.Sin(t * 4.5f + i * 1.3f);
                     auroraWispImages[i].color = wc;
                 }
             }
+        }
+    }
+
+    private void BuildBookGoldenAuroraBackdrop(Transform overlayParent)
+    {
+        bookGoldAuroraContainer = new GameObject("BookGoldenAuroraBackdrop");
+        bookGoldAuroraContainer.transform.SetParent(overlayParent, false);
+        RectTransform containerRect = bookGoldAuroraContainer.AddComponent<RectTransform>();
+        containerRect.anchorMin = new Vector2(0.5f, 0.5f);
+        containerRect.anchorMax = new Vector2(0.5f, 0.5f);
+        containerRect.sizeDelta = new Vector2(1460f, 940f);
+        containerRect.anchoredPosition = Vector2.zero;
+
+        // Outer radiant Golden Aurora halo
+        GameObject outerObj = new GameObject("GoldenAuroraOuter");
+        outerObj.transform.SetParent(bookGoldAuroraContainer.transform, false);
+        bookGoldAuroraOuterRect = outerObj.AddComponent<RectTransform>();
+        bookGoldAuroraOuterRect.anchorMin = new Vector2(0.5f, 0.5f);
+        bookGoldAuroraOuterRect.anchorMax = new Vector2(0.5f, 0.5f);
+        bookGoldAuroraOuterRect.sizeDelta = new Vector2(1420f, 900f);
+        bookGoldAuroraOuterImg = outerObj.AddComponent<Image>();
+        bookGoldAuroraOuterImg.sprite = cachedAuroraGlowSprite;
+        bookGoldAuroraOuterImg.color = new Color(1.00f, 0.74f, 0.14f, 0.52f);
+        bookGoldAuroraOuterImg.raycastTarget = false;
+
+        // Inner shimmering Golden Aurora veil
+        GameObject innerObj = new GameObject("GoldenAuroraInner");
+        innerObj.transform.SetParent(bookGoldAuroraContainer.transform, false);
+        bookGoldAuroraInnerRect = innerObj.AddComponent<RectTransform>();
+        bookGoldAuroraInnerRect.anchorMin = new Vector2(0.5f, 0.5f);
+        bookGoldAuroraInnerRect.anchorMax = new Vector2(0.5f, 0.5f);
+        bookGoldAuroraInnerRect.sizeDelta = new Vector2(1280f, 800f);
+        bookGoldAuroraInnerImg = innerObj.AddComponent<Image>();
+        bookGoldAuroraInnerImg.sprite = cachedAuroraGlowSprite;
+        bookGoldAuroraInnerImg.color = new Color(1.00f, 0.90f, 0.42f, 0.56f);
+        bookGoldAuroraInnerImg.raycastTarget = false;
+
+        // 8 orbiting Golden Aurora sparkle motes around the tome
+        const int wispCount = 8;
+        bookGoldAuroraWisps = new RectTransform[wispCount];
+        bookGoldAuroraWispImages = new Image[wispCount];
+        for (int i = 0; i < wispCount; i++)
+        {
+            GameObject wObj = new GameObject($"GoldenAuroraWisp_{i}");
+            wObj.transform.SetParent(bookGoldAuroraContainer.transform, false);
+            RectTransform wr = wObj.AddComponent<RectTransform>();
+            wr.anchorMin = new Vector2(0.5f, 0.5f);
+            wr.anchorMax = new Vector2(0.5f, 0.5f);
+            wr.sizeDelta = new Vector2(26f, 26f);
+            Image wi = wObj.AddComponent<Image>();
+            wi.sprite = cachedGlowDotSprite;
+            wi.color = new Color(1.00f, 0.92f, 0.45f, 0.9f);
+            wi.raycastTarget = false;
+            bookGoldAuroraWisps[i] = wr;
+            bookGoldAuroraWispImages[i] = wi;
+        }
+
+        // Golden "NEW ENEMY UNLOCKED!" floating header above the tome
+        newEnemyBannerObj = new GameObject("NewEnemyUnlockedBanner");
+        newEnemyBannerObj.transform.SetParent(bookGoldAuroraContainer.transform, false);
+        RectTransform bannerRect = newEnemyBannerObj.AddComponent<RectTransform>();
+        bannerRect.anchorMin = new Vector2(0.5f, 0.5f);
+        bannerRect.anchorMax = new Vector2(0.5f, 0.5f);
+        bannerRect.anchoredPosition = new Vector2(0f, 392f);
+        bannerRect.sizeDelta = new Vector2(680f, 48f);
+
+        newEnemyBannerText = CreateTMPText(
+            newEnemyBannerObj.transform,
+            "NewEnemyBannerLabel",
+            "~ NEW ENEMY UNLOCKED ~",
+            30f,
+            new Color(1.00f, 0.92f, 0.42f, 1f),
+            TextAlignmentOptions.Center,
+            FontStyles.Bold
+        );
+        StretchFill(newEnemyBannerText.rectTransform);
+        newEnemyBannerText.outlineWidth = 0.24f;
+        newEnemyBannerText.outlineColor = new Color32(80, 42, 4, 240);
+
+        bookGoldAuroraContainer.SetActive(false);
+    }
+
+    private void SetBookGoldenAuroraActive(bool active)
+    {
+        isGoldenUnlockAuroraActive = active;
+        if (bookGoldAuroraContainer != null)
+        {
+            bookGoldAuroraContainer.SetActive(active);
+        }
+    }
+
+    private void UpdateBookGoldenAuroraEffect()
+    {
+        if (bookGoldAuroraContainer == null || !bookGoldAuroraContainer.activeSelf) return;
+
+        float t = strokeAnimTime;
+        Color amberGold = new Color(1.00f, 0.68f, 0.10f, 1f);
+        Color radiantGold = new Color(1.00f, 0.88f, 0.34f, 1f);
+        Color sunlitGold = new Color(1.00f, 0.97f, 0.72f, 1f);
+
+        if (bookGoldAuroraOuterRect != null && bookGoldAuroraOuterImg != null)
+        {
+            float sx = 1.0f + Mathf.Sin(t * 1.8f) * 0.08f;
+            float sy = 1.0f + Mathf.Cos(t * 1.5f) * 0.10f;
+            bookGoldAuroraOuterRect.localScale = new Vector3(sx, sy, 1f);
+            bookGoldAuroraOuterRect.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(t * 0.75f) * 4.5f);
+
+            Color c = Color.Lerp(amberGold, radiantGold, 0.5f + 0.5f * Mathf.Sin(t * 2.0f));
+            c.a = 0.44f + 0.18f * Mathf.Sin(t * 2.6f);
+            bookGoldAuroraOuterImg.color = c;
+        }
+
+        if (bookGoldAuroraInnerRect != null && bookGoldAuroraInnerImg != null)
+        {
+            float sx = 1.0f + Mathf.Cos(t * 2.3f) * 0.06f;
+            float sy = 1.0f + Mathf.Sin(t * 2.1f) * 0.08f;
+            bookGoldAuroraInnerRect.localScale = new Vector3(sx, sy, 1f);
+            bookGoldAuroraInnerRect.localRotation = Quaternion.Euler(0f, 0f, -Mathf.Cos(t * 0.95f) * 5.5f);
+
+            Color c = Color.Lerp(radiantGold, sunlitGold, 0.5f + 0.5f * Mathf.Cos(t * 2.4f));
+            c.a = 0.46f + 0.20f * Mathf.Cos(t * 3.1f);
+            bookGoldAuroraInnerImg.color = c;
+        }
+
+        if (bookGoldAuroraWisps != null)
+        {
+            for (int i = 0; i < bookGoldAuroraWisps.Length; i++)
+            {
+                if (bookGoldAuroraWisps[i] == null) continue;
+                float angle = t * 0.85f + (i * (Mathf.PI * 2f / bookGoldAuroraWisps.Length));
+                float rx = 600f + Mathf.Sin(t * 2.1f + i * 1.3f) * 28f;
+                float ry = 375f + Mathf.Cos(t * 1.9f + i * 1.1f) * 24f;
+                bookGoldAuroraWisps[i].anchoredPosition = new Vector2(Mathf.Cos(angle) * rx, Mathf.Sin(angle) * ry);
+
+                float twinkle = 0.72f + 0.55f * Mathf.Sin(t * 5.8f + i * 1.7f);
+                bookGoldAuroraWisps[i].localScale = new Vector3(twinkle, twinkle, 1f);
+
+                if (bookGoldAuroraWispImages[i] != null)
+                {
+                    Color wc = Color.Lerp(amberGold, sunlitGold, 0.5f + 0.5f * Mathf.Sin(t * 3.2f + i));
+                    wc.a = 0.50f + 0.48f * Mathf.Sin(t * 4.2f + i * 1.4f);
+                    bookGoldAuroraWispImages[i].color = wc;
+                }
+            }
+        }
+
+        if (newEnemyBannerText != null)
+        {
+            float pulse = 0.5f + 0.5f * Mathf.Sin(t * 5.0f);
+            newEnemyBannerText.color = Color.Lerp(radiantGold, sunlitGold, pulse);
+            float scale = 1.0f + 0.04f * pulse;
+            newEnemyBannerText.rectTransform.localScale = new Vector3(scale, scale, 1f);
         }
     }
 
@@ -931,6 +1682,9 @@ public class HealGuideBookUI : MonoBehaviour
         Button backdropBtn = bookOverlayObj.AddComponent<Button>();
         backdropBtn.transition = Selectable.Transition.None;
         backdropBtn.onClick.AddListener(CloseBook);
+
+        // Radiant Golden Aurora backdrop (shown when a new enemy is unlocked!)
+        BuildBookGoldenAuroraBackdrop(bookOverlayObj.transform);
 
         // Outer Lacquer / Cedar Cover
         GameObject coverObj = new GameObject("AncientTomeSpread");

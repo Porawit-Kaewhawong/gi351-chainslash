@@ -392,11 +392,21 @@ public class LegendarySamurai : EnemyBase
         SetupBossAudio();
         SetupBossBGM();
 
-#if UNITY_EDITOR
-        if (weakPointFontAsset == null)
+        // Use standard TMP default font (LiberationSans SDF) for crisp 1 2 3 4 5 weak point order numbers
+        if (weakPointFontAsset == null || weakPointFontAsset.name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            weakPointFontAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>("Assets/Fonts/PixelifySans-VariableFont_wght SDF.asset");
+            TMP_FontAsset normalFont = TMP_Settings.defaultFontAsset;
+            if (normalFont == null || normalFont.name.IndexOf("Pixelify", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                normalFont = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+            }
+            if (normalFont != null)
+            {
+                weakPointFontAsset = normalFont;
+            }
         }
+
+#if UNITY_EDITOR
 
         if (minionPrefabs == null || minionPrefabs.Count == 0)
         {
