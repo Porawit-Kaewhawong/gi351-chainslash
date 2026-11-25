@@ -115,8 +115,8 @@ public class HealGuideBookUI : MonoBehaviour
     [SerializeField] private Key toggleKey = Key.B;
     [Tooltip("If true, pauses game time while reading the tome.")]
     [SerializeField] private bool pauseGameWhileReading = true;
-    [Tooltip("If false (default), resets every new game so starting a new game shows the wiggle & aurora and locked bestiary again.")]
-    [SerializeField] private bool saveFirstTimeState = false;
+    [Tooltip("If true (default), saves opened state and unlocked Bestiary progress across deaths, restarts, and returning to Main Menu.")]
+    [SerializeField] private bool saveFirstTimeState = true;
     [Tooltip("Sorting order of the overlay canvas.")]
     [SerializeField] private int canvasSortingOrder = 120;
 
@@ -148,6 +148,7 @@ public class HealGuideBookUI : MonoBehaviour
     #region Private State
 
     private const string HasOpenedBookPrefKey = "HealGuideBook_HasOpenedOnce";
+    private const string BestiaryUnlockPrefPrefix = "HealGuideBook_Unlocked_";
     private const int TotalSpreads = 3;
 
     private static readonly BestiaryEntryData[] BestiaryCatalog = new BestiaryEntryData[]
@@ -300,6 +301,7 @@ public class HealGuideBookUI : MonoBehaviour
 
         bool alreadyOpenedBefore = saveFirstTimeState && PlayerPrefs.GetInt(HasOpenedBookPrefKey, 0) == 1;
         hasUnreadAttention = !alreadyOpenedBefore;
+        LoadSavedBestiaryProgress();
 
         EnsureProceduralSprites();
         EnsureAudioSource();
@@ -310,11 +312,31 @@ public class HealGuideBookUI : MonoBehaviour
         UpdateAttentionVisuals();
     }
 
+    private void LoadSavedBestiaryProgress()
+    {
+        if (!saveFirstTimeState) return;
+
+        for (int i = 0; i < BestiaryCatalog.Length; i++)
+        {
+            BestiaryEnemyId id = BestiaryCatalog[i].id;
+            if (PlayerPrefs.GetInt(BestiaryUnlockPrefPrefix + (int)id, 0) == 1)
+            {
+                unlockedEnemies.Add(id);
+            }
+        }
+    }
+
     [ContextMenu("Reset First-Time Book & Bestiary")]
     public void ResetFirstTimeAttention()
     {
         PlayerPrefs.DeleteKey(HasOpenedBookPrefKey);
+        for (int i = 0; i < BestiaryCatalog.Length; i++)
+        {
+            PlayerPrefs.DeleteKey(BestiaryUnlockPrefPrefix + (int)BestiaryCatalog[i].id);
+        }
+        PlayerPrefs.Save();
         unlockedEnemies.Clear();
+        newlyUnlockedHighlights.Clear();
         hasUnreadAttention = true;
         attentionAnimTime = 0f;
         RefreshAllBestiaryCards();
@@ -353,27 +375,28 @@ public class HealGuideBookUI : MonoBehaviour
         bool isMenuScene = scene.buildIndex == 0 || FindFirstObjectByType<MainMenu>() != null;
         if (isMenuScene)
         {
-            if (rootCanvas != null) rootCanvas.enabled = false;
-
-            // Reset for a fresh New Game run when returning to Main Menu
-            if (!saveFirstTimeState)
-            {
-                unlockedEnemies.Clear();
-                hasUnreadAttention = true;
-                attentionAnimTime = 0f;
-                currentSpreadIndex = 0;
-                ApplySpreadVisibility(0);
-                RefreshAllBestiaryCards();
-                UpdateAttentionVisuals();
-            }
+            SetRootCanvasVisible(false);
         }
         else
         {
-            if (rootCanvas != null) rootCanvas.enabled = true;
+            SetRootCanvasVisible(true);
             UpdateAttentionVisuals();
             BindPlayer(PlayerController.Instance);
             RefreshStatsText();
             RefreshAllBestiaryCards();
+        }
+    }
+
+    private void SetRootCanvasVisible(bool visible)
+    {
+        if (rootCanvas == null) return;
+
+        rootCanvas.enabled = visible;
+        if (rootCanvas.TryGetComponent(out CanvasGroup cg))
+        {
+            cg.alpha = visible ? 1f : 0f;
+            cg.blocksRaycasts = visible;
+            cg.interactable = visible;
         }
     }
 
@@ -456,6 +479,10 @@ public class HealGuideBookUI : MonoBehaviour
     public void BindPlayer(PlayerController player)
     {
         boundPlayer = player != null ? player : PlayerController.Instance;
+        if (boundPlayer != null && FindFirstObjectByType<MainMenu>() == null)
+        {
+            SetRootCanvasVisible(true);
+        }
         RefreshStatsText();
     }
 
@@ -470,6 +497,12 @@ public class HealGuideBookUI : MonoBehaviour
         bool isNewUnlock = unlockedEnemies.Add(id);
         if (isNewUnlock)
         {
+            if (saveFirstTimeState)
+            {
+                PlayerPrefs.SetInt(BestiaryUnlockPrefPrefix + (int)id, 1);
+                PlayerPrefs.Save();
+            }
+
             newlyUnlockedHighlights.Add(id);
 
             // Notify via Wiggle + Green Aurora on the top-right scroll button so the player can open it themselves

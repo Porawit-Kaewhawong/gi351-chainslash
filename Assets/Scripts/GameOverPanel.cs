@@ -383,6 +383,22 @@ public class GameOverPanel : MonoBehaviour
         }
 
         RestorePlayerRenderers();
+        RestoreFadedCanvases();
+    }
+
+    private void RestoreFadedCanvases()
+    {
+        for (int i = 0; i < fadedOtherCanvases.Count; i++)
+        {
+            CanvasGroup cg = fadedOtherCanvases[i];
+            if (cg != null)
+            {
+                cg.alpha = 1f;
+                cg.blocksRaycasts = true;
+                cg.interactable = true;
+            }
+        }
+        fadedOtherCanvases.Clear();
     }
 
     #endregion
