@@ -71,10 +71,17 @@ public class BossHealthBarUI : MonoBehaviour
     [SerializeField] private float ghostCatchupSpeed = 2.4f;
 
     [Header("Dynamic 20-Hit Segment Dividers")]
-    [Tooltip("Generates thin pixel dividers across the bar marking each of the 20 hits.")]
+    [Tooltip("Generates thin pixel dividers across the bar marking each hit.")]
     [SerializeField] private bool enableSegmentDividers = true;
     [SerializeField] private float segmentDividerWidth = 1.5f;
-    [SerializeField] private Color segmentDividerColor = new Color(0.04f, 0.01f, 0.02f, 0.65f);
+    [SerializeField] private Color segmentDividerColor = new Color(0.04f, 0.01f, 0.02f, 0.30f);
+
+    [Header("Phase Boundary Black Lines (20% / 40% / 60% / 80%)")]
+    [Tooltip("Draws bold solid black vertical lines across the Boss Health Bar to clearly mark each Phase transition.")]
+    [SerializeField] private bool enablePhaseDividers = true;
+    [SerializeField] private float phaseDividerWidth = 5.5f;
+    [SerializeField] private Color phaseDividerColor = new Color(0f, 0f, 0f, 1f);
+    [SerializeField] private float[] phaseThresholdRatios = new float[] { 0.20f, 0.40f, 0.60f, 0.80f };
 
     [Header("Dynamic Elastic Hit Squish and Impact Shake")]
     [Tooltip("Applies physical elastic scale squish and position shake on hit.")]
@@ -425,7 +432,7 @@ public class BossHealthBarUI : MonoBehaviour
 
     private void CreateSegmentDividers()
     {
-        if (!enableSegmentDividers || fillBar == null) return;
+        if ((!enableSegmentDividers && !enablePhaseDividers) || fillBar == null) return;
 
         Transform parent = fillBar.transform.parent;
         Transform existing = parent.Find(SegmentDividersName);
@@ -449,24 +456,52 @@ public class BossHealthBarUI : MonoBehaviour
         containerRect.SetSiblingIndex(fillBar.transform.GetSiblingIndex() + 1);
 
         Sprite pixelSprite = GetOrCreatePixelSprite();
-        int dividerCount = maxHits - 1;
 
-        for (int i = 1; i <= dividerCount; i++)
+        // 1. Subtle thin per-hit tick marks
+        if (enableSegmentDividers && maxHits > 1)
         {
-            float ratio = i / (float)maxHits;
-            GameObject divObj = new GameObject($"Divider_{i}");
-            RectTransform divRect = divObj.AddComponent<RectTransform>();
-            divRect.SetParent(containerRect, false);
-            divRect.anchorMin = new Vector2(ratio, 0f);
-            divRect.anchorMax = new Vector2(ratio, 1f);
-            divRect.pivot = new Vector2(0.5f, 0.5f);
-            divRect.sizeDelta = new Vector2(segmentDividerWidth, 0f);
-            divRect.anchoredPosition = Vector2.zero;
+            int dividerCount = maxHits - 1;
+            for (int i = 1; i <= dividerCount; i++)
+            {
+                float ratio = i / (float)maxHits;
+                GameObject divObj = new GameObject($"Divider_{i}");
+                RectTransform divRect = divObj.AddComponent<RectTransform>();
+                divRect.SetParent(containerRect, false);
+                divRect.anchorMin = new Vector2(ratio, 0f);
+                divRect.anchorMax = new Vector2(ratio, 1f);
+                divRect.pivot = new Vector2(0.5f, 0.5f);
+                divRect.sizeDelta = new Vector2(segmentDividerWidth, 0f);
+                divRect.anchoredPosition = Vector2.zero;
 
-            Image divImg = divObj.AddComponent<Image>();
-            divImg.sprite = pixelSprite;
-            divImg.color = segmentDividerColor;
-            divImg.raycastTarget = false;
+                Image divImg = divObj.AddComponent<Image>();
+                divImg.sprite = pixelSprite;
+                divImg.color = segmentDividerColor;
+                divImg.raycastTarget = false;
+            }
+        }
+
+        // 2. Bold solid black Phase boundary lines (20% / 40% / 60% / 80%) so the player clearly sees each Phase threshold!
+        if (enablePhaseDividers && phaseThresholdRatios != null)
+        {
+            for (int p = 0; p < phaseThresholdRatios.Length; p++)
+            {
+                float ratio = Mathf.Clamp01(phaseThresholdRatios[p]);
+                if (ratio <= 0.01f || ratio >= 0.99f) continue;
+
+                GameObject phaseLineObj = new GameObject($"PhaseLine_{Mathf.RoundToInt(ratio * 100f)}pct");
+                RectTransform phaseRect = phaseLineObj.AddComponent<RectTransform>();
+                phaseRect.SetParent(containerRect, false);
+                phaseRect.anchorMin = new Vector2(ratio, 0f);
+                phaseRect.anchorMax = new Vector2(ratio, 1f);
+                phaseRect.pivot = new Vector2(0.5f, 0.5f);
+                phaseRect.sizeDelta = new Vector2(phaseDividerWidth, 8f);
+                phaseRect.anchoredPosition = Vector2.zero;
+
+                Image phaseImg = phaseLineObj.AddComponent<Image>();
+                phaseImg.sprite = pixelSprite;
+                phaseImg.color = phaseDividerColor;
+                phaseImg.raycastTarget = false;
+            }
         }
     }
 

@@ -36,7 +36,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 0, y: -1.2}
-  m_SizeDelta: {x: 2, y: 0.1}
+  m_SizeDelta: {x: 3.1, y: 0.12}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &2401096596432104389
 CanvasRenderer:
@@ -1060,7 +1060,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::PlayerController
   cursorTexture: {fileID: 2800000, guid: 0586d77c574fbea468abf654bac6bac7, type: 3}
   cursorMode: 0
-  maxHealth: 100
+  maxHealth: 160
   healthRegenDelay: 4
   healthRegenTickInterval: 0.05
   healthBarImage: {fileID: 3635520213015844214}
@@ -1114,7 +1114,7 @@ MonoBehaviour:
   dashingTime: 0.2
   dashingCooldown: 1
   dashSFX: {fileID: 8300000, guid: 1786b9d7ce153d544a5abfd970d1c66f, type: 3}
-  maxMeter: 100
+  maxMeter: 160
   timeSpeed: 0.25
   modeDimAlpha: 0.55
   modeDimFadeDuration: 0.15
@@ -1673,8 +1673,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 0.05}
-  m_SizeDelta: {x: 2, y: 0.1}
+  m_AnchoredPosition: {x: 0, y: 0.065}
+  m_SizeDelta: {x: 3.3, y: 0.13}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &4794137263013994099
 CanvasRenderer:
@@ -1781,7 +1781,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 0, y: -1}
-  m_SizeDelta: {x: 2, y: 0.1}
+  m_SizeDelta: {x: 3.3, y: 0.13}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &6088410923236882051
 CanvasRenderer:
@@ -1958,8 +1958,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 0.05}
-  m_SizeDelta: {x: 2, y: 0.1}
+  m_AnchoredPosition: {x: 0, y: 0.06}
+  m_SizeDelta: {x: 3.1, y: 0.12}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!222 &4600087980707596815
 CanvasRenderer:

@@ -243,6 +243,20 @@ public class LegendarySamurai : EnemyBase
     [SerializeField] private Color hiddenStabGlintColor = Color.red;
     [SerializeField] private AudioClip hiddenStabSFX;
 
+    [Header("Half-HP Sword Clash QTE (50% HP Special Skill)")]
+    [Tooltip("If true, triggers a dramatic face-to-face rapid sword clash QTE when the Boss reaches 50% HP.")]
+    [SerializeField] private bool enableHalfHpSwordClashQTE = true;
+    [Tooltip("Maximum duration (seconds) of the sword clash mash tug-of-war.")]
+    [SerializeField] private float clashMaxDuration = 7.0f;
+    [Tooltip("How much each Left Mouse Click pushes the clash bar toward the Player (0..1 scale).")]
+    [SerializeField] private float clashClickGain = 0.062f;
+    [Tooltip("How fast the Boss pushes the clash bar back per second (0..1 scale).")]
+    [SerializeField] private float bossClashPushPerSecond = 0.17f;
+    [Tooltip("Bonus hits dealt to the Boss when the Player wins the QTE and executes the Blue/Red Lightning Piercing Counter-Slash.")]
+    [SerializeField] private int clashWinBonusHits = 3;
+    [Tooltip("Damage dealt to the Player if the Boss wins the sword clash.")]
+    [SerializeField] private float clashLoseDamage = 25f;
+
     [Header("Phrase-Based Minion Spawner")]
     [Tooltip("List of enemy prefabs that can be randomly chosen to spawn when a phrase passes.")]
     [SerializeField] private List<GameObject> minionPrefabs = new List<GameObject>();
@@ -357,6 +371,9 @@ public class LegendarySamurai : EnemyBase
     private AudioSource bgmSourceB;
     private bool isSourceAPlaying = false;
     private bool isPhase2BGMActive = false;
+    private bool hasTriggeredHalfHpClash = false;
+    private bool pendingHalfHpClash = false;
+    private bool isInSwordClashQTE = false;
     private Coroutine bgmCrossfadeCoroutine;
 
     #endregion
@@ -1044,7 +1061,7 @@ public class LegendarySamurai : EnemyBase
 
     protected override void Movement()
     {
-        if (IsDead || isInIntroCutscene || currentHits <= 0 || bossState != BossActionState.Moving) return;
+        if (IsDead || isInIntroCutscene || isInSwordClashQTE || currentHits <= 0 || bossState != BossActionState.Moving) return;
         base.Movement();
     }
 
@@ -1054,18 +1071,30 @@ public class LegendarySamurai : EnemyBase
 
         while (!IsDead && currentHits > 0)
         {
+            // Trigger the 50% HP Face-to-Face Rapid Sword Clash QTE immediately when ready!
+            if (pendingHalfHpClash)
+            {
+                pendingHalfHpClash = false;
+                currentActionCoroutine = StartCoroutine(HalfHpSwordClashQTERoutine());
+                yield return currentActionCoroutine;
+                currentActionCoroutine = null;
+                yield return null;
+                continue;
+            }
+
             // Moving / Positioning between attacks
             bossState = BossActionState.Moving;
             float cooldown = GetAttackCooldown();
             float idleTimer = 0f;
 
-            while (idleTimer < cooldown && !IsDead && currentHits > 0)
+            while (idleTimer < cooldown && !IsDead && currentHits > 0 && !pendingHalfHpClash)
             {
                 idleTimer += Time.deltaTime;
                 yield return null;
             }
 
             if (IsDead || currentHits <= 0) yield break;
+            if (pendingHalfHpClash) continue;
 
             // Pick an attack from the unlocked pool, avoiding immediate repetition if possible
             List<BossAttackPattern> availablePatterns = GetAvailablePatterns();
@@ -1105,6 +1134,1126 @@ public class LegendarySamurai : EnemyBase
 
             yield return null;
         }
+    }
+
+    #endregion
+
+    #region Half-HP Face-to-Face Sword Clash QTE & Blue/Red Lightning Piercing Counter
+
+    [ContextMenu("Test Half-HP Sword Clash QTE")]
+    private void DebugTriggerHalfHpClashQTE()
+    {
+        if (!Application.isPlaying || isInSwordClashQTE || IsDead) return;
+        hasTriggeredHalfHpClash = true;
+        pendingHalfHpClash = true;
+    }
+
+    private IEnumerator HalfHpSwordClashQTERoutine()
+    {
+        PlayerController targetPlayer = playerController != null ? playerController : PlayerController.Instance;
+        if (targetPlayer == null || targetPlayer.IsDead || IsDead) yield break;
+
+        isInSwordClashQTE = true;
+        bossState = BossActionState.Staggered;
+        isDashingSlash = false;
+        ResetWeakPoints();
+
+        // Lock player into dramatic face-to-face clash stance
+        targetPlayer.SetPortalTransitionState(true);
+        targetPlayer.SetCutsceneSlashingStance(true);
+        Rigidbody2D playerRb = targetPlayer.GetComponent<Rigidbody2D>();
+        if (playerRb != null) playerRb.linearVelocity = Vector2.zero;
+        if (rb != null) rb.linearVelocity = Vector2.zero;
+
+        // Position Player & Boss across from each other at dramatic Energy-Charge & Fireball Clash distance!
+        float bossSideSign = (transform.position.x >= targetPlayer.transform.position.x) ? 1f : -1f;
+        const float desiredSpacing = 5.6f;
+        Vector3 playerBasePos = targetPlayer.transform.position;
+        float actualSpacing = desiredSpacing;
+        RaycastHit2D spaceWall = Physics2D.Raycast(playerBasePos + new Vector3(0f, 0.4f, 0f), new Vector2(bossSideSign, 0f), desiredSpacing + 1.0f, groundLayer);
+        if (spaceWall.collider != null && !spaceWall.collider.isTrigger)
+        {
+            actualSpacing = Mathf.Max(2.8f, spaceWall.distance - 1.0f);
+        }
+        Vector3 bossTargetPos = new Vector3(playerBasePos.x + bossSideSign * actualSpacing, playerBasePos.y, transform.position.z);
+
+        // Face each other cleanly
+        targetPlayer.FaceWorldDirection(bossSideSign);
+        if (spriteRenderer != null) spriteRenderer.flipX = (bossSideSign > 0f);
+
+        // Frame BOTH Player & Boss cleanly in the Cinemachine camera
+        CinemachineCamera cmCam = FindFirstObjectByType<CinemachineCamera>();
+        Transform origTrackTarget = cmCam != null ? cmCam.Target.TrackingTarget : null;
+        float origOrthoSize = (cmCam != null && cmCam.Lens.OrthographicSize > 0.5f) ? cmCam.Lens.OrthographicSize : 6.5f;
+
+        GameObject camAnchorObj = new GameObject("BossClashQTECamAnchor");
+        Transform camAnchor = camAnchorObj.transform;
+        Vector3 midpoint = (playerBasePos + bossTargetPos) * 0.5f + new Vector3(0f, 0.35f, 0f);
+        camAnchor.position = midpoint;
+        if (cmCam != null)
+        {
+            cmCam.Target.TrackingTarget = camAnchor;
+        }
+
+        // --- BEAT 1: Boss Takes Frozen Sword-Slash Charge Stance Across From Player! (0.72s) ---
+        PlayBossSFX(bossRoarSFX, 1.12f, roarVolume);
+        LockBossToFrozenSlashChargePose();
+
+        Vector3 bossStartPos = transform.position;
+        float rushElapsed = 0f;
+        const float rushDur = 0.72f;
+        while (rushElapsed < rushDur && !IsDead)
+        {
+            rushElapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(rushElapsed / rushDur);
+            float ease = 1f - Mathf.Pow(1f - t, 3f);
+
+            transform.position = Vector3.Lerp(bossStartPos, bossTargetPos, ease);
+            if (rb != null) rb.linearVelocity = Vector2.zero;
+            if (playerRb != null) playerRb.linearVelocity = Vector2.zero;
+
+            if (cmCam != null)
+            {
+                cmCam.Lens.OrthographicSize = Mathf.Lerp(origOrthoSize, origOrthoSize * 0.84f, ease);
+            }
+            yield return null;
+        }
+
+        transform.position = bossTargetPos;
+        Vector3 lockedPlayerPos = targetPlayer.transform.position;
+        Vector3 lockedBossPos = transform.position;
+        Vector3 playerBaseScale = targetPlayer.transform.localScale;
+        Vector3 bossBaseScale = transform.localScale;
+        midpoint = (lockedPlayerPos + lockedBossPos) * 0.5f + new Vector3(0f, 0.30f, 0f);
+        camAnchor.position = midpoint;
+
+        // Build 100% Crisp Pixel-Art Energy Orbs & Colliding Fireball Beams!
+        Sprite radialOrbSprite = CreateRadialEnergyOrbSprite();
+        Texture2D pixelBeamTex = CreatePixelBeamTexture();
+        Material clashBeamMat = new Material(Shader.Find("Sprites/Default")) { mainTexture = pixelBeamTex };
+        GameObject clashVfxRoot = new GameObject("BossEnergyFireballClashVFX");
+
+        Vector3 playerEmitPos = lockedPlayerPos + new Vector3(bossSideSign * 0.85f, 0.25f, 0f);
+        Vector3 bossEmitPos = lockedBossPos + new Vector3(-bossSideSign * 0.95f, 0.30f, 0f);
+
+        Transform playerOrbTr = CreateEnergyOrbVisual(clashVfxRoot.transform, "PlayerBlueChargeOrb", radialOrbSprite, playerEmitPos,
+            new Color(0.14f, 0.82f, 1.00f, 0.46f), new Color(0.92f, 0.99f, 1f, 0.72f), 17);
+        Transform bossOrbTr = CreateEnergyOrbVisual(clashVfxRoot.transform, "BossFireballChargeOrb", radialOrbSprite, bossEmitPos,
+            new Color(1.00f, 0.28f, 0.06f, 0.48f), new Color(1.00f, 0.88f, 0.35f, 0.72f), 17);
+        Transform clashSphereTr = CreateEnergyOrbVisual(clashVfxRoot.transform, "CenterCollidingFireballSphere", radialOrbSprite, midpoint,
+            new Color(1.00f, 0.55f, 0.18f, 0.62f), new Color(1f, 1f, 1f, 0.82f), 20);
+        clashSphereTr.localScale = Vector3.zero;
+
+        AnimationCurve beamCurve = AnimationCurve.Constant(0f, 1f, 1f);
+        LineRenderer playerBlueBeamOuter = CreatePiercingBeamLine(clashVfxRoot.transform, "PlayerBlueBeamOuter", clashBeamMat, beamCurve, 0.46f, 15,
+            new Color(0.06f, 0.52f, 1.00f, 0.30f), new Color(0.28f, 0.92f, 1.00f, 0.42f));
+        LineRenderer playerBlueBeamCore = CreatePiercingBeamLine(clashVfxRoot.transform, "PlayerBlueBeamCore", clashBeamMat, beamCurve, 0.20f, 16,
+            new Color(0.62f, 0.96f, 1.00f, 0.85f), new Color(1f, 1f, 1f, 0.90f));
+        LineRenderer bossFireBeamOuter = CreatePiercingBeamLine(clashVfxRoot.transform, "BossFireBeamOuter", clashBeamMat, beamCurve, 0.50f, 15,
+            new Color(1.00f, 0.14f, 0.06f, 0.32f), new Color(1.00f, 0.52f, 0.08f, 0.44f));
+        LineRenderer bossFireBeamCore = CreatePiercingBeamLine(clashVfxRoot.transform, "BossFireBeamCore", clashBeamMat, beamCurve, 0.22f, 16,
+            new Color(1.00f, 0.82f, 0.28f, 0.85f), new Color(1.00f, 0.98f, 0.82f, 0.90f));
+        playerBlueBeamOuter.positionCount = 0;
+        playerBlueBeamCore.positionCount = 0;
+        bossFireBeamOuter.positionCount = 0;
+        bossFireBeamCore.positionCount = 0;
+
+        AudioClip clashClangClip = CreateSwordClashClangSFX();
+        AudioClip thunderPierceClip = CreatePiercingThunderSlashSFX();
+
+        // --- BEAT 1.5: Dramatic Power-Charge Build-Up (0.58s — Player charges Blue Energy, Boss charges Fireball!) ---
+        const float chargeUpDur = 0.58f;
+        float chargeElapsed = 0f;
+        float chargeMoteTimer = 0f;
+        while (chargeElapsed < chargeUpDur && !IsDead)
+        {
+            float dt = Time.deltaTime;
+            chargeElapsed += dt;
+            float t = Mathf.Clamp01(chargeElapsed / chargeUpDur);
+            float ease = t * t * (3f - 2f * t);
+
+            // Player pulses slightly while charging; Boss stands rock-steady in Idle stance
+            float breath = Mathf.Sin(chargeElapsed * 18f) * 0.035f;
+            targetPlayer.transform.localScale = new Vector3(playerBaseScale.x * (1f + breath), playerBaseScale.y * (1f - breath), playerBaseScale.z);
+            transform.localScale = bossBaseScale;
+
+            // Growing Blue Energy Orb & Boss Fireball Orb (compact & softer opacity)
+            float orbS = Mathf.Lerp(0.15f, 0.82f, ease) * (1f + 0.06f * Mathf.Sin(chargeElapsed * 24f));
+            playerOrbTr.localScale = Vector3.one * orbS;
+            bossOrbTr.localScale = Vector3.one * (orbS * 1.08f);
+
+            chargeMoteTimer += dt;
+            if (chargeMoteTimer >= 0.07f)
+            {
+                chargeMoteTimer = 0f;
+                SpawnChargeGatherMote(playerEmitPos, true);
+                SpawnChargeGatherMote(bossEmitPos, false);
+            }
+
+            if (playerRb != null) playerRb.linearVelocity = Vector2.zero;
+            if (rb != null) rb.linearVelocity = Vector2.zero;
+            yield return null;
+        }
+
+        // Fire both energy beams & collide in the center!
+        targetPlayer.TriggerCameraShake(0.18f);
+        if (clashClangClip != null) targetPlayer.PlayPitchedSFX(clashClangClip, 0.85f, 0.85f);
+        SpawnSwordClashSparks(midpoint, true, 6);
+        SpawnSwordClashSparks(midpoint, false, 6);
+
+        // --- BEAT 2: Energy & Fireball Beam Clash QTE (Animated Left-Click Mouse Icon + 0.65s calm grace period!) ---
+        Sprite mouseIdleSprite = CreateLeftClickMouseIconSprite(false);
+        Sprite mousePressSprite = CreateLeftClickMouseIconSprite(true);
+
+        GameObject qteCanvasObj = CreateSwordClashQTEUI(
+            mouseIdleSprite,
+            out Image playerFillImg,
+            out Image bossFillImg,
+            out RectTransform dividerRect,
+            out RectTransform mouseIconRect,
+            out Image mouseIconImg,
+            out Image mouseRippleImg
+        );
+
+        float clashMeter = 0.50f; // 0.0 = Boss Fireball Wins, 1.0 = Player Blue Energy Wins
+        float qteElapsed = 0f;
+        float maxDur = Mathf.Max(4.0f, clashMaxDuration);
+        const float gracePrepDuration = 0.65f;
+        float autoVfxTimer = 0f;
+        float playerPowerPulse = 0f;
+        float iconPressFlashTimer = 0f;
+
+        while (qteElapsed < maxDur && clashMeter > 0f && clashMeter < 1f && !IsDead)
+        {
+            float dt = Time.deltaTime;
+            qteElapsed += dt;
+
+            // Boss waits during the 0.65s grace period so the player clearly sees the Left-Click Mouse Icon first!
+            if (qteElapsed > gracePrepDuration)
+            {
+                float bossSurge = 1f + 0.16f * Mathf.Sin(qteElapsed * 4.5f);
+                clashMeter -= bossClashPushPerSecond * bossSurge * dt;
+            }
+
+            // Detect Player Left Mouse Clicks!
+            bool clickedLeftMouse = false;
+#if ENABLE_INPUT_SYSTEM
+            var mouse = UnityEngine.InputSystem.Mouse.current;
+            if (mouse != null && mouse.leftButton.wasPressedThisFrame)
+            {
+                clickedLeftMouse = true;
+            }
+#endif
+            if (clickedLeftMouse)
+            {
+                clashMeter += clashClickGain;
+                playerPowerPulse = 1f;
+                iconPressFlashTimer = 0.14f;
+
+                if (clashClangClip != null)
+                {
+                    float pitch = Mathf.Lerp(0.88f, 1.32f, Mathf.Clamp01(clashMeter)) + Random.Range(-0.03f, 0.03f);
+                    targetPlayer.PlayPitchedSFX(clashClangClip, pitch, 0.72f);
+                }
+
+                targetPlayer.TriggerCameraShake(0.045f);
+                Vector3 curClashPt = Vector3.Lerp(playerEmitPos, bossEmitPos, clashMeter);
+                SpawnSwordClashSparks(curClashPt, true, 4);
+                SpawnChargeGatherMote(playerEmitPos, true);
+            }
+
+            clashMeter = Mathf.Clamp01(clashMeter);
+            playerPowerPulse = Mathf.MoveTowards(playerPowerPulse, 0f, dt * 6.0f);
+            iconPressFlashTimer = Mathf.MoveTowards(iconPressFlashTimer, 0f, dt);
+
+            // Position of the colliding Fireball/Energy Sphere moves smoothly between Player & Boss!
+            Vector3 clashPoint = Vector3.Lerp(playerEmitPos + new Vector3(bossSideSign * 0.4f, 0f, 0f),
+                                              bossEmitPos - new Vector3(bossSideSign * 0.4f, 0f, 0f),
+                                              clashMeter);
+
+            // Continuous energy-gathering & colliding fireball sparks
+            autoVfxTimer += dt;
+            if (autoVfxTimer >= 0.12f)
+            {
+                autoVfxTimer = 0f;
+                SpawnChargeGatherMote(playerEmitPos, true);
+                SpawnChargeGatherMote(bossEmitPos, false);
+                SpawnSwordClashSparks(clashPoint, Random.value < clashMeter, 3);
+            }
+
+            // Player pulses subtly while pushing energy; Boss holds a calm, still Idle stance
+            float chargePulseP = Mathf.Sin(qteElapsed * 18f) * 0.03f + playerPowerPulse * 0.055f;
+            targetPlayer.transform.localScale = new Vector3(playerBaseScale.x * (1f + chargePulseP), playerBaseScale.y * (1f - chargePulseP * 0.6f), playerBaseScale.z);
+            transform.localScale = bossBaseScale;
+            targetPlayer.transform.position = lockedPlayerPos;
+            transform.position = lockedBossPos;
+
+            if (playerRb != null) playerRb.linearVelocity = Vector2.zero;
+            if (rb != null) rb.linearVelocity = Vector2.zero;
+
+            // Update Blue Energy Orb, Boss Fireball Orb, Compact Center Sphere, and Softer Energy Beams!
+            float pOrbScale = (0.68f + clashMeter * 0.24f + playerPowerPulse * 0.18f) * (1f + 0.06f * Mathf.Sin(qteElapsed * 24f));
+            float bOrbScale = (0.74f + (1f - clashMeter) * 0.24f) * (1f + 0.06f * Mathf.Cos(qteElapsed * 22f));
+            playerOrbTr.localScale = Vector3.one * pOrbScale;
+            bossOrbTr.localScale = Vector3.one * bOrbScale;
+
+            clashSphereTr.position = clashPoint;
+            float clashSphereScale = (0.72f + playerPowerPulse * 0.16f) * (1f + 0.08f * Mathf.Sin(qteElapsed * 28f));
+            clashSphereTr.localScale = Vector3.one * clashSphereScale;
+
+            UpdateEnergyBeamPair(playerBlueBeamOuter, playerBlueBeamCore, playerEmitPos, clashPoint,
+                0.42f + clashMeter * 0.26f + playerPowerPulse * 0.20f);
+            UpdateEnergyBeamPair(bossFireBeamOuter, bossFireBeamCore, bossEmitPos, clashPoint,
+                0.42f + (1f - clashMeter) * 0.26f);
+
+            camAnchor.position = Vector3.Lerp(midpoint, clashPoint, 0.25f) + (Vector3)(Random.insideUnitCircle * 0.02f);
+
+            // Update Tug-of-War Clash Bar UI
+            if (playerFillImg != null) playerFillImg.fillAmount = clashMeter;
+            if (bossFillImg != null) bossFillImg.fillAmount = 1f - clashMeter;
+            if (dividerRect != null)
+            {
+                float barWidth = 760f;
+                float divX = Mathf.Lerp(-barWidth * 0.5f, barWidth * 0.5f, clashMeter);
+                dividerRect.anchoredPosition = new Vector2(divX, 0f);
+                float divScale = 1.0f + playerPowerPulse * 0.25f + 0.08f * Mathf.Sin(qteElapsed * 16f);
+                dividerRect.localScale = new Vector3(divScale, divScale, 1f);
+            }
+
+            // Animate Left-Click Mouse Icon (auto-blinks "press left click" rhythmically + pops on every click!)
+            bool showPressedFrame = iconPressFlashTimer > 0f || (Mathf.Sin(qteElapsed * 12f) > 0.25f);
+            if (mouseIconImg != null)
+            {
+                mouseIconImg.sprite = showPressedFrame ? mousePressSprite : mouseIdleSprite;
+            }
+            if (mouseIconRect != null)
+            {
+                float mScale = showPressedFrame ? 0.92f : 1.06f;
+                mScale += playerPowerPulse * 0.14f;
+                mouseIconRect.localScale = new Vector3(mScale, mScale, 1f);
+            }
+            if (mouseRippleImg != null)
+            {
+                float ripplePhase = (qteElapsed * 2.2f) % 1f;
+                float rScale = Mathf.Lerp(0.75f, 1.55f, ripplePhase);
+                mouseRippleImg.rectTransform.localScale = new Vector3(rScale, rScale, 1f);
+                mouseRippleImg.color = new Color(0.28f, 0.92f, 1f, (1f - ripplePhase) * 0.65f);
+            }
+
+            yield return null;
+        }
+
+        // Restore character scales & clean up beam clash VFX before resolution
+        targetPlayer.transform.localScale = playerBaseScale;
+        transform.localScale = bossBaseScale;
+        Destroy(clashVfxRoot);
+        Destroy(clashBeamMat);
+        Destroy(pixelBeamTex);
+
+        bool playerWon = clashMeter >= 0.5f;
+
+        // --- BEAT 3A: PLAYER WINS -> GUARD-BREAK PAUSE + PIERCING BLUE SLASH & RED LIGHTNING COUNTER! ---
+        if (playerWon)
+        {
+            TriggerHitFlash(Color.white);
+            if (clashClangClip != null) targetPlayer.PlayPitchedSFX(clashClangClip, 1.42f, 1f);
+            targetPlayer.TriggerCameraShake(0.22f);
+            SpawnSwordClashSparks(bossEmitPos, true, 14);
+
+            Time.timeScale = 0.18f;
+            yield return new WaitForSecondsRealtime(0.35f);
+            Time.timeScale = 1f;
+
+            if (qteCanvasObj != null) Destroy(qteCanvasObj);
+
+            yield return StartCoroutine(PlayPiercingBlueRedLightningCounterRoutine(
+                targetPlayer, bossSideSign, cmCam, origOrthoSize, camAnchor, thunderPierceClip
+            ));
+        }
+        // --- BEAT 3B: BOSS WINS -> FIREBALL OVERWHELMS PLAYER ---
+        else
+        {
+            if (qteCanvasObj != null) Destroy(qteCanvasObj);
+            PlayBossSFX(slashDashSFX, 0.9f, 1f);
+            SpawnSwordClashSparks(playerEmitPos, false, 18);
+            targetPlayer.TriggerCameraShake(0.28f);
+
+            targetPlayer.SetPortalTransitionState(false);
+            targetPlayer.SetCutsceneSlashingStance(false);
+            targetPlayer.TakeDamage(clashLoseDamage);
+
+            if (playerRb != null)
+            {
+                playerRb.linearVelocity = new Vector2(-bossSideSign * 14f, 6.5f);
+            }
+            yield return new WaitForSeconds(0.35f);
+        }
+
+        // Clean up temporary audio & restore camera and player control
+        if (clashClangClip != null) Destroy(clashClangClip);
+        if (thunderPierceClip != null) Destroy(thunderPierceClip);
+
+        if (cmCam != null)
+        {
+            cmCam.Target.TrackingTarget = origTrackTarget != null ? origTrackTarget : targetPlayer.transform;
+            cmCam.Lens.OrthographicSize = origOrthoSize;
+        }
+        if (camAnchorObj != null) Destroy(camAnchorObj);
+
+        if (targetPlayer != null)
+        {
+            targetPlayer.SetCutsceneDashStance(false);
+            targetPlayer.SetCutsceneSlashingStance(false);
+            targetPlayer.SetPortalTransitionState(false);
+        }
+
+        isInSwordClashQTE = false;
+        bossState = BossActionState.Moving;
+    }
+
+    private IEnumerator PlayPiercingBlueRedLightningCounterRoutine(
+        PlayerController targetPlayer,
+        float dashDirX,
+        CinemachineCamera cmCam,
+        float origOrthoSize,
+        Transform camAnchor,
+        AudioClip thunderPierceClip)
+    {
+        Vector3 startPos = targetPlayer.transform.position;
+        Vector3 bossPos = transform.position;
+        Vector3 endPos = new Vector3(bossPos.x + dashDirX * 4.2f, startPos.y, startPos.z);
+
+        // Prevent piercing dash from clipping into a wall behind the Boss
+        RaycastHit2D wallHit = Physics2D.Raycast(bossPos + new Vector3(0f, 0.4f, 0f), new Vector2(dashDirX, 0f), 4.5f, groundLayer);
+        if (wallHit.collider != null && !wallHit.collider.isTrigger)
+        {
+            endPos.x = wallHit.point.x - dashDirX * 0.95f;
+        }
+
+        // Lock Protagonist into Dash pose for the entire piercing counter-dash scene!
+        targetPlayer.SetCutsceneDashStance(true);
+        targetPlayer.FaceWorldDirection(dashDirX);
+
+        // Sound: Thunderous Piercing Blue/Red Lightning Cleave!
+        if (thunderPierceClip != null) targetPlayer.PlaySFX(thunderPierceClip);
+        if (targetPlayer.SlashSFX != null) targetPlayer.PlayPitchedSFX(targetPlayer.SlashSFX, 1.15f, 1f);
+
+        // Build 100% Crisp Pixel-Art Piercing Azure Blue Slash Beam + 2 Pixel-Snapped Red Lightning Bolts!
+        GameObject vfxRoot = new GameObject("PiercingBlueRedLightningVFX");
+        Texture2D pixelBeamTex = CreatePixelBeamTexture();
+        Material beamMat = new Material(Shader.Find("Sprites/Default")) { mainTexture = pixelBeamTex };
+
+        AnimationCurve pierceCurve = new AnimationCurve(
+            new Keyframe(0.00f, 0.20f),
+            new Keyframe(0.20f, 1.00f),
+            new Keyframe(0.80f, 1.00f),
+            new Keyframe(1.00f, 0.12f)
+        );
+
+        // 1) Wide Pixel-Art Azure Blue Piercing Aura
+        LineRenderer blueAura = CreatePiercingBeamLine(vfxRoot.transform, "BluePiercingAura", beamMat, pierceCurve, 1.15f, 16,
+            new Color(0.05f, 0.52f, 1.00f, 0.55f), new Color(0.25f, 0.90f, 1.00f, 0.65f));
+        // 2) Core Razor-Sharp Pixel-Art Electric Cyan-Blue Piercing Blade
+        LineRenderer blueCore = CreatePiercingBeamLine(vfxRoot.transform, "BluePiercingCore", beamMat, pierceCurve, 0.38f, 18,
+            new Color(0.18f, 0.88f, 1.00f, 1f), new Color(0.92f, 0.99f, 1.00f, 1f));
+        // 3) Pixel-Art Jagged Crimson-Red Lightning Bolt A wrapping the Blue Slash!
+        LineRenderer redBoltA = CreatePiercingBeamLine(vfxRoot.transform, "RedLightningBoltA", beamMat, pierceCurve, 0.22f, 20,
+            new Color(1.00f, 0.12f, 0.18f, 1f), new Color(1.00f, 0.72f, 0.65f, 1f));
+        // 4) Secondary Pixel-Art Crimson-Red Lightning Bolt B!
+        LineRenderer redBoltB = CreatePiercingBeamLine(vfxRoot.transform, "RedLightningBoltB", beamMat, pierceCurve, 0.14f, 21,
+            new Color(0.95f, 0.04f, 0.12f, 0.95f), new Color(1.00f, 0.88f, 0.82f, 1f));
+
+        const int segCount = 18;
+        Vector3[] straightPts = new Vector3[segCount];
+        Vector3[] boltAPts = new Vector3[segCount];
+        Vector3[] boltBPts = new Vector3[segCount];
+
+        // --- High-Speed Pixel-Art Piercing Dash Straight Through the Boss (0.36s) ---
+        const float dashDur = 0.36f;
+        float elapsed = 0f;
+        float afterimageTimer = 0f;
+        int afterimageCount = 0;
+        bool bossHitApplied = false;
+        Vector3 beamStart = EnemyBase.SnapToPixelGrid(startPos + new Vector3(-dashDirX * 0.8f, 0.22f, 0f));
+        Vector3 beamFinalEnd = EnemyBase.SnapToPixelGrid(endPos + new Vector3(dashDirX * 1.1f, 0.22f, 0f));
+        SpriteRenderer playerSr = targetPlayer.GetComponentInChildren<SpriteRenderer>();
+
+        while (elapsed < dashDur)
+        {
+            float dt = Time.deltaTime;
+            elapsed += dt;
+            float t = Mathf.Clamp01(elapsed / dashDur);
+            float ease = 1f - Mathf.Pow(1f - t, 3f);
+
+            Vector3 curPlayerPos = EnemyBase.SnapToPixelGrid(Vector3.Lerp(startPos, endPos, ease));
+            targetPlayer.transform.position = curPlayerPos;
+            camAnchor.position = Vector3.Lerp(bossPos, (bossPos + curPlayerPos) * 0.5f, 0.45f) + new Vector3(0f, 0.3f, 0f);
+
+            if (cmCam != null)
+            {
+                cmCam.Lens.OrthographicSize = Mathf.Lerp(origOrthoSize * 0.64f, origOrthoSize * 0.92f, ease);
+            }
+
+            Vector3 curTip = EnemyBase.SnapToPixelGrid(Vector3.Lerp(beamStart, beamFinalEnd, ease));
+            UpdateBlueRedLightningBeam(blueAura, blueCore, redBoltA, redBoltB, straightPts, boltAPts, boltBPts, beamStart, curTip, 1f);
+
+            // Spawn crisp pixel-art Blue & Red-Lightning Dash Afterimages behind the Protagonist!
+            afterimageTimer += dt;
+            if (afterimageTimer >= 0.045f && playerSr != null && playerSr.sprite != null)
+            {
+                afterimageTimer = 0f;
+                afterimageCount++;
+                Color ghostCol = (afterimageCount % 2 == 0)
+                    ? new Color(0.18f, 0.88f, 1.00f, 0.78f)
+                    : new Color(1.00f, 0.16f, 0.22f, 0.72f);
+                SpawnPixelDashAfterimage(playerSr, curPlayerPos, ghostCol);
+            }
+
+            // Spawn pixel-art electric blue & crimson-red lightning sparks along the dash!
+            if (Random.value > 0.35f)
+            {
+                SpawnBlueRedLightningSpark(curPlayerPos + new Vector3(0f, 0.2f, 0f), new Vector2(dashDirX, 0f), true);
+                SpawnBlueRedLightningSpark(curPlayerPos + new Vector3(0f, 0.2f, 0f), new Vector2(dashDirX, 0f), false);
+            }
+
+            // Moment Player pierces straight through Boss's center!
+            if (!bossHitApplied && t >= 0.45f)
+            {
+                bossHitApplied = true;
+                targetPlayer.TriggerCameraShake(0.35f);
+                TriggerHitFlash(new Color(0.45f, 0.95f, 1f, 1f));
+                SpawnHitEffect(bossPos);
+
+                for (int s = 0; s < 14; s++)
+                {
+                    SpawnBlueRedLightningSpark(bossPos + new Vector3(0f, 0.25f, 0f), new Vector2(dashDirX, 0f), s % 2 == 0);
+                }
+
+                hitDeductedInCurrentSlash = false;
+                int safeHits = Mathf.Clamp(clashWinBonusHits, 1, Mathf.Max(1, currentHits - 1));
+                TakeBossHit(safeHits, new Vector2(dashDirX * 6f, 1.5f));
+            }
+
+            yield return null;
+        }
+
+        targetPlayer.transform.position = endPos;
+        targetPlayer.SetCutsceneDashStance(false);
+        targetPlayer.SetCutsceneSlashingStance(true);
+        targetPlayer.FaceWorldDirection(-dashDirX); // Stylish samurai pose looking back at the cleaved Boss!
+
+        // --- Stylish Pixel-Art Hold while Blue Piercing Beam & Red Lightning Crackle & Dissolve (0.72s) ---
+        const float dissolveDur = 0.72f;
+        elapsed = 0f;
+        while (elapsed < dissolveDur)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / dissolveDur);
+            float steppedFade = EnemyBase.QuantizeStep(1f - t * t, 4);
+
+            UpdateBlueRedLightningBeam(blueAura, blueCore, redBoltA, redBoltB, straightPts, boltAPts, boltBPts, beamStart, beamFinalEnd, steppedFade);
+            blueAura.widthMultiplier = 1.20f * steppedFade;
+            blueCore.widthMultiplier = 0.38f * steppedFade;
+            redBoltA.widthMultiplier = 0.22f * steppedFade;
+            redBoltB.widthMultiplier = 0.14f * steppedFade;
+
+            if (cmCam != null)
+            {
+                cmCam.Lens.OrthographicSize = Mathf.Lerp(origOrthoSize * 0.92f, origOrthoSize, t);
+            }
+
+            yield return null;
+        }
+
+        Destroy(vfxRoot);
+        Destroy(beamMat);
+        Destroy(pixelBeamTex);
+    }
+
+    private static Texture2D CreatePixelBeamTexture()
+    {
+        const int w = 16;
+        const int h = 8;
+        Texture2D tex = new Texture2D(w, h, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Repeat
+        };
+        Color[] px = new Color[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                bool isCenter = (y >= 2 && y <= 5);
+                bool isOuterBand = (y == 1 || y == 6);
+                bool isDitherEdge = (y == 0 || y == 7) && ((x / 2) % 2 == 0);
+
+                if (isCenter) px[y * w + x] = Color.white;
+                else if (isOuterBand) px[y * w + x] = new Color(1f, 1f, 1f, (x % 4 == 0) ? 0.55f : 0.85f);
+                else if (isDitherEdge) px[y * w + x] = new Color(1f, 1f, 1f, 0.35f);
+                else px[y * w + x] = Color.clear;
+            }
+        }
+        tex.SetPixels(px);
+        tex.Apply();
+        return tex;
+    }
+
+    private static void SpawnPixelDashAfterimage(SpriteRenderer sourceSr, Vector3 worldPos, Color tint)
+    {
+        GameObject ghost = new GameObject("PixelCounterDashGhost");
+        ghost.transform.position = EnemyBase.SnapToPixelGrid(worldPos);
+        ghost.transform.localScale = sourceSr.transform.lossyScale;
+
+        SpriteRenderer sr = ghost.AddComponent<SpriteRenderer>();
+        sr.sprite = sourceSr.sprite;
+        sr.flipX = sourceSr.flipX;
+        sr.color = tint;
+        sr.sortingOrder = Mathf.Max(sourceSr.sortingOrder - 1, 3);
+
+        Destroy(ghost, 0.22f);
+    }
+
+    private static LineRenderer CreatePiercingBeamLine(
+        Transform parent,
+        string name,
+        Material mat,
+        AnimationCurve curve,
+        float width,
+        int sortOrder,
+        Color startCol,
+        Color endCol)
+    {
+        GameObject obj = new GameObject(name);
+        obj.transform.SetParent(parent, false);
+        LineRenderer lr = obj.AddComponent<LineRenderer>();
+        lr.useWorldSpace = true;
+        lr.sharedMaterial = mat;
+        lr.widthCurve = curve;
+        lr.widthMultiplier = width;
+        lr.sortingOrder = sortOrder;
+        lr.textureMode = LineTextureMode.Tile;
+        lr.numCapVertices = 0;
+        lr.numCornerVertices = 0;
+
+        Gradient g = new Gradient();
+        g.SetKeys(
+            new GradientColorKey[] { new GradientColorKey(startCol, 0f), new GradientColorKey(endCol, 0.5f), new GradientColorKey(startCol, 1f) },
+            new GradientAlphaKey[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(startCol.a, 0.2f), new GradientAlphaKey(endCol.a, 0.8f), new GradientAlphaKey(0f, 1f) }
+        );
+        lr.colorGradient = g;
+        return lr;
+    }
+
+    private static void UpdateBlueRedLightningBeam(
+        LineRenderer blueAura,
+        LineRenderer blueCore,
+        LineRenderer redBoltA,
+        LineRenderer redBoltB,
+        Vector3[] straightPts,
+        Vector3[] boltAPts,
+        Vector3[] boltBPts,
+        Vector3 start,
+        Vector3 end,
+        float intensity)
+    {
+        int n = straightPts.Length;
+        for (int i = 0; i < n; i++)
+        {
+            float u = (float)i / (n - 1);
+            Vector3 p = Vector3.Lerp(start, end, u);
+            straightPts[i] = p;
+
+            float env = Mathf.Sin(u * Mathf.PI) * intensity;
+            float jagA = Mathf.Round(Random.Range(-0.56f, 0.56f) * env * 8f) / 8f;
+            float jagB = Mathf.Round(Random.Range(-0.40f, 0.40f) * env * 8f) / 8f;
+            boltAPts[i] = EnemyBase.SnapToPixelGrid(p + new Vector3(0f, jagA, 0f));
+            boltBPts[i] = EnemyBase.SnapToPixelGrid(p + new Vector3(0f, jagB, 0f));
+        }
+
+        blueAura.positionCount = n;
+        blueAura.SetPositions(straightPts);
+        blueCore.positionCount = n;
+        blueCore.SetPositions(straightPts);
+        redBoltA.positionCount = n;
+        redBoltA.SetPositions(boltAPts);
+        redBoltB.positionCount = n;
+        redBoltB.SetPositions(boltBPts);
+    }
+
+    private static Sprite CreateRadialEnergyOrbSprite()
+    {
+        // Crisp 24x24 Retro Pixel-Art Energy/Fireball Orb (FilterMode.Point + stepped rings + checkerboard dither!)
+        const int size = 24;
+        Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        Color[] px = new Color[size * size];
+        float c = (size - 1) * 0.5f;
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                float d = Vector2.Distance(new Vector2(x, y), new Vector2(c, c)) / c;
+                if (d <= 0.42f)
+                {
+                    px[y * size + x] = Color.white;
+                }
+                else if (d <= 0.70f)
+                {
+                    px[y * size + x] = new Color(1f, 1f, 1f, 0.85f);
+                }
+                else if (d <= 0.92f)
+                {
+                    bool dither = ((x + y) % 2 == 0);
+                    px[y * size + x] = dither ? new Color(1f, 1f, 1f, 0.50f) : Color.clear;
+                }
+                else
+                {
+                    px[y * size + x] = Color.clear;
+                }
+            }
+        }
+        tex.SetPixels(px);
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 16f);
+    }
+
+    private static Transform CreateEnergyOrbVisual(
+        Transform parent,
+        string name,
+        Sprite orbSprite,
+        Vector3 worldPos,
+        Color outerCol,
+        Color innerCol,
+        int sortOrder)
+    {
+        GameObject root = new GameObject(name);
+        root.transform.SetParent(parent, false);
+        root.transform.position = worldPos;
+
+        SpriteRenderer outerSr = root.AddComponent<SpriteRenderer>();
+        outerSr.sprite = orbSprite;
+        outerSr.color = outerCol;
+        outerSr.sortingOrder = sortOrder;
+
+        GameObject core = new GameObject("Core");
+        core.transform.SetParent(root.transform, false);
+        core.transform.localPosition = Vector3.zero;
+        core.transform.localScale = Vector3.one * 0.52f;
+        SpriteRenderer innerSr = core.AddComponent<SpriteRenderer>();
+        innerSr.sprite = orbSprite;
+        innerSr.color = innerCol;
+        innerSr.sortingOrder = sortOrder + 1;
+
+        return root.transform;
+    }
+
+    private static void UpdateEnergyBeamPair(LineRenderer outer, LineRenderer core, Vector3 start, Vector3 end, float widthMult)
+    {
+        outer.positionCount = 2;
+        outer.SetPosition(0, start);
+        outer.SetPosition(1, end);
+        outer.widthMultiplier = widthMult;
+
+        core.positionCount = 2;
+        core.SetPosition(0, start);
+        core.SetPosition(1, end);
+        core.widthMultiplier = widthMult * 0.40f;
+    }
+
+    private void SpawnChargeGatherMote(Vector3 targetOrbPos, bool isBlue)
+    {
+        Vector2 offset = Random.insideUnitCircle.normalized * Random.Range(1.2f, 2.2f);
+        GameObject mote = new GameObject(isBlue ? "BlueChargeMote" : "FireChargeMote");
+        mote.transform.position = targetOrbPos + (Vector3)offset;
+        float s = Random.Range(0.18f, 0.36f);
+        mote.transform.localScale = Vector3.one * s;
+
+        SpriteRenderer sr = mote.AddComponent<SpriteRenderer>();
+        sr.sprite = EnemyBase.GetSharedPixelBlockSprite(2);
+        sr.color = isBlue
+            ? new Color(0.35f, 0.94f, 1.00f, 0.95f)
+            : new Color(1.00f, 0.45f, 0.10f, 0.95f);
+        sr.sortingOrder = 19;
+
+        Rigidbody2D mrb = mote.AddComponent<Rigidbody2D>();
+        mrb.gravityScale = 0f;
+        mrb.linearVelocity = (-offset.normalized) * Random.Range(5.5f, 8.5f);
+        Destroy(mote, 0.24f);
+    }
+
+    private void SpawnSwordClashArcVFX(Vector3 pos, bool isPlayerBlue, bool big)
+    {
+        GameObject arc = new GameObject(isPlayerBlue ? "ClashArcBlue" : "ClashArcRed");
+        arc.transform.position = pos;
+        arc.transform.rotation = Quaternion.Euler(0f, 0f, Random.Range(-70f, 70f));
+        float len = big ? Random.Range(2.4f, 3.2f) : Random.Range(1.3f, 2.2f);
+        float thick = big ? 0.24f : 0.14f;
+        arc.transform.localScale = new Vector3(len, thick, 1f);
+
+        SpriteRenderer sr = arc.AddComponent<SpriteRenderer>();
+        sr.sprite = EnemyBase.GetSharedPixelBlockSprite(4);
+        sr.color = isPlayerBlue ? new Color(0.32f, 0.94f, 1f, 0.95f) : new Color(1f, 0.22f, 0.26f, 0.95f);
+        sr.sortingOrder = 18;
+
+        Destroy(arc, big ? 0.14f : 0.08f);
+    }
+
+    private void SpawnSwordClashSparks(Vector3 origin, bool playerSide, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            SpawnBlueRedLightningSpark(origin, Random.insideUnitCircle.normalized, playerSide);
+        }
+    }
+
+    private void SpawnBlueRedLightningSpark(Vector3 origin, Vector2 baseDir, bool isBlue)
+    {
+        GameObject obj = new GameObject(isBlue ? "ClashBlueSpark" : "ClashRedLightningSpark");
+        obj.transform.position = origin + (Vector3)(Random.insideUnitCircle * 0.22f);
+        SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
+        sr.sprite = EnemyBase.GetSharedPixelBlockSprite(2);
+        sr.sortingOrder = 19;
+
+        Color col = isBlue
+            ? (Random.value < 0.45f ? new Color(0.88f, 0.99f, 1f, 1f) : new Color(0.14f, 0.84f, 1f, 1f))
+            : (Random.value < 0.35f ? new Color(1f, 0.85f, 0.72f, 1f) : new Color(1f, 0.14f, 0.20f, 1f));
+        sr.color = col;
+
+        Vector2 dir = (baseDir * Random.Range(0.5f, 1.5f) + Random.insideUnitCircle * 1.2f).normalized;
+        float speed = Random.Range(3.5f, 9.0f);
+        float sx = Random.Range(0.28f, 0.65f);
+        obj.transform.localScale = new Vector3(sx, sx * 0.35f, 1f);
+        obj.transform.rotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
+
+        Rigidbody2D srb = obj.AddComponent<Rigidbody2D>();
+        srb.gravityScale = 0.35f;
+        srb.linearVelocity = dir * speed;
+        srb.linearDamping = 4.2f;
+        Destroy(obj, Random.Range(0.18f, 0.36f));
+    }
+
+    private GameObject CreateSwordClashQTEUI(
+        Sprite initialMouseSprite,
+        out Image playerFillImg,
+        out Image bossFillImg,
+        out RectTransform dividerRect,
+        out RectTransform mouseIconRect,
+        out Image mouseIconImg,
+        out Image mouseRippleImg)
+    {
+        GameObject canvasObj = new GameObject("BossSwordClashQTECanvas");
+        Canvas canvas = canvasObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 210;
+
+        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.matchWidthOrHeight = 0.5f;
+
+        // Subtle cinema letterbox bars
+        CreateQTEBar(canvasObj.transform, "TopBar", true, 92f);
+        CreateQTEBar(canvasObj.transform, "BottomBar", false, 92f);
+
+        // Tug-of-War Clash Bar Container at bottom-center above letterbox
+        GameObject barFrame = new GameObject("ClashMeterFrame");
+        barFrame.transform.SetParent(canvasObj.transform, false);
+        RectTransform frameRect = barFrame.AddComponent<RectTransform>();
+        frameRect.anchorMin = new Vector2(0.5f, 0f);
+        frameRect.anchorMax = new Vector2(0.5f, 0f);
+        frameRect.anchoredPosition = new Vector2(0f, 152f);
+        frameRect.sizeDelta = new Vector2(780f, 44f);
+        Image frameBg = barFrame.AddComponent<Image>();
+        frameBg.color = new Color(0.06f, 0.06f, 0.09f, 0.94f);
+        Outline frameOut = barFrame.AddComponent<Outline>();
+        frameOut.effectColor = new Color(0.95f, 0.88f, 0.55f, 0.95f);
+        frameOut.effectDistance = new Vector2(3f, -3f);
+
+        // Player Blue Fill (Left -> Right)
+        GameObject pFillObj = new GameObject("PlayerBlueFill");
+        pFillObj.transform.SetParent(barFrame.transform, false);
+        RectTransform pFillRect = pFillObj.AddComponent<RectTransform>();
+        pFillRect.anchorMin = Vector2.zero;
+        pFillRect.anchorMax = Vector2.one;
+        pFillRect.offsetMin = new Vector2(10f, 8f);
+        pFillRect.offsetMax = new Vector2(-10f, -8f);
+        playerFillImg = pFillObj.AddComponent<Image>();
+        playerFillImg.sprite = EnemyBase.GetSharedPixelBlockSprite(4);
+        playerFillImg.type = Image.Type.Filled;
+        playerFillImg.fillMethod = Image.FillMethod.Horizontal;
+        playerFillImg.fillOrigin = (int)Image.OriginHorizontal.Left;
+        playerFillImg.fillAmount = 0.50f;
+        playerFillImg.color = new Color(0.10f, 0.82f, 1.00f, 1f);
+
+        // Boss Red Fill (Right -> Left)
+        GameObject bFillObj = new GameObject("BossRedFill");
+        bFillObj.transform.SetParent(barFrame.transform, false);
+        RectTransform bFillRect = bFillObj.AddComponent<RectTransform>();
+        bFillRect.anchorMin = Vector2.zero;
+        bFillRect.anchorMax = Vector2.one;
+        bFillRect.offsetMin = new Vector2(10f, 8f);
+        bFillRect.offsetMax = new Vector2(-10f, -8f);
+        bossFillImg = bFillObj.AddComponent<Image>();
+        bossFillImg.sprite = EnemyBase.GetSharedPixelBlockSprite(4);
+        bossFillImg.type = Image.Type.Filled;
+        bossFillImg.fillMethod = Image.FillMethod.Horizontal;
+        bossFillImg.fillOrigin = (int)Image.OriginHorizontal.Right;
+        bossFillImg.fillAmount = 0.50f;
+        bossFillImg.color = new Color(0.95f, 0.14f, 0.20f, 1f);
+
+        // Glowing White-Gold Clash Divider Marker
+        GameObject divObj = new GameObject("ClashDividerMarker");
+        divObj.transform.SetParent(barFrame.transform, false);
+        dividerRect = divObj.AddComponent<RectTransform>();
+        dividerRect.anchorMin = new Vector2(0.5f, 0.5f);
+        dividerRect.anchorMax = new Vector2(0.5f, 0.5f);
+        dividerRect.sizeDelta = new Vector2(14f, 62f);
+        Image divImg = divObj.AddComponent<Image>();
+        divImg.color = new Color(1f, 0.96f, 0.72f, 1f);
+
+        // Clean Left-Click Mouse Icon Symbol right above the Clash Bar (no cluttered text!)
+        GameObject mouseContainer = new GameObject("LeftClickMouseSymbol");
+        mouseContainer.transform.SetParent(canvasObj.transform, false);
+        RectTransform mcRect = mouseContainer.AddComponent<RectTransform>();
+        mcRect.anchorMin = new Vector2(0.5f, 0f);
+        mcRect.anchorMax = new Vector2(0.5f, 0f);
+        mcRect.anchoredPosition = new Vector2(0f, 258f);
+        mcRect.sizeDelta = new Vector2(120f, 120f);
+
+        // Expanding cyan click-ripple ring behind the mouse icon
+        GameObject rippleObj = new GameObject("MouseClickRipple");
+        rippleObj.transform.SetParent(mouseContainer.transform, false);
+        RectTransform rippleRect = rippleObj.AddComponent<RectTransform>();
+        rippleRect.anchorMin = new Vector2(0.5f, 0.5f);
+        rippleRect.anchorMax = new Vector2(0.5f, 0.5f);
+        rippleRect.anchoredPosition = new Vector2(-14f, 22f);
+        rippleRect.sizeDelta = new Vector2(72f, 72f);
+        mouseRippleImg = rippleObj.AddComponent<Image>();
+        mouseRippleImg.sprite = CreateClickRippleRingSprite();
+        mouseRippleImg.color = new Color(0.28f, 0.92f, 1f, 0.65f);
+        mouseRippleImg.raycastTarget = false;
+
+        // Crisp Pixel-Art Left-Click Mouse Icon
+        GameObject iconObj = new GameObject("MouseIcon");
+        iconObj.transform.SetParent(mouseContainer.transform, false);
+        mouseIconRect = iconObj.AddComponent<RectTransform>();
+        mouseIconRect.anchorMin = new Vector2(0.5f, 0.5f);
+        mouseIconRect.anchorMax = new Vector2(0.5f, 0.5f);
+        mouseIconRect.anchoredPosition = Vector2.zero;
+        mouseIconRect.sizeDelta = new Vector2(88f, 116f);
+        mouseIconImg = iconObj.AddComponent<Image>();
+        mouseIconImg.sprite = initialMouseSprite;
+        mouseIconImg.preserveAspect = true;
+        mouseIconImg.raycastTarget = false;
+
+        return canvasObj;
+    }
+
+    private static Sprite CreateLeftClickMouseIconSprite(bool leftPressed)
+    {
+        const int w = 24;
+        const int h = 32;
+        Texture2D tex = new Texture2D(w, h, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+
+        Color clear = new Color(0f, 0f, 0f, 0f);
+        Color outline = new Color(0.95f, 0.97f, 1f, 1f);
+        Color bodyDark = new Color(0.14f, 0.16f, 0.22f, 0.96f);
+        Color rightIdle = new Color(0.22f, 0.25f, 0.32f, 0.96f);
+        Color leftCol = leftPressed
+            ? new Color(0.20f, 0.94f, 1.00f, 1f)   // Bright glowing cyan on press!
+            : new Color(1.00f, 0.86f, 0.28f, 1f);  // Warm golden highlight when ready!
+        Color wheelCol = new Color(0.75f, 0.82f, 0.92f, 1f);
+        Color sparkCol = new Color(0.85f, 0.98f, 1f, 1f);
+
+        Color[] px = new Color[w * h];
+        for (int i = 0; i < px.Length; i++) px[i] = clear;
+
+        // Mouse capsule bounds: x in [4..19], y in [2..25] (leaving top-left room for click sparks!)
+        for (int y = 2; y <= 25; y++)
+        {
+            for (int x = 4; x <= 19; x++)
+            {
+                // Rounded corners top & bottom
+                float cx = (x - 11.5f) / 7.8f;
+                float cy = y > 17 ? (y - 17f) / 8.2f : (y < 9 ? (9f - y) / 7.2f : 0f);
+                float distSq = cx * cx + cy * cy;
+                if (distSq > 1.02f) continue;
+
+                bool isBorder = distSq > 0.72f || x == 4 || x == 19 || y == 2 || y == 25;
+                if (isBorder)
+                {
+                    px[y * w + x] = outline;
+                    continue;
+                }
+
+                // Horizontal button divider at y == 15
+                if (y == 15)
+                {
+                    px[y * w + x] = outline;
+                    continue;
+                }
+
+                // Upper half: Left Mouse Button (x < 11) vs Right Mouse Button (x > 12) + Scroll Wheel (x == 11..12)
+                if (y > 15)
+                {
+                    if (x == 11 || x == 12)
+                    {
+                        px[y * w + x] = (y >= 18 && y <= 22) ? wheelCol : outline;
+                    }
+                    else if (x < 11)
+                    {
+                        px[y * w + x] = leftCol;
+                    }
+                    else
+                    {
+                        px[y * w + x] = rightIdle;
+                    }
+                }
+                else
+                {
+                    px[y * w + x] = bodyDark;
+                }
+            }
+        }
+
+        // Draw crisp click-burst rays at top-left when pressed!
+        if (leftPressed)
+        {
+            px[27 * w + 5] = sparkCol;
+            px[28 * w + 4] = sparkCol;
+            px[29 * w + 3] = sparkCol;
+
+            px[28 * w + 8] = sparkCol;
+            px[29 * w + 8] = sparkCol;
+            px[30 * w + 8] = sparkCol;
+
+            px[25 * w + 2] = sparkCol;
+            px[25 * w + 1] = sparkCol;
+        }
+
+        tex.SetPixels(px);
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), 16f);
+    }
+
+    private static Sprite CreateClickRippleRingSprite()
+    {
+        const int size = 32;
+        Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        Color[] px = new Color[size * size];
+        float center = (size - 1) * 0.5f;
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                float d = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+                bool onRing = d >= 11.5f && d <= 14.5f;
+                px[y * size + x] = onRing ? Color.white : Color.clear;
+            }
+        }
+        tex.SetPixels(px);
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 16f);
+    }
+
+    private static void CreateQTEBar(Transform parent, string name, bool isTop, float height)
+    {
+        GameObject obj = new GameObject(name);
+        obj.transform.SetParent(parent, false);
+        RectTransform rt = obj.AddComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0f, isTop ? 1f : 0f);
+        rt.anchorMax = new Vector2(1f, isTop ? 1f : 0f);
+        rt.pivot = new Vector2(0.5f, isTop ? 1f : 0f);
+        rt.anchoredPosition = Vector2.zero;
+        rt.sizeDelta = new Vector2(0f, height);
+        obj.AddComponent<Image>().color = Color.black;
+    }
+
+    private static void CreateQTEText(
+        Transform parent,
+        string name,
+        string content,
+        float size,
+        Color color,
+        Vector2 anchoredPos,
+        TextAlignmentOptions align,
+        TMP_FontAsset font)
+    {
+        GameObject obj = new GameObject(name);
+        obj.transform.SetParent(parent, false);
+        RectTransform rt = obj.AddComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = anchoredPos;
+        rt.sizeDelta = new Vector2(220f, 36f);
+        TextMeshProUGUI tmp = obj.AddComponent<TextMeshProUGUI>();
+        if (font != null) tmp.font = font;
+        tmp.text = content;
+        tmp.fontSize = size;
+        tmp.fontStyle = FontStyles.Bold;
+        tmp.alignment = align;
+        tmp.color = color;
+        tmp.outlineWidth = 0.2f;
+        tmp.outlineColor = new Color32(0, 0, 0, 230);
+    }
+
+    private static AudioClip CreateSwordClashClangSFX()
+    {
+        const int sampleRate = 44100;
+        const float duration = 0.16f;
+        int samples = Mathf.RoundToInt(sampleRate * duration);
+        float[] data = new float[samples];
+        System.Random rng = new System.Random(101);
+
+        for (int i = 0; i < samples; i++)
+        {
+            float t = (float)i / sampleRate;
+            float env = Mathf.Exp(-t * 28f);
+            float ring = Mathf.Sin(2f * Mathf.PI * 1950f * t) * 0.45f
+                       + Mathf.Sin(2f * Mathf.PI * 3120f * t) * 0.30f
+                       + Mathf.Sin(2f * Mathf.PI * 4680f * t) * 0.18f;
+            float impact = (float)(rng.NextDouble() * 2.0 - 1.0) * Mathf.Exp(-t * 75f) * 0.55f;
+            data[i] = Mathf.Clamp((ring + impact) * env, -0.9f, 0.9f);
+        }
+
+        AudioClip clip = AudioClip.Create("SwordClashClangSFX", samples, 1, sampleRate, false);
+        clip.SetData(data, 0);
+        return clip;
+    }
+
+    private static AudioClip CreatePiercingThunderSlashSFX()
+    {
+        const int sampleRate = 44100;
+        const float duration = 0.65f;
+        int samples = Mathf.RoundToInt(sampleRate * duration);
+        float[] data = new float[samples];
+        System.Random rng = new System.Random(777);
+
+        for (int i = 0; i < samples; i++)
+        {
+            float t = (float)i / sampleRate;
+            float white = (float)(rng.NextDouble() * 2.0 - 1.0);
+            float thunderCrack = white * Mathf.Exp(-t * 9.5f) * 0.52f;
+            float subBoom = Mathf.Sin(2f * Mathf.PI * Mathf.Lerp(160f, 48f, t / duration) * t) * Mathf.Exp(-t * 6.5f) * 0.55f;
+            float bladeSinging = Mathf.Sin(2f * Mathf.PI * 1420f * t) * Mathf.Exp(-t * 14f) * 0.25f;
+            data[i] = Mathf.Clamp(thunderCrack + subBoom + bladeSinging, -0.95f, 0.95f);
+        }
+
+        AudioClip clip = AudioClip.Create("PiercingThunderSlashSFX", samples, 1, sampleRate, false);
+        clip.SetData(data, 0);
+        return clip;
     }
 
     #endregion
@@ -2468,6 +3617,13 @@ public class LegendarySamurai : EnemyBase
             TransitionToPhase2BGM();
         }
 
+        // Queue the 50% HP Face-to-Face Rapid Sword Clash QTE once!
+        if (enableHalfHpSwordClashQTE && !hasTriggeredHalfHpClash && healthRatio <= 0.5f && currentHits > 0)
+        {
+            hasTriggeredHalfHpClash = true;
+            pendingHalfHpClash = true;
+        }
+
         // Defeat when all 20 hits are landed!
         if (currentHits <= 0)
         {
@@ -2781,9 +3937,25 @@ public class LegendarySamurai : EnemyBase
         }
     }
 
+    private void LockBossToFrozenSlashChargePose()
+    {
+        if (spriteRenderer == null) return;
+        currentAnimState = BossAnimState.DashSlash;
+        currentAnimFrame = 0;
+
+        List<Sprite> chargeFrames = (dashSlashSprites != null && dashSlashSprites.Count > 0)
+            ? dashSlashSprites
+            : ((windSlashSprites != null && windSlashSprites.Count > 0) ? windSlashSprites : idleSprites);
+
+        if (chargeFrames != null && chargeFrames.Count > 0 && chargeFrames[0] != null)
+        {
+            spriteRenderer.sprite = chargeFrames[0];
+        }
+    }
+
     private void UpdateSpriteAnimation(float dt)
     {
-        if (IsDead || spriteRenderer == null) return;
+        if (IsDead || isInSwordClashQTE || spriteRenderer == null) return;
 
         // If not playing a dedicated action animation, automatically track Idle, Walk, and Jump
         if (!isPlayingActionAnim)

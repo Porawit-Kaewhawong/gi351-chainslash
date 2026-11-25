@@ -202,7 +202,7 @@ MonoBehaviour:
   targetableOutlineColor: {r: 1, g: 0.514151, b: 0.514151, a: 1}
   targetableOutlineThickness: 0.055
   targetJitterStrength: 0.03
-  bossMaxHits: 25
+  bossMaxHits: 20
   requiredWeakPoints: 5
   weakPointPrefab: {fileID: 8851218834900263158, guid: e474d6092090fdd4fbc9d1ea3116430c, type: 3}
   weakPointRadiusMin: 2.5
@@ -220,8 +220,8 @@ MonoBehaviour:
   weakPointNumberFontSize: 2
   pointSelectChimeSFX: {fileID: 0}
   bossPatrolSpeed: 3.2
-  maxTimeBetweenAttacks: 4.5
-  minTimeBetweenAttacks: 1.5
+  maxTimeBetweenAttacks: 4.6
+  minTimeBetweenAttacks: 1.65
   bossRoarSFX: {fileID: 0}
   bossDefeatSFX: {fileID: 8300000, guid: 3e47b9201948482ca0e5b9f71c49d88a, type: 3}
   bossDefeatVFX: {fileID: 1000000000000002, guid: 2b3c4d5e6f708192a3b4c5d6e7f80112, type: 3}
@@ -250,9 +250,9 @@ MonoBehaviour:
   slashDashDuration: 0.45
   slashDashWindup: 0.55
   slashDashRecovery: 0.45
-  slashDashDamage: 18
+  slashDashDamage: 16
   postDashSlashDelay: 0.75
-  straightSlashDamage: 20
+  straightSlashDamage: 18
   straightSlashRange: 6
   straightSlashWidth: 1.5
   slashDashTelegraphColor: {r: 1, g: 0, b: 0, a: 1}
@@ -267,28 +267,28 @@ MonoBehaviour:
   stompAirHangDuration: 0.3
   stompSlamSpeed: 30
   stompRadius: 5.5
-  stompDamage: 24
+  stompDamage: 21
   stompKnockback: 12
   stompShakeDuration: 0.45
   stompRecovery: 0.7
   stompImpactSFX: {fileID: 8300000, guid: f735263930f1c6f47a2a3a6767fd68fc, type: 3}
   stompShockwaveVFX: {fileID: 1000000000000004, guid: 4d5e6f708192a3b4c5d6e7f801122334, type: 3}
   shurikenPrefab: {fileID: 9179823344550816202, guid: b07dbac2f40f83843adf16a59089582d, type: 3}
-  shurikenCount360: 15
-  shurikenSpeed360: 10
-  shurikenDamage360: 15
+  shurikenCount360: 14
+  shurikenSpeed360: 9.5
+  shurikenDamage360: 13
   shurikenWindup: 0.45
   shurikenBurstSFX: {fileID: 8300000, guid: ea3392e3250cde445b2200e85bf26c59, type: 3}
   windSlashLineCount: 3
   windSlashTelegraphTime: 0.8
-  windSlashDamage: 22
+  windSlashDamage: 20
   windSlashTelegraphColor: {r: 1, g: 0.19999999, b: 0.26318777, a: 0.5}
   windSlashActiveColor: {r: 1, g: 1, b: 1, a: 1}
   windSlashSFX: {fileID: 8300000, guid: bb46c0b74c1a7fe4a8e27bfa8f5296ce, type: 3}
   hiddenStabVanishDuration: 0.5
   hiddenStabWindup: 0.4
   hiddenStabSpeed: 28
-  hiddenStabDamage: 25
+  hiddenStabDamage: 22
   hiddenStabGlintColor: {r: 1, g: 0, b: 0, a: 1}
   hiddenStabSFX: {fileID: 8300000, guid: ea3392e3250cde445b2200e85bf26c59, type: 3}
   minionPrefabs:
@@ -296,7 +296,7 @@ MonoBehaviour:
   - {fileID: 2944547956908393011, guid: 530c120d452e89a49bfc1d7691ea81e2, type: 3}
   - {fileID: 3260056029298322424, guid: a87d269a28554f8bb151b7eccfeecf93, type: 3}
   - {fileID: 3260056029298322424, guid: 7afcea2bb7c84d12a1bbf5703eec3dd7, type: 3}
-  minionsPerPhrase: 0000000003000000050000000700000009000000
+  minionsPerPhrase: 0000000002000000040000000600000007000000
   minionSummonSFX: {fileID: 8300000, guid: 98936b8a712d84748be947cc31bd8e4a, type: 3}
   idleSprites:
   - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}

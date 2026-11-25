@@ -407,6 +407,7 @@ public class PlayerController : MonoBehaviour
     private bool isReelingToPortal;
     private bool isPortalTransitioning;
     private bool isCutsceneSlashingStance;
+    private bool isCutsceneDashStance;
     private GameObject insGrappleTargetIndicator;
     private GameObject grapplePixelRopeContainer;
     private readonly List<SpriteRenderer> grapplePixelLinkRenderers = new List<SpriteRenderer>();
@@ -4317,7 +4318,21 @@ public class PlayerController : MonoBehaviour
         isCutsceneSlashingStance = active;
         if (active)
         {
+            isCutsceneDashStance = false;
             SetPlayerAnimState(PlayerAnimState.InModeSlashingStance, true);
+        }
+    }
+
+    /// <summary>
+    /// Locks the Player into their Dash animation pose during scripted piercing counter-dash scenes.
+    /// </summary>
+    public void SetCutsceneDashStance(bool active)
+    {
+        isCutsceneDashStance = active;
+        if (active)
+        {
+            isCutsceneSlashingStance = false;
+            SetPlayerAnimState(PlayerAnimState.Dash, true);
         }
     }
 
@@ -4461,6 +4476,10 @@ public class PlayerController : MonoBehaviour
         else if (isThrowingHook || IsGrappling || releaseGrappleAnimTimer > 0f)
         {
             targetState = PlayerAnimState.ReleaseGrapplingHook;
+        }
+        else if (isCutsceneDashStance)
+        {
+            targetState = PlayerAnimState.Dash;
         }
         else if (IsInMode || isCutsceneSlashingStance)
         {
