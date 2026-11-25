@@ -361,12 +361,19 @@ public class HealGuideBookUI : MonoBehaviour
         RefreshAllBestiaryCards();
 
         string initScene = SceneManager.GetActiveScene().name;
-        if (initScene.Equals("Stage1", System.StringComparison.OrdinalIgnoreCase) ||
-            initScene.Equals("Stage0", System.StringComparison.OrdinalIgnoreCase) ||
-            SceneManager.GetActiveScene().buildIndex == 0)
+        bool isInitStage0 = initScene.Equals("Stage0", System.StringComparison.OrdinalIgnoreCase);
+        bool isInitStage1 = initScene.Equals("Stage1", System.StringComparison.OrdinalIgnoreCase);
+        bool isInitMenu = SceneManager.GetActiveScene().buildIndex == 0 || FindFirstObjectByType<MainMenu>() != null;
+
+        if (isInitMenu || isInitStage0 || isInitStage1)
         {
             hasAcquiredGuideBook = false;
             if (bookButtonObj != null) bookButtonObj.SetActive(false);
+        }
+
+        if (isInitMenu || isInitStage0)
+        {
+            SetRootCanvasVisible(false);
         }
 
         UpdateAttentionVisuals();
@@ -438,7 +445,9 @@ public class HealGuideBookUI : MonoBehaviour
         CloseBook();
 
         bool isMenuScene = scene.buildIndex == 0 || FindFirstObjectByType<MainMenu>() != null;
-        if (isMenuScene)
+        bool isStage0 = scene.name.Equals("Stage0", System.StringComparison.OrdinalIgnoreCase);
+
+        if (isMenuScene || isStage0)
         {
             if (stage1DropCoroutine != null) { StopCoroutine(stage1DropCoroutine); stage1DropCoroutine = null; }
             if (dockHintCoroutine != null) { StopCoroutine(dockHintCoroutine); dockHintCoroutine = null; }
@@ -446,12 +455,13 @@ public class HealGuideBookUI : MonoBehaviour
             pendingDockToCornerOnClose = false;
             hasAcquiredGuideBook = false;
             hasLastSlainEnemyPos = false;
+            if (bookButtonObj != null) bookButtonObj.SetActive(false);
             if (pressBHintObj != null) pressBHintObj.SetActive(false);
 
             SetRootCanvasVisible(false);
             SetBookGoldenAuroraActive(false);
 
-            // Reset Guide Book & Bestiary for a fresh New Game whenever returning to Main Menu
+            // Reset Guide Book & Bestiary for a fresh New Game whenever on Main Menu or Stage0
             unlockedEnemies.Clear();
             newlyUnlockedHighlights.Clear();
             hasUnreadAttention = true;
@@ -464,21 +474,16 @@ public class HealGuideBookUI : MonoBehaviour
         else
         {
             bool isStage1 = scene.name.Equals("Stage1", System.StringComparison.OrdinalIgnoreCase);
-            bool isStage0 = scene.name.Equals("Stage0", System.StringComparison.OrdinalIgnoreCase);
 
             // In Stage 1 (before clearing Stage 1), keep the top-right Guide Book button hidden until the final enemy drops it!
             if (isStage1 && !hasAcquiredGuideBook)
             {
                 if (bookButtonObj != null) bookButtonObj.SetActive(false);
             }
-            else if (!isStage0 && !isStage1)
+            else if (!isStage1)
             {
                 hasAcquiredGuideBook = true;
                 if (bookButtonObj != null) bookButtonObj.SetActive(true);
-            }
-            else if (isStage0)
-            {
-                if (bookButtonObj != null) bookButtonObj.SetActive(hasAcquiredGuideBook);
             }
             else
             {
@@ -589,9 +594,18 @@ public class HealGuideBookUI : MonoBehaviour
     public void BindPlayer(PlayerController player)
     {
         boundPlayer = player != null ? player : PlayerController.Instance;
-        if (boundPlayer != null && FindFirstObjectByType<MainMenu>() == null)
+        Scene activeScene = SceneManager.GetActiveScene();
+        bool isMenuOrStage0 = activeScene.buildIndex == 0
+            || activeScene.name.Equals("Stage0", System.StringComparison.OrdinalIgnoreCase)
+            || FindFirstObjectByType<MainMenu>() != null;
+
+        if (boundPlayer != null && !isMenuOrStage0)
         {
             SetRootCanvasVisible(true);
+        }
+        else if (isMenuOrStage0)
+        {
+            SetRootCanvasVisible(false);
         }
         RefreshStatsText();
     }
