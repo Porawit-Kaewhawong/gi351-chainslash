@@ -113045,20 +113045,20 @@ MonoBehaviour:
   enemyConfigs:
   - label: Ninja
     prefab: {fileID: 3260056029298322424, guid: c25d1c4c38a87f044b98c595233a0ff5, type: 3}
-    spawnCount: 5
-    spawnWeight: 5
+    spawnCount: 3
+    spawnWeight: 3
   - label: Suicide Ninja
     prefab: {fileID: 2944547956908393011, guid: 530c120d452e89a49bfc1d7691ea81e2, type: 3}
-    spawnCount: 2
-    spawnWeight: 2
+    spawnCount: 1
+    spawnWeight: 1
   - label: Thrower Ninja
     prefab: {fileID: 3260056029298322424, guid: 7afcea2bb7c84d12a1bbf5703eec3dd7, type: 3}
-    spawnCount: 2
-    spawnWeight: 2
+    spawnCount: 1
+    spawnWeight: 1
   totalWaves: 3
   waitForWaveClear: 1
-  enemiesPerWave: 10
-  bonusEnemiesPerWave: 2
+  enemiesPerWave: 7
+  bonusEnemiesPerWave: 1
   timeBetweenWaves: 3
   timeBetweenSpawns: 0.2
   maxActiveEnemies: 30
