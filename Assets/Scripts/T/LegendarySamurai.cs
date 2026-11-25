@@ -1052,7 +1052,13 @@ public class LegendarySamurai : EnemyBase
     private float GetAttackCooldown()
     {
         float hpRatio = Mathf.Clamp01((float)currentHits / bossMaxHits);
-        return Mathf.Lerp(minTimeBetweenAttacks, maxTimeBetweenAttacks, hpRatio);
+        float baseCooldown = Mathf.Lerp(minTimeBetweenAttacks, maxTimeBetweenAttacks, hpRatio);
+        // Slightly gentler breathing room exclusively in the final Phase 5
+        if (GetCurrentPhase() >= 5)
+        {
+            baseCooldown += 0.35f;
+        }
+        return baseCooldown;
     }
 
     #endregion

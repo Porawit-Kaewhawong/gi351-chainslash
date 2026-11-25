@@ -285,10 +285,10 @@ MonoBehaviour:
   windSlashTelegraphColor: {r: 1, g: 0.19999999, b: 0.26318777, a: 0.5}
   windSlashActiveColor: {r: 1, g: 1, b: 1, a: 1}
   windSlashSFX: {fileID: 8300000, guid: bb46c0b74c1a7fe4a8e27bfa8f5296ce, type: 3}
-  hiddenStabVanishDuration: 0.5
-  hiddenStabWindup: 0.4
-  hiddenStabSpeed: 28
-  hiddenStabDamage: 22
+  hiddenStabVanishDuration: 0.52
+  hiddenStabWindup: 0.55
+  hiddenStabSpeed: 23.5
+  hiddenStabDamage: 19
   hiddenStabGlintColor: {r: 1, g: 0, b: 0, a: 1}
   hiddenStabSFX: {fileID: 8300000, guid: ea3392e3250cde445b2200e85bf26c59, type: 3}
   minionPrefabs:
@@ -296,7 +296,7 @@ MonoBehaviour:
   - {fileID: 2944547956908393011, guid: 530c120d452e89a49bfc1d7691ea81e2, type: 3}
   - {fileID: 3260056029298322424, guid: a87d269a28554f8bb151b7eccfeecf93, type: 3}
   - {fileID: 3260056029298322424, guid: 7afcea2bb7c84d12a1bbf5703eec3dd7, type: 3}
-  minionsPerPhrase: 0000000002000000040000000600000007000000
+  minionsPerPhrase: 0000000002000000040000000600000005000000
   minionSummonSFX: {fileID: 8300000, guid: 98936b8a712d84748be947cc31bd8e4a, type: 3}
   idleSprites:
   - {fileID: 1778727527854806730, guid: 48cc06990267c7647979472955f8acd6, type: 3}
