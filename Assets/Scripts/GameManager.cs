@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
+using Unity.Cinemachine;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -80,6 +81,11 @@ public class GameManager : MonoBehaviour
     [Header("Spawn Validation")]
     [SerializeField] private Vector2 checkExtent = new Vector2(0.8f, 0.8f);
 
+    [Header("Stage 1 Ambush Intro Cutscene")]
+    [Tooltip("If true, plays the Stage 1 slow-motion ninja ambush cutscene before starting waves.")]
+    [SerializeField] private bool enableStage1AmbushCutscene = true;
+    [SerializeField] private float stage1LetterboxHeight = 165f;
+
     [Header("Stage 2 Clear Player Dialogue")]
     [SerializeField] private string stage2FirstLine = "At last...";
     [SerializeField] private string stage2SecondLine = "Is it over?";
@@ -150,8 +156,18 @@ public class GameManager : MonoBehaviour
 
         if (player != null && enemyConfigs.Count > 0)
         {
-            StartCoroutine(SpawnRoutine());
-            StartCoroutine(MonitorVoidEnemiesRoutine());
+            bool playStage1Ambush = enableStage1AmbushCutscene &&
+                SceneManager.GetActiveScene().name.Equals("Stage1", System.StringComparison.OrdinalIgnoreCase);
+
+            if (playStage1Ambush)
+            {
+                StartCoroutine(Stage1AmbushCutsceneThenStartWavesRoutine());
+            }
+            else
+            {
+                StartCoroutine(SpawnRoutine());
+                StartCoroutine(MonitorVoidEnemiesRoutine());
+            }
         }
         else
         {
@@ -165,6 +181,376 @@ public class GameManager : MonoBehaviour
         {
             Instance = null;
         }
+    }
+
+    #endregion
+
+    #region Stage 1 Ninja Ambush Cutscene
+
+    private IEnumerator Stage1AmbushCutsceneThenStartWavesRoutine()
+    {
+        GameObject overlayObj = CreateStage1CutsceneOverlay(
+            out RectTransform topBar,
+            out RectTransform bottomBar,
+            out Image fadeScreenImg
+        );
+
+        float barHeight = Mathf.Max(80f, stage1LetterboxHeight);
+        topBar.sizeDelta = new Vector2(0f, barHeight);
+        bottomBar.sizeDelta = new Vector2(0f, barHeight);
+        if (fadeScreenImg != null) fadeScreenImg.color = Color.black;
+
+        yield return new WaitForFixedUpdate();
+        EnsurePlayerReference();
+
+        CinemachineCamera cmCam = FindFirstObjectByType<CinemachineCamera>();
+        if (player == null)
+        {
+            if (overlayObj != null) Destroy(overlayObj);
+            StartCoroutine(SpawnRoutine());
+            StartCoroutine(MonitorVoidEnemiesRoutine());
+            yield break;
+        }
+
+        // Lock player in the center
+        player.SetPortalTransitionState(true);
+        Rigidbody2D playerRb = player.GetComponent<Rigidbody2D>();
+        if (playerRb != null) playerRb.linearVelocity = Vector2.zero;
+
+        Transform origTrackTarget = cmCam != null ? cmCam.Target.TrackingTarget : null;
+        float origOrthoSize = (cmCam != null && cmCam.Lens.OrthographicSize > 0.5f) ? cmCam.Lens.OrthographicSize : 6.5f;
+
+        GameObject camAnchorObj = new GameObject("Stage1CutsceneCamAnchor");
+        Transform camAnchor = camAnchorObj.transform;
+        Vector3 centerPos = player.transform.position + new Vector3(0f, 0.5f, 0f);
+        camAnchor.position = centerPos;
+        if (cmCam != null)
+        {
+            cmCam.Target.TrackingTarget = camAnchor;
+            cmCam.Lens.OrthographicSize = origOrthoSize * 0.82f;
+        }
+
+        // Resolve ninja sprite from enemyConfigs[0] (NormalNinja) so ambush ninjas match the real enemies
+        Sprite ninjaSprite = ResolveAmbushNinjaSprite(out Vector3 ninjaScale, out Color ninjaColor, out int ninjaSortOrder);
+        List<GameObject> ambushActors = new List<GameObject>();
+
+        bool skipped = false;
+        float elapsed = 0f;
+
+        // Smooth Fade In from Black onto the Protagonist in the center
+        const float fadeInDur = 0.95f;
+        while (elapsed < fadeInDur && !skipped)
+        {
+            if (IsStage1SkipPressed()) { skipped = true; break; }
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / fadeInDur);
+            if (playerRb != null) playerRb.linearVelocity = new Vector2(0f, Mathf.Min(playerRb.linearVelocityY, 0f));
+            camAnchor.position = player.transform.position + new Vector3(0f, 0.5f, 0f);
+            if (fadeScreenImg != null)
+            {
+                fadeScreenImg.color = new Color(0f, 0f, 0f, 1f - (t * t * (3f - 2f * t)));
+            }
+            yield return null;
+        }
+        if (fadeScreenImg != null) fadeScreenImg.color = Color.clear;
+
+        // Protagonist calmly glances right then left sensing the ambush
+        if (!skipped)
+        {
+            player.FaceWorldDirection(1f);
+            yield return WaitStage1Skippable(0.65f, playerRb, () => skipped = true);
+        }
+        if (!skipped)
+        {
+            player.FaceWorldDirection(-1f);
+            yield return WaitStage1Skippable(0.65f, playerRb, () => skipped = true);
+        }
+
+        // --- BEAT 2: 6 Ninjas Drop from High Above Wide on BOTH Left & Right Sides (Epic Wide Shot!) ---
+        Vector3 playerGroundPos = player.transform.position;
+        float[] xOffsets = { -8.8f, -6.5f, -4.5f, 4.5f, 6.5f, 8.8f }; // 3 Left, 3 Right — wide & grand!
+        int ninjaCount = xOffsets.Length;
+        Vector3[] landPositions = new Vector3[ninjaCount];
+        Vector3[] startDropPositions = new Vector3[ninjaCount];
+        SpriteRenderer[] actorRenderers = new SpriteRenderer[ninjaCount];
+
+        if (!skipped)
+        {
+            for (int i = 0; i < ninjaCount; i++)
+            {
+                float targetX = playerGroundPos.x + xOffsets[i];
+                float floorY = FindFloorYAtX(targetX, playerGroundPos.y);
+                landPositions[i] = new Vector3(targetX, floorY, 0f);
+                startDropPositions[i] = landPositions[i] + new Vector3(0f, 8.5f + (i % 3) * 1.4f, 0f);
+
+                GameObject actor = new GameObject($"AmbushNinja_{i}");
+                actor.transform.position = startDropPositions[i];
+                actor.transform.localScale = ninjaScale;
+
+                SpriteRenderer sr = actor.AddComponent<SpriteRenderer>();
+                sr.sprite = ninjaSprite;
+                sr.color = ninjaColor;
+                sr.sortingOrder = ninjaSortOrder;
+                sr.flipX = xOffsets[i] > 0f;
+
+                ambushActors.Add(actor);
+                actorRenderers[i] = sr;
+            }
+
+            elapsed = 0f;
+            const float dropDur = 0.95f;
+            bool landedFXPlayed = false;
+            while (elapsed < dropDur && !skipped)
+            {
+                if (IsStage1SkipPressed()) { skipped = true; break; }
+                elapsed += Time.deltaTime;
+                float t = Mathf.Clamp01(elapsed / dropDur);
+                float fallEase = t * t;
+
+                if (playerRb != null) playerRb.linearVelocity = new Vector2(0f, Mathf.Min(playerRb.linearVelocityY, 0f));
+
+                for (int i = 0; i < ambushActors.Count; i++)
+                {
+                    ambushActors[i].transform.position = Vector3.Lerp(startDropPositions[i], landPositions[i], fallEase);
+                }
+
+                // Pull camera far out into an epic wide shot framing the whole ambush
+                if (cmCam != null)
+                {
+                    float easeOut = 1f - Mathf.Pow(1f - t, 3f);
+                    cmCam.Lens.OrthographicSize = Mathf.Lerp(origOrthoSize * 0.85f, origOrthoSize * 1.38f, easeOut);
+                }
+
+                if (!landedFXPlayed && t >= 0.92f)
+                {
+                    landedFXPlayed = true;
+                    player.TriggerCameraShake(0.20f);
+                    if (player.SlashSFX != null) player.PlayPitchedSFX(player.SlashSFX, 0.72f, 0.85f);
+                }
+
+                yield return null;
+            }
+        }
+
+        // Protagonist sees the surrounding ninjas and shifts into the ready-to-slash sword stance -> Smooth Fade Out!
+        if (!skipped)
+        {
+            yield return WaitStage1Skippable(0.90f, playerRb, () => skipped = true);
+
+            if (!skipped)
+            {
+                player.SetCutsceneSlashingStance(true);
+                if (player.SlashSFX != null) player.PlayPitchedSFX(player.SlashSFX, 1.05f, 0.9f);
+
+                // Smoothly tighten camera onto the protagonist drawing their sword
+                elapsed = 0f;
+                const float stanceHoldDur = 1.35f;
+                float startSize = cmCam != null ? cmCam.Lens.OrthographicSize : origOrthoSize;
+                while (elapsed < stanceHoldDur && !skipped)
+                {
+                    if (IsStage1SkipPressed()) { skipped = true; break; }
+                    elapsed += Time.deltaTime;
+                    float t = Mathf.Clamp01(elapsed / stanceHoldDur);
+                    if (playerRb != null) playerRb.linearVelocity = new Vector2(0f, Mathf.Min(playerRb.linearVelocityY, 0f));
+                    if (cmCam != null)
+                    {
+                        float smooth = 1f - Mathf.Pow(1f - t, 3f);
+                        cmCam.Lens.OrthographicSize = Mathf.Lerp(startSize, origOrthoSize * 1.05f, smooth);
+                    }
+                    yield return null;
+                }
+            }
+
+            // Clean Fade Out at the end of the Cutscene -> restore gameplay
+            if (!skipped && fadeScreenImg != null)
+            {
+                elapsed = 0f;
+                const float fadeOutDur = 0.65f;
+                float startBarH = topBar != null ? topBar.sizeDelta.y : 0f;
+                while (elapsed < fadeOutDur)
+                {
+                    elapsed += Time.deltaTime;
+                    float t = Mathf.Clamp01(elapsed / fadeOutDur);
+                    float smooth = t * t * (3f - 2f * t);
+                    if (playerRb != null) playerRb.linearVelocity = new Vector2(0f, Mathf.Min(playerRb.linearVelocityY, 0f));
+                    fadeScreenImg.color = new Color(0f, 0f, 0f, smooth);
+                    if (topBar != null) topBar.sizeDelta = new Vector2(0f, Mathf.Lerp(startBarH, 0f, smooth));
+                    if (bottomBar != null) bottomBar.sizeDelta = new Vector2(0f, Mathf.Lerp(startBarH, 0f, smooth));
+                    yield return null;
+                }
+            }
+        }
+
+        // Clean up cutscene ninjas & restore camera/player straight into live Stage 1 combat
+        for (int i = 0; i < ambushActors.Count; i++)
+        {
+            if (ambushActors[i] != null) Destroy(ambushActors[i]);
+        }
+        ambushActors.Clear();
+
+        if (cmCam != null)
+        {
+            cmCam.Target.TrackingTarget = origTrackTarget != null ? origTrackTarget : player.transform;
+            cmCam.Lens.OrthographicSize = origOrthoSize;
+        }
+        Destroy(camAnchorObj);
+
+        if (player != null)
+        {
+            player.SetCutsceneSlashingStance(false);
+            player.SetPortalTransitionState(false);
+        }
+
+        // Begin Stage 1 enemy waves immediately and clear black fade cleanly
+        StartCoroutine(SpawnRoutine());
+        StartCoroutine(MonitorVoidEnemiesRoutine());
+
+        if (!skipped && fadeScreenImg != null)
+        {
+            elapsed = 0f;
+            const float revealDur = 0.45f;
+            while (elapsed < revealDur)
+            {
+                elapsed += Time.deltaTime;
+                float t = Mathf.Clamp01(elapsed / revealDur);
+                fadeScreenImg.color = new Color(0f, 0f, 0f, 1f - t);
+                yield return null;
+            }
+        }
+
+        if (overlayObj != null) Destroy(overlayObj);
+    }
+
+    private IEnumerator WaitStage1Skippable(float seconds, Rigidbody2D playerRb, System.Action onSkip)
+    {
+        float t = 0f;
+        while (t < seconds)
+        {
+            if (IsStage1SkipPressed())
+            {
+                onSkip?.Invoke();
+                yield break;
+            }
+            if (playerRb != null) playerRb.linearVelocity = new Vector2(0f, Mathf.Min(playerRb.linearVelocityY, 0f));
+            t += Time.deltaTime;
+            yield return null;
+        }
+    }
+
+    private static bool IsStage1SkipPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        var kb = UnityEngine.InputSystem.Keyboard.current;
+        if (kb != null && (kb.spaceKey.wasPressedThisFrame || kb.escapeKey.wasPressedThisFrame || kb.enterKey.wasPressedThisFrame))
+        {
+            return true;
+        }
+#endif
+        return false;
+    }
+
+    private float FindFloorYAtX(float worldX, float refY)
+    {
+        RaycastHit2D hit = Physics2D.Raycast(new Vector2(worldX, refY + 2.5f), Vector2.down, 8f, groundLayer);
+        if (hit.collider != null && !hit.collider.isTrigger)
+        {
+            return hit.point.y + 0.55f;
+        }
+        return refY;
+    }
+
+    private Sprite ResolveAmbushNinjaSprite(out Vector3 scale, out Color color, out int sortOrder)
+    {
+        scale = Vector3.one;
+        color = Color.white;
+        sortOrder = 5;
+
+        for (int i = 0; i < enemyConfigs.Count; i++)
+        {
+            GameObject prefab = enemyConfigs[i].prefab;
+            if (prefab == null) continue;
+
+            SpriteRenderer sr = prefab.GetComponentInChildren<SpriteRenderer>();
+            if (sr != null && sr.sprite != null)
+            {
+                scale = sr.transform.lossyScale;
+                color = sr.color;
+                sortOrder = Mathf.Max(sr.sortingOrder, 4);
+                return sr.sprite;
+            }
+        }
+
+        return EnemyBase.GetSharedPixelBlockSprite(3);
+    }
+
+    private GameObject CreateStage1CutsceneOverlay(
+        out RectTransform topBar,
+        out RectTransform bottomBar,
+        out Image fadeScreenImg)
+    {
+        GameObject canvasObj = new GameObject("Stage1AmbushCutsceneCanvas");
+        Canvas canvas = canvasObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 200;
+
+        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.matchWidthOrHeight = 0.5f;
+
+        // Black Fade-In / Hard-Cut Curtain
+        GameObject fadeObj = new GameObject("FadeCurtain");
+        fadeObj.transform.SetParent(canvasObj.transform, false);
+        RectTransform fadeRect = fadeObj.AddComponent<RectTransform>();
+        fadeRect.anchorMin = Vector2.zero;
+        fadeRect.anchorMax = Vector2.one;
+        fadeRect.offsetMin = Vector2.zero;
+        fadeRect.offsetMax = Vector2.zero;
+        fadeScreenImg = fadeObj.AddComponent<Image>();
+        fadeScreenImg.color = Color.black;
+        fadeScreenImg.raycastTarget = false;
+
+        // Top & Bottom Cinema Letterbox Bars
+        GameObject topObj = new GameObject("TopLetterbox");
+        topObj.transform.SetParent(canvasObj.transform, false);
+        topBar = topObj.AddComponent<RectTransform>();
+        topBar.anchorMin = new Vector2(0f, 1f);
+        topBar.anchorMax = new Vector2(1f, 1f);
+        topBar.pivot = new Vector2(0.5f, 1f);
+        topBar.anchoredPosition = Vector2.zero;
+        topBar.sizeDelta = Vector2.zero;
+        topObj.AddComponent<Image>().color = Color.black;
+
+        GameObject botObj = new GameObject("BottomLetterbox");
+        botObj.transform.SetParent(canvasObj.transform, false);
+        bottomBar = botObj.AddComponent<RectTransform>();
+        bottomBar.anchorMin = new Vector2(0f, 0f);
+        bottomBar.anchorMax = new Vector2(1f, 0f);
+        bottomBar.pivot = new Vector2(0.5f, 0f);
+        bottomBar.anchoredPosition = Vector2.zero;
+        bottomBar.sizeDelta = Vector2.zero;
+        botObj.AddComponent<Image>().color = Color.black;
+
+        TMP_FontAsset font = ResolveDialogueFont();
+
+        // Skip Hint
+        GameObject skipObj = new GameObject("SkipHint");
+        skipObj.transform.SetParent(botObj.transform, false);
+        RectTransform skipRect = skipObj.AddComponent<RectTransform>();
+        skipRect.anchorMin = new Vector2(1f, 0f);
+        skipRect.anchorMax = new Vector2(1f, 0f);
+        skipRect.pivot = new Vector2(1f, 0f);
+        skipRect.anchoredPosition = new Vector2(-32f, 16f);
+        skipRect.sizeDelta = new Vector2(300f, 34f);
+
+        TextMeshProUGUI skipTmp = skipObj.AddComponent<TextMeshProUGUI>();
+        if (font != null) skipTmp.font = font;
+        skipTmp.text = "[SPACE] SKIP";
+        skipTmp.fontSize = 22f;
+        skipTmp.alignment = TextAlignmentOptions.Right;
+        skipTmp.color = new Color(0.85f, 0.85f, 0.85f, 0.65f);
+
+        return canvasObj;
     }
 
     #endregion

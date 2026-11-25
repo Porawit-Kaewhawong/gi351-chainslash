@@ -245,6 +245,8 @@ public class PlayerController : MonoBehaviour
     [Range(0f, 0.8f)] [SerializeField] private float corpseThrowUpwardRatio = 0.35f;
     [Tooltip("Aim tolerance radius when targeting a sliced corpse on the ground with the Grappling Hook.")]
     [SerializeField] private float corpseGrabAimRadius = 1.0f;
+    [Tooltip("Time in seconds for the white focus/slash meter bar to fully reset after throwing a corpse when depleted.")]
+    [SerializeField] private float corpseThrowMeterResetDuration = 3f;
 
     [Header("Grappling Visual & Polish")]
     [SerializeField] private int ropeSegments = 20;
@@ -404,6 +406,7 @@ public class PlayerController : MonoBehaviour
     private Vector2 currentHookTip;
     private bool isReelingToPortal;
     private bool isPortalTransitioning;
+    private bool isCutsceneSlashingStance;
     private GameObject insGrappleTargetIndicator;
     private GameObject grapplePixelRopeContainer;
     private readonly List<SpriteRenderer> grapplePixelLinkRenderers = new List<SpriteRenderer>();
@@ -3339,6 +3342,17 @@ public class PlayerController : MonoBehaviour
         Time.timeScale = 1.0f;
         Time.fixedDeltaTime = defaultFixedDeltaTime;
 
+        if (activeMeterCoroutine != null)
+        {
+            StopCoroutine(activeMeterCoroutine);
+            activeMeterCoroutine = null;
+        }
+
+        if (!IsInMode && currentMeter < maxMeter)
+        {
+            activeMeterCoroutine = StartCoroutine(MeterRegenerateWithinDuration(corpseThrowMeterResetDuration));
+        }
+
         if (heldCorpse == null) return;
 
         SlicedCorpseOnGround corpseToThrow = heldCorpse;
@@ -4296,6 +4310,18 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
+    /// Forces the Player into the ready-to-slash sword stance during cinematics (e.g. Stage 1 ambush cutscene).
+    /// </summary>
+    public void SetCutsceneSlashingStance(bool active)
+    {
+        isCutsceneSlashingStance = active;
+        if (active)
+        {
+            SetPlayerAnimState(PlayerAnimState.InModeSlashingStance, true);
+        }
+    }
+
+    /// <summary>
     /// Plays the stage-entry rift emergence burst with white pixel afterimages and landing dust puffs.
     /// </summary>
     public void TriggerStageArrivalBurst(int preferredFacingDir = 1, bool playSfx = false)
@@ -4436,7 +4462,7 @@ public class PlayerController : MonoBehaviour
         {
             targetState = PlayerAnimState.ReleaseGrapplingHook;
         }
-        else if (IsInMode)
+        else if (IsInMode || isCutsceneSlashingStance)
         {
             targetState = PlayerAnimState.InModeSlashingStance;
         }
@@ -4704,6 +4730,40 @@ public class PlayerController : MonoBehaviour
             yield return WaitMeterRegenTick;
         }
 
+        HideMeterBarWithPulse();
+        activeMeterCoroutine = null;
+    }
+
+    private IEnumerator MeterRegenerateWithinDuration(float fullResetDuration)
+    {
+        float duration = Mathf.Max(0.1f, fullResetDuration);
+        ShowMeterBar();
+
+        if (currentMeter <= 0f)
+        {
+            float elapsed = 0f;
+            while (elapsed < duration && currentMeter < maxMeter)
+            {
+                elapsed += Time.deltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                currentMeter = Mathf.Lerp(0f, maxMeter, t);
+                if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
+                yield return null;
+            }
+        }
+        else
+        {
+            float regenPerSecond = maxMeter / duration;
+            while (currentMeter < maxMeter)
+            {
+                currentMeter = Mathf.Clamp(currentMeter + regenPerSecond * Time.deltaTime, 0f, maxMeter);
+                if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
+                yield return null;
+            }
+        }
+
+        currentMeter = maxMeter;
+        if (modeMeterImage != null) modeMeterImage.fillAmount = 1f;
         HideMeterBarWithPulse();
         activeMeterCoroutine = null;
     }
