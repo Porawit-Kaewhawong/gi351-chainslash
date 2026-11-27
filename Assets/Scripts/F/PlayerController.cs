@@ -221,6 +221,15 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Gradient drawGradient;
     [SerializeField] private Gradient flashGradient;
     [SerializeField] private Gradient dissolveGradient;
+    [Tooltip("Spawns a crisp pixel-art samurai glint at the katana scabbard mouth on mouse release from Chain Slash mode.")]
+    [SerializeField] private bool enableScabbardReleaseGlint = true;
+    [SerializeField] private Vector2 scabbardGlintOffset = new Vector2(0.05f, -0.05f);
+    [SerializeField] private Color scabbardGlintColor = new Color(1f, 0.97f, 0.86f, 1f);
+    [SerializeField] [Range(0.4f, 2.2f)] private float scabbardGlintScale = 1.0f;
+    [SerializeField] [Range(0.10f, 0.45f)] private float scabbardGlintDuration = 0.24f;
+    [Tooltip("Optional custom katana draw SFX played with the scabbard glint. If left empty, a realistic synthesized steel unsheathe 'SHING!' plays automatically.")]
+    [SerializeField] private AudioClip scabbardDrawSFX;
+    [SerializeField] [Range(0f, 1.5f)] private float scabbardDrawVolume = 0.85f;
 
     [Header("Grappling Hook Settings")]
     [SerializeField] private float maxGrappleRange = 12f;
@@ -445,6 +454,10 @@ public class PlayerController : MonoBehaviour
     private Coroutine activeShakeCoroutine;
     private Coroutine activeDamageFlashCoroutine;
     private Coroutine activeModeDimCoroutine;
+    private Coroutine activeScabbardGlintCoroutine;
+    private GameObject activeScabbardGlintObj;
+    private static Sprite[] cachedScabbardPixelFrames;
+    private static AudioClip cachedKatanaDrawClip;
 
     // Damage visual caching
     private Color originalSpriteColor = Color.white;
@@ -1586,6 +1599,10 @@ public class PlayerController : MonoBehaviour
                 {
                     PlayPitchedSFX(stepClip, Random.Range(0.92f, 1.08f), 0.75f);
                 }
+                if (enableProtagonistJuice && enableMovementDustVFX)
+                {
+                    SpawnRunningFootstepDust(GetFeetPosition(), Mathf.Sign(rb.linearVelocityX));
+                }
             }
         }
         else
@@ -2065,6 +2082,11 @@ public class PlayerController : MonoBehaviour
         IsInMode = true;
         SetPlayerAnimState(PlayerAnimState.InModeSlashingStance, true);
         FadeModeDimOverlay(modeDimAlpha);
+
+        if (enableScabbardReleaseGlint && !isDead)
+        {
+            TriggerScabbardReleaseGlint();
+        }
 
         Time.timeScale = timeSpeed;
         Time.fixedDeltaTime = defaultFixedDeltaTime * Time.timeScale;
@@ -5339,6 +5361,33 @@ public class PlayerController : MonoBehaviour
         activeLandingSquashCoroutine = null;
     }
 
+    private static void SpawnRunningFootstepDust(Vector3 feetPos, float moveDirX)
+    {
+        float backDir = Mathf.Abs(moveDirX) > 0.05f ? -Mathf.Sign(moveDirX) : -1f;
+        Sprite block = EnemyBase.GetSharedPixelBlockSprite(2);
+        int count = Random.Range(2, 4);
+
+        for (int i = 0; i < count; i++)
+        {
+            GameObject puff = new GameObject("PlayerWalkDustPuff");
+            Vector3 spawnPos = feetPos + new Vector3(backDir * Random.Range(0.08f, 0.24f), Random.Range(0.02f, 0.12f), 0f);
+            puff.transform.position = EnemyBase.SnapToPixelGrid(spawnPos);
+            float scale = Random.Range(0.22f, 0.42f);
+            puff.transform.localScale = Vector3.one * scale;
+
+            SpriteRenderer sr = puff.AddComponent<SpriteRenderer>();
+            sr.sprite = block;
+            sr.color = new Color(0.94f, 0.92f, 0.88f, Random.Range(0.65f, 0.88f));
+            sr.sortingOrder = 5;
+
+            Rigidbody2D prb = puff.AddComponent<Rigidbody2D>();
+            prb.gravityScale = -0.08f; // Gentle airy float upward like crisp pixel dust
+            prb.linearDamping = 5.2f;
+            prb.linearVelocity = new Vector2(backDir * Random.Range(1.1f, 2.6f), Random.Range(0.45f, 1.35f));
+            Destroy(puff, Random.Range(0.18f, 0.30f));
+        }
+    }
+
     private IEnumerator DashReadyGlintRoutine()
     {
         if (spriteRenderer == null) yield break;
@@ -5350,6 +5399,382 @@ public class PlayerController : MonoBehaviour
         {
             spriteRenderer.color = prevColor.a > 0.1f ? prevColor : Color.white;
         }
+    }
+
+    private void TriggerScabbardReleaseGlint()
+    {
+        if (spriteRenderer == null) return;
+
+        PlayScabbardDrawSFX();
+
+        if (activeScabbardGlintCoroutine != null)
+        {
+            StopCoroutine(activeScabbardGlintCoroutine);
+            activeScabbardGlintCoroutine = null;
+        }
+        if (activeScabbardGlintObj != null)
+        {
+            Destroy(activeScabbardGlintObj);
+            activeScabbardGlintObj = null;
+        }
+
+        activeScabbardGlintCoroutine = StartCoroutine(ScabbardReleaseGlintRoutine());
+    }
+
+    private void PlayScabbardDrawSFX()
+    {
+        if (scabbardDrawVolume <= 0.001f) return;
+
+        AudioClip clip = scabbardDrawSFX != null ? scabbardDrawSFX : GetOrCreateKatanaDrawClip();
+        if (clip == null) return;
+
+        AudioSource src = shimmerAudioSource != null ? shimmerAudioSource : audioSource;
+        if (src == null) return;
+
+        src.pitch = Random.Range(0.97f, 1.04f);
+        src.PlayOneShot(clip, scabbardDrawVolume);
+    }
+
+    private static AudioClip GetOrCreateKatanaDrawClip()
+    {
+        if (cachedKatanaDrawClip != null) return cachedKatanaDrawClip;
+
+        const int sampleRate = 44100;
+        const float duration = 0.38f;
+        int sampleCount = Mathf.RoundToInt(sampleRate * duration);
+        float[] samples = new float[sampleCount];
+
+        System.Random rng = new System.Random(13579);
+        float scrapeFilter = 0f;
+        float prevNoise = 0f;
+        float phaseScrape = 0f;
+
+        // Realistic katana steel inharmonic partials (Hz)
+        float[] ringFreqs = { 2420f, 3890f, 5340f, 7180f, 9420f };
+        float[] ringAmps  = { 0.34f, 0.26f, 0.19f, 0.12f, 0.07f };
+        float[] ringDecay = { 10.5f, 13.0f, 16.5f, 21.0f, 27.0f };
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = i / (float)sampleRate;
+            float white = (float)(rng.NextDouble() * 2.0 - 1.0);
+            float highPassed = white - prevNoise;
+            prevNoise = white;
+
+            float sample = 0f;
+
+            // 1. Tsuba / Habaki thumb-unlock crisp click (0.000s - 0.030s)
+            if (t < 0.030f)
+            {
+                float clickEnv = Mathf.Exp(-t * 165f);
+                float woodMetalClick = (Mathf.Sin(2f * Mathf.PI * 920f * t) * 0.55f
+                                      + Mathf.Sin(2f * Mathf.PI * 2650f * t) * 0.45f
+                                      + highPassed * 0.35f) * clickEnv * 0.42f;
+                sample += woodMetalClick;
+            }
+
+            // 2. Steel blade sliding rapidly out of wooden saya (0.012s - 0.165s)
+            if (t >= 0.012f && t < 0.165f)
+            {
+                float st = (t - 0.012f) / 0.153f;
+                float scrapeEnv = Mathf.Sin(st * Mathf.PI) * Mathf.Pow(1f - st, 0.45f);
+                // Smooth rising metallic friction resonance
+                scrapeFilter = Mathf.Lerp(scrapeFilter, highPassed, 0.38f);
+                float sweepFreq = Mathf.Lerp(1750f, 6100f, st * st);
+                phaseScrape += (2f * Mathf.PI * sweepFreq) / sampleRate;
+                float metallicScrape = (scrapeFilter * 0.55f + Mathf.Sin(phaseScrape) * (0.28f + 0.22f * highPassed)) * scrapeEnv * 0.34f;
+                sample += metallicScrape;
+            }
+
+            // 3. Razor-sharp high-carbon steel ring ("SHINGGG!") (0.032s - 0.380s)
+            if (t >= 0.032f)
+            {
+                float rt = t - 0.032f;
+                float attack = Mathf.Clamp01(rt / 0.014f);
+                float shimmer = 0.88f + 0.12f * Mathf.Sin(2f * Mathf.PI * 16f * rt);
+                float ringSum = 0f;
+
+                for (int p = 0; p < ringFreqs.Length; p++)
+                {
+                    float freq = ringFreqs[p] * (1f + 0.008f * Mathf.Exp(-rt * 35f));
+                    ringSum += Mathf.Sin(2f * Mathf.PI * freq * rt) * ringAmps[p] * Mathf.Exp(-rt * ringDecay[p]);
+                }
+
+                // Subtle airy blade hiss accompanying the ring
+                float airHiss = highPassed * Mathf.Exp(-rt * 22f) * 0.09f;
+                sample += (ringSum * shimmer + airHiss) * attack * 0.52f;
+            }
+
+            // Soft limiter & tail fade-out to avoid any pop
+            float tailFade = t > (duration - 0.025f) ? Mathf.Clamp01((duration - t) / 0.025f) : 1f;
+            samples[i] = Mathf.Clamp((float)System.Math.Tanh(sample * 1.45f), -0.95f, 0.95f) * tailFade;
+        }
+
+        AudioClip clip = AudioClip.Create("KatanaScabbardDrawSFX", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        cachedKatanaDrawClip = clip;
+        return cachedKatanaDrawClip;
+    }
+
+    private IEnumerator ScabbardReleaseGlintRoutine()
+    {
+        Sprite[] frames = GetOrCreateScabbardPixelFrames();
+        if (frames == null || frames.Length < 3) yield break;
+
+        GameObject root = new GameObject("ScabbardReleaseGlint");
+        activeScabbardGlintObj = root;
+
+        SpriteRenderer glintSr = root.AddComponent<SpriteRenderer>();
+        glintSr.sprite = frames[2]; // Crisp 19x19 pixel-art 4-point katana glint star
+        glintSr.sortingLayerID = spriteRenderer != null ? spriteRenderer.sortingLayerID : 0;
+        glintSr.sortingOrder = (spriteRenderer != null ? spriteRenderer.sortingOrder : 5) + 4;
+
+        float baseScale = Mathf.Max(0.25f, scabbardGlintScale);
+        float totalDuration = Mathf.Max(0.14f, scabbardGlintDuration);
+        float popDuration = totalDuration * 0.30f;
+        float elapsed = 0f;
+
+        root.transform.localRotation = Quaternion.identity;
+        Color tint = scabbardGlintColor;
+
+        // Single smooth pixel-art "SHING!" wink and clean fade-out
+        while (elapsed < totalDuration && !isDead && root != null)
+        {
+            if (spriteRenderer != null)
+            {
+                float facingSign = spriteRenderer.flipX ? -1f : 1f;
+                root.transform.position = spriteRenderer.transform.position + new Vector3(
+                    facingSign * scabbardGlintOffset.x,
+                    scabbardGlintOffset.y,
+                    0f
+                );
+            }
+
+            if (elapsed <= popDuration)
+            {
+                float p = Mathf.Clamp01(elapsed / Mathf.Max(0.001f, popDuration));
+                // Smooth cubic ease-out pop-in
+                float easeOut = 1f - Mathf.Pow(1f - p, 3f);
+                float sx = Mathf.Lerp(0.12f, 1.15f, easeOut) * baseScale;
+                float sy = Mathf.Lerp(0.12f, 1.00f, easeOut) * baseScale;
+                root.transform.localScale = new Vector3(sx, sy, 1f);
+                glintSr.color = new Color(tint.r, tint.g, tint.b, easeOut);
+            }
+            else
+            {
+                float f = Mathf.Clamp01((elapsed - popDuration) / Mathf.Max(0.001f, totalDuration - popDuration));
+                // Smooth cubic ease-in-out taper & dissolve
+                float smooth = f * f * (3f - 2f * f);
+                float sx = Mathf.Lerp(1.15f, 1.35f, smooth) * baseScale;
+                float sy = Mathf.Lerp(1.00f, 0.04f, smooth) * baseScale;
+                root.transform.localScale = new Vector3(sx, sy, 1f);
+                glintSr.color = new Color(tint.r, tint.g, tint.b, 1f - smooth);
+            }
+
+            elapsed += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        if (root != null)
+        {
+            Destroy(root);
+        }
+        if (activeScabbardGlintObj == root)
+        {
+            activeScabbardGlintObj = null;
+        }
+        activeScabbardGlintCoroutine = null;
+    }
+
+    private static Sprite[] GetOrCreateScabbardPixelFrames()
+    {
+        if (cachedScabbardPixelFrames != null && cachedScabbardPixelFrames.Length == 6 && cachedScabbardPixelFrames[0] != null)
+        {
+            return cachedScabbardPixelFrames;
+        }
+
+        // 19x19 hand-crafted pixel-art katana scabbard glint frames at PPU=20 (exact 1:1 pixel match with Player scale=5, PPU=100)
+        // Legend: '.' = transparent, 'W' = pure crisp white, 'G' = warm gold-cream highlight, 'D' = soft amber edge
+        string[][] patterns =
+        {
+            // Frame 0: Tiny 3x3 spark seed
+            new[]
+            {
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                ".........G.........",
+                "........GWG........",
+                ".........G.........",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "..................."
+            },
+            // Frame 1: Medium crisp 9x7 pixel star
+            new[]
+            {
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                ".........D.........",
+                ".........G.........",
+                "........GWG........",
+                ".....DGWWWWWGD.....",
+                "........GWG........",
+                ".........G.........",
+                ".........D.........",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "..................."
+            },
+            // Frame 2: Full iconic 17x13 samurai katana glint peak
+            new[]
+            {
+                "...................",
+                "...................",
+                "...................",
+                ".........D.........",
+                ".........G.........",
+                ".........W.........",
+                "......D..W..D......",
+                ".......G.W.G.......",
+                "........WWW........",
+                ".DDGWWWWWWWWWWWGDD.",
+                "........WWW........",
+                ".......G.W.G.......",
+                "......D..W..D......",
+                ".........W.........",
+                ".........G.........",
+                ".........D.........",
+                "...................",
+                "...................",
+                "..................."
+            },
+            // Frame 3: Charged shimmer A (13x9 star + diagonal 1px pixel twinkles)
+            new[]
+            {
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                ".........D.........",
+                "......G..G.........",
+                ".........W....G....",
+                "........GWG........",
+                "...DGWWWWWWWWWGd...".Replace('d', 'D'),
+                "........GWG........",
+                "....G....W.........",
+                ".........G..G......",
+                ".........D.........",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "..................."
+            },
+            // Frame 4: Charged shimmer B (11x7 pulsing pixel star)
+            new[]
+            {
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                ".........G.........",
+                ".......D.W.D.......",
+                "........WWW........",
+                "....DGWWWWWWWGD....",
+                "........WWW........",
+                ".......D.W.D.......",
+                ".........G.........",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "..................."
+            },
+            // Frame 5: Exit razor-thin horizontal 1px pixel line
+            new[]
+            {
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                ".........G.........",
+                "..DDGWWWWWWWWWGDD..",
+                ".........G.........",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "...................",
+                "..................."
+            }
+        };
+
+        Color colW = new Color(1f, 1f, 1f, 1f);
+        Color colG = new Color(1f, 0.93f, 0.62f, 1f);
+        Color colD = new Color(0.95f, 0.74f, 0.32f, 1f);
+
+        cachedScabbardPixelFrames = new Sprite[patterns.Length];
+        const int size = 19;
+
+        for (int f = 0; f < patterns.Length; f++)
+        {
+            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Point;
+            tex.wrapMode = TextureWrapMode.Clamp;
+
+            Color[] pixels = new Color[size * size];
+            string[] rows = patterns[f];
+
+            for (int y = 0; y < size; y++)
+            {
+                string row = rows[size - 1 - y];
+                for (int x = 0; x < size; x++)
+                {
+                    char c = x < row.Length ? row[x] : '.';
+                    pixels[y * size + x] = c switch
+                    {
+                        'W' => colW,
+                        'G' => colG,
+                        'D' => colD,
+                        _ => Color.clear
+                    };
+                }
+            }
+
+            tex.SetPixels(pixels);
+            tex.Apply();
+            cachedScabbardPixelFrames[f] = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 20f);
+        }
+
+        return cachedScabbardPixelFrames;
     }
 
     private IEnumerator LandingSquashRoutine(float intensity)

@@ -130,6 +130,12 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     [SerializeField] protected List<Sprite> enemyDeathSprites = new List<Sprite>();
     [SerializeField] protected float enemyDeathFPS = 6f;
 
+    [Header("Enemy Juice & Game Feel")]
+    [Tooltip("Enables spawn ninja-smoke pop, run momentum lean, jump/land squash-stretch, and knockback/grapple recoil.")]
+    [SerializeField] protected bool enableEnemyJuice = true;
+    [SerializeField] protected bool enableSpawnPopVFX = true;
+    [SerializeField] protected float enemyRunLeanAngle = 6.0f;
+
     #endregion
 
     #region Public Properties
@@ -143,6 +149,15 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     protected virtual float CurrentMoveSpeed => moveSpeed;
     protected virtual bool UseBaseEnemySpriteAnimation => true;
     protected virtual float EnemyAnimSpeedMultiplier => 1f;
+    protected virtual bool AllowEnemyJuice => enableEnemyJuice && !(this is BossTargetPoint) && !(this is ArmoredNinjaWeakPoint) && !(this is LegendarySamurai);
+
+    // Enemy Juice runtime state
+    private Vector3 juiceBaseSpriteScale = Vector3.one;
+    private bool juiceScaleCaptured;
+    private bool wasGroundedForJuice = true;
+    private float lastAirborneVelYForJuice;
+    private float enemyWalkDustTimer;
+    private Coroutine enemyJuiceSquashCoroutine;
 
     protected static Camera MainCamera
     {
@@ -294,6 +309,18 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     protected virtual void Start()
     {
         playerController = PlayerController.Instance != null ? PlayerController.Instance : FindFirstObjectByType<PlayerController>();
+
+        if (spriteRenderer != null)
+        {
+            juiceBaseSpriteScale = spriteRenderer.transform.localScale;
+            juiceScaleCaptured = true;
+        }
+
+        if (AllowEnemyJuice && enableSpawnPopVFX)
+        {
+            SpawnEnemyPixelPuffs(GetEnemyFeetPosition(), 5, new Color(0.82f, 0.84f, 0.88f, 0.85f), 2.4f);
+            TriggerEnemyJuiceSquash(0.76f, 1.24f, 0.16f);
+        }
     }
 
     protected virtual void Update()
@@ -325,6 +352,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         CheckMouseHover();
         FlipAndRotate();
         UpdateEnemySpriteAnimation(Time.deltaTime);
+        UpdateEnemyJuice();
     }
 
     protected virtual void FixedUpdate()
@@ -1049,6 +1077,11 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         }
 
         TriggerHitFlash(0.12f, Color.white);
+        if (AllowEnemyJuice)
+        {
+            TriggerEnemyJuiceSquash(1.24f, 0.78f, 0.12f);
+            SpawnEnemyPixelPuffs(transform.position, 4, Color.white, 3.6f);
+        }
     }
 
     /// <summary>
@@ -1151,6 +1184,11 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         }
 
         TriggerHitFlash(0.12f, Color.white);
+        if (AllowEnemyJuice)
+        {
+            TriggerEnemyJuiceSquash(1.24f, 0.78f, 0.12f);
+            SpawnEnemyPixelPuffs(transform.position, 4, Color.white, 3.6f);
+        }
     }
 
     public virtual void OnGrappleKicked(Vector2 kickImpulse)
@@ -1706,6 +1744,137 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             }
         }
     }
+
+    #region Enemy Juice & Game Feel
+
+    private void UpdateEnemyJuice()
+    {
+        if (!AllowEnemyJuice || spriteRenderer == null || rb == null || IsDead) return;
+
+        if (!juiceScaleCaptured)
+        {
+            juiceBaseSpriteScale = spriteRenderer.transform.localScale;
+            juiceScaleCaptured = true;
+        }
+
+        bool grounded = col == null || CheckGrounded(col.bounds);
+
+        // Landing squash + pixel dust puffs
+        if (grounded && !wasGroundedForJuice && lastAirborneVelYForJuice < -3.4f)
+        {
+            float impactIntensity = Mathf.Clamp01(Mathf.Abs(lastAirborneVelYForJuice) / 15f);
+            TriggerEnemyJuiceSquash(Mathf.Lerp(1.09f, 1.20f, impactIntensity), Mathf.Lerp(0.90f, 0.80f, impactIntensity), 0.11f);
+            SpawnEnemyPixelPuffs(GetEnemyFeetPosition(), impactIntensity > 0.55f ? 5 : 3, new Color(0.92f, 0.90f, 0.86f, 0.85f), 2.1f);
+        }
+        // Jump takeoff stretch + pixel dust puffs
+        else if (!grounded && wasGroundedForJuice && rb.linearVelocityY > 3.2f)
+        {
+            TriggerEnemyJuiceSquash(0.86f, 1.16f, 0.10f);
+            SpawnEnemyPixelPuffs(GetEnemyFeetPosition(), 3, new Color(0.90f, 0.90f, 0.90f, 0.8f), 1.8f);
+        }
+
+        if (!grounded)
+        {
+            lastAirborneVelYForJuice = rb.linearVelocityY;
+        }
+        else
+        {
+            lastAirborneVelYForJuice = 0f;
+        }
+        wasGroundedForJuice = grounded;
+
+        // Forward momentum run lean + subtle running footstep dust (only when in Normal state so wall-stick/ceiling-run stay untouched!)
+        if (currentState == State.Normal && !IsGrappleStunned)
+        {
+            float targetLean = 0f;
+            if (Mathf.Abs(rb.linearVelocityX) > 0.45f)
+            {
+                float ratio = Mathf.Clamp(rb.linearVelocityX / Mathf.Max(1f, CurrentMoveSpeed), -1.3f, 1.3f);
+                targetLean = -ratio * enemyRunLeanAngle;
+
+                if (grounded && Mathf.Abs(rb.linearVelocityX) > 1.1f)
+                {
+                    enemyWalkDustTimer -= Time.deltaTime;
+                    if (enemyWalkDustTimer <= 0f)
+                    {
+                        enemyWalkDustTimer = Random.Range(0.20f, 0.28f);
+                        float backDir = -Mathf.Sign(rb.linearVelocityX);
+                        SpawnEnemyPixelPuffs(
+                            GetEnemyFeetPosition() + new Vector3(backDir * 0.14f, 0.02f, 0f),
+                            2,
+                            new Color(0.90f, 0.88f, 0.84f, 0.72f),
+                            1.5f
+                        );
+                    }
+                }
+            }
+            float curZ = spriteRenderer.transform.localEulerAngles.z;
+            float nextZ = Mathf.LerpAngle(curZ, targetLean, Time.deltaTime * 14f);
+            spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, nextZ);
+        }
+    }
+
+    protected void TriggerEnemyJuiceSquash(float scaleXMult, float scaleYMult, float duration)
+    {
+        if (spriteRenderer == null || !juiceScaleCaptured || IsDead) return;
+        if (enemyJuiceSquashCoroutine != null) StopCoroutine(enemyJuiceSquashCoroutine);
+        enemyJuiceSquashCoroutine = StartCoroutine(EnemyJuiceSquashRoutine(scaleXMult, scaleYMult, duration));
+    }
+
+    private IEnumerator EnemyJuiceSquashRoutine(float scaleXMult, float scaleYMult, float duration)
+    {
+        float dur = Mathf.Max(0.04f, duration);
+        float elapsed = 0f;
+        while (elapsed < dur && spriteRenderer != null && !IsDead)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / dur);
+            float wave = Mathf.Sin(t * Mathf.PI);
+
+            float sx = juiceBaseSpriteScale.x * Mathf.Lerp(1f, scaleXMult, wave);
+            float sy = juiceBaseSpriteScale.y * Mathf.Lerp(1f, scaleYMult, wave);
+            spriteRenderer.transform.localScale = new Vector3(sx, sy, juiceBaseSpriteScale.z);
+            yield return null;
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.transform.localScale = juiceBaseSpriteScale;
+        }
+        enemyJuiceSquashCoroutine = null;
+    }
+
+    private Vector3 GetEnemyFeetPosition()
+    {
+        if (col != null) return new Vector3(col.bounds.center.x, col.bounds.min.y + 0.05f, 0f);
+        if (spriteRenderer != null) return new Vector3(spriteRenderer.bounds.center.x, spriteRenderer.bounds.min.y + 0.05f, 0f);
+        return transform.position + new Vector3(0f, -0.45f, 0f);
+    }
+
+    private static void SpawnEnemyPixelPuffs(Vector3 origin, int count, Color color, float maxSpeed)
+    {
+        Sprite block = GetSharedPixelBlockSprite(2);
+        for (int i = 0; i < count; i++)
+        {
+            GameObject puff = new GameObject("EnemyJuicePuff");
+            puff.transform.position = SnapToPixelGrid(origin + new Vector3(Random.Range(-0.22f, 0.22f), Random.Range(0f, 0.14f), 0f));
+            float s = Random.Range(0.20f, 0.40f);
+            puff.transform.localScale = Vector3.one * s;
+
+            SpriteRenderer sr = puff.AddComponent<SpriteRenderer>();
+            sr.sprite = block;
+            sr.color = color;
+            sr.sortingOrder = 5;
+
+            Rigidbody2D prb = puff.AddComponent<Rigidbody2D>();
+            prb.gravityScale = 0.15f;
+            prb.linearDamping = 5.5f;
+            prb.linearVelocity = new Vector2(Random.Range(-maxSpeed, maxSpeed), Random.Range(0.6f, maxSpeed * 0.85f));
+            Destroy(puff, Random.Range(0.16f, 0.28f));
+        }
+    }
+
+    #endregion
 
     #endregion
 }
