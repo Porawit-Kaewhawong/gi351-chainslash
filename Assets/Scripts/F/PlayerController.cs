@@ -227,9 +227,13 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Color scabbardGlintColor = new Color(1f, 0.97f, 0.86f, 1f);
     [SerializeField] [Range(0.4f, 2.2f)] private float scabbardGlintScale = 1.0f;
     [SerializeField] [Range(0.10f, 0.45f)] private float scabbardGlintDuration = 0.24f;
-    [Tooltip("Optional custom katana draw SFX played with the scabbard glint. If left empty, a realistic synthesized steel unsheathe 'SHING!' plays automatically.")]
+    [Tooltip("Optional custom katana draw SFX played with the scabbard glint. If left empty, uses targetSelectSFX at a balanced glint pitch.")]
     [SerializeField] private AudioClip scabbardDrawSFX;
-    [SerializeField] [Range(0f, 1.5f)] private float scabbardDrawVolume = 0.85f;
+    [SerializeField] [Range(0f, 1.5f)] private float scabbardDrawVolume = 0.58f;
+    [SerializeField] [Range(0.5f, 2.0f)] private float scabbardDrawPitch = 0.80f;
+    [Tooltip("Spawns a crisp pure-white pixel-art katana release arc & pixel burst on the player when unleashing Chain Slash.")]
+    [SerializeField] private bool enableWhitePixelSlashRelease = true;
+    [SerializeField] [Range(0.5f, 2.2f)] private float whitePixelSlashReleaseScale = 1.15f;
 
     [Header("Grappling Hook Settings")]
     [SerializeField] private float maxGrappleRange = 12f;
@@ -457,7 +461,11 @@ public class PlayerController : MonoBehaviour
     private Coroutine activeScabbardGlintCoroutine;
     private GameObject activeScabbardGlintObj;
     private static Sprite[] cachedScabbardPixelFrames;
-    private static AudioClip cachedKatanaDrawClip;
+    private float lastScabbardDrawSfxTime = -10f;
+    private static Sprite[] cachedWhiteSlashArcFrames;
+    private static Sprite cachedWhitePixelSparkSprite;
+    private float dragSparkAccumDist = 0f;
+    private Vector2 lastDragSegmentDir = Vector2.zero;
 
     // Damage visual caching
     private Color originalSpriteColor = Color.white;
@@ -2093,6 +2101,8 @@ public class PlayerController : MonoBehaviour
 
         drawnLinePoints.Clear();
         currentPreviewedGesture = HealGestureType.None;
+        dragSparkAccumDist = 0f;
+        lastDragSegmentDir = Vector2.zero;
         Vector3 startMousePos = GetMouseWorldPosition();
         drawnLinePoints.Add(startMousePos);
 
@@ -2169,6 +2179,10 @@ public class PlayerController : MonoBehaviour
                 }
                 else
                 {
+                    if (hasCombatTargets && enableWhitePixelSlashRelease && !isDead)
+                    {
+                        TriggerWhitePixelSlashReleaseVFX();
+                    }
                     insLineRendererManager.activeCoroutine = StartCoroutine(AnimateKillLine(insLineRendererCom));
                 }
             }
@@ -2273,10 +2287,36 @@ public class PlayerController : MonoBehaviour
 
         if (drawnLinePoints.Count == 0 || (drawnLinePoints[drawnLinePoints.Count - 1] - currentMousePos).sqrMagnitude >= minDistSqr)
         {
+            Vector3 prevPoint = drawnLinePoints.Count > 0 ? drawnLinePoints[drawnLinePoints.Count - 1] : currentMousePos;
             drawnLinePoints.Add(currentMousePos);
             int newCount = drawnLinePoints.Count;
             insLineRendererCom.positionCount = newCount;
             insLineRendererCom.SetPosition(newCount - 1, currentMousePos);
+
+            if (newCount >= 2)
+            {
+                Vector2 segDelta = (Vector2)(currentMousePos - prevPoint);
+                float segDist = segDelta.magnitude;
+                if (segDist > 0.001f)
+                {
+                    Vector2 segDir = segDelta / segDist;
+                    dragSparkAccumDist += segDist;
+
+                    // Crisp corner-whip pixel burst when sharply changing drag direction
+                    if (lastDragSegmentDir.sqrMagnitude > 0.5f && Vector2.Dot(lastDragSegmentDir, segDir) < 0.35f && segDist > 0.08f)
+                    {
+                        SpawnSlashDragPixelSparks(currentMousePos, segDir, 3, true);
+                        dragSparkAccumDist = 0f;
+                    }
+                    else if (dragSparkAccumDist >= 0.34f)
+                    {
+                        dragSparkAccumDist = 0f;
+                        SpawnSlashDragPixelSparks(currentMousePos, segDir, segDist > 0.35f ? 2 : 1, false);
+                    }
+
+                    lastDragSegmentDir = segDir;
+                }
+            }
 
             if (enableDrawToHeal && newCount >= 8)
             {
@@ -2394,6 +2434,8 @@ public class PlayerController : MonoBehaviour
             if (modeMeterImage != null) modeMeterImage.fillAmount = currentMeter / maxMeter;
 
             int comboIndex = insLineRendererManager.targets.Count - 1;
+            insLineRendererManager.TriggerTargetLockPulse();
+            SpawnSlashDragPixelSparks(enemyPos.position, lastDragSegmentDir.sqrMagnitude > 0.1f ? lastDragSegmentDir : Vector2.right, 5, true);
             PlayJuicyTargetSelectSFX(comboIndex);
             StartCoroutine(PunchTargetScaleRoutine(enemyPos));
             SpawnTargetReticleAndComboPopup(enemyPos, comboIndex + 1);
@@ -5424,96 +5466,17 @@ public class PlayerController : MonoBehaviour
     private void PlayScabbardDrawSFX()
     {
         if (scabbardDrawVolume <= 0.001f) return;
+        if (Time.unscaledTime - lastScabbardDrawSfxTime < 0.18f) return;
 
-        AudioClip clip = scabbardDrawSFX != null ? scabbardDrawSFX : GetOrCreateKatanaDrawClip();
+        AudioClip clip = scabbardDrawSFX != null ? scabbardDrawSFX : targetSelectSFX;
         if (clip == null) return;
 
         AudioSource src = shimmerAudioSource != null ? shimmerAudioSource : audioSource;
         if (src == null) return;
 
-        src.pitch = Random.Range(0.97f, 1.04f);
+        lastScabbardDrawSfxTime = Time.unscaledTime;
+        src.pitch = Mathf.Clamp(scabbardDrawPitch + Random.Range(-0.03f, 0.03f), 0.5f, 2.2f);
         src.PlayOneShot(clip, scabbardDrawVolume);
-    }
-
-    private static AudioClip GetOrCreateKatanaDrawClip()
-    {
-        if (cachedKatanaDrawClip != null) return cachedKatanaDrawClip;
-
-        const int sampleRate = 44100;
-        const float duration = 0.38f;
-        int sampleCount = Mathf.RoundToInt(sampleRate * duration);
-        float[] samples = new float[sampleCount];
-
-        System.Random rng = new System.Random(13579);
-        float scrapeFilter = 0f;
-        float prevNoise = 0f;
-        float phaseScrape = 0f;
-
-        // Realistic katana steel inharmonic partials (Hz)
-        float[] ringFreqs = { 2420f, 3890f, 5340f, 7180f, 9420f };
-        float[] ringAmps  = { 0.34f, 0.26f, 0.19f, 0.12f, 0.07f };
-        float[] ringDecay = { 10.5f, 13.0f, 16.5f, 21.0f, 27.0f };
-
-        for (int i = 0; i < sampleCount; i++)
-        {
-            float t = i / (float)sampleRate;
-            float white = (float)(rng.NextDouble() * 2.0 - 1.0);
-            float highPassed = white - prevNoise;
-            prevNoise = white;
-
-            float sample = 0f;
-
-            // 1. Tsuba / Habaki thumb-unlock crisp click (0.000s - 0.030s)
-            if (t < 0.030f)
-            {
-                float clickEnv = Mathf.Exp(-t * 165f);
-                float woodMetalClick = (Mathf.Sin(2f * Mathf.PI * 920f * t) * 0.55f
-                                      + Mathf.Sin(2f * Mathf.PI * 2650f * t) * 0.45f
-                                      + highPassed * 0.35f) * clickEnv * 0.42f;
-                sample += woodMetalClick;
-            }
-
-            // 2. Steel blade sliding rapidly out of wooden saya (0.012s - 0.165s)
-            if (t >= 0.012f && t < 0.165f)
-            {
-                float st = (t - 0.012f) / 0.153f;
-                float scrapeEnv = Mathf.Sin(st * Mathf.PI) * Mathf.Pow(1f - st, 0.45f);
-                // Smooth rising metallic friction resonance
-                scrapeFilter = Mathf.Lerp(scrapeFilter, highPassed, 0.38f);
-                float sweepFreq = Mathf.Lerp(1750f, 6100f, st * st);
-                phaseScrape += (2f * Mathf.PI * sweepFreq) / sampleRate;
-                float metallicScrape = (scrapeFilter * 0.55f + Mathf.Sin(phaseScrape) * (0.28f + 0.22f * highPassed)) * scrapeEnv * 0.34f;
-                sample += metallicScrape;
-            }
-
-            // 3. Razor-sharp high-carbon steel ring ("SHINGGG!") (0.032s - 0.380s)
-            if (t >= 0.032f)
-            {
-                float rt = t - 0.032f;
-                float attack = Mathf.Clamp01(rt / 0.014f);
-                float shimmer = 0.88f + 0.12f * Mathf.Sin(2f * Mathf.PI * 16f * rt);
-                float ringSum = 0f;
-
-                for (int p = 0; p < ringFreqs.Length; p++)
-                {
-                    float freq = ringFreqs[p] * (1f + 0.008f * Mathf.Exp(-rt * 35f));
-                    ringSum += Mathf.Sin(2f * Mathf.PI * freq * rt) * ringAmps[p] * Mathf.Exp(-rt * ringDecay[p]);
-                }
-
-                // Subtle airy blade hiss accompanying the ring
-                float airHiss = highPassed * Mathf.Exp(-rt * 22f) * 0.09f;
-                sample += (ringSum * shimmer + airHiss) * attack * 0.52f;
-            }
-
-            // Soft limiter & tail fade-out to avoid any pop
-            float tailFade = t > (duration - 0.025f) ? Mathf.Clamp01((duration - t) / 0.025f) : 1f;
-            samples[i] = Mathf.Clamp((float)System.Math.Tanh(sample * 1.45f), -0.95f, 0.95f) * tailFade;
-        }
-
-        AudioClip clip = AudioClip.Create("KatanaScabbardDrawSFX", sampleCount, 1, sampleRate, false);
-        clip.SetData(samples, 0);
-        cachedKatanaDrawClip = clip;
-        return cachedKatanaDrawClip;
     }
 
     private IEnumerator ScabbardReleaseGlintRoutine()
@@ -5775,6 +5738,354 @@ public class PlayerController : MonoBehaviour
         }
 
         return cachedScabbardPixelFrames;
+    }
+
+    private void TriggerWhitePixelSlashReleaseVFX()
+    {
+        if (spriteRenderer == null) return;
+        StartCoroutine(WhitePixelSlashArcRoutine());
+        SpawnWhitePixelSlashSparks();
+    }
+
+    private IEnumerator WhitePixelSlashArcRoutine()
+    {
+        Sprite[] frames = GetOrCreateWhiteSlashArcFrames();
+        if (frames == null || frames.Length == 0) yield break;
+
+        GameObject arcObj = new GameObject("WhitePixelSlashReleaseArc");
+        SpriteRenderer arcSr = arcObj.AddComponent<SpriteRenderer>();
+        arcSr.sortingLayerID = spriteRenderer != null ? spriteRenderer.sortingLayerID : 0;
+        arcSr.sortingOrder = (spriteRenderer != null ? spriteRenderer.sortingOrder : 5) + 5;
+        arcSr.color = Color.white;
+
+        bool flipLeft = spriteRenderer != null && spriteRenderer.flipX;
+        float facingSign = flipLeft ? -1f : 1f;
+        arcSr.flipX = flipLeft;
+
+        float scale = Mathf.Max(0.4f, whitePixelSlashReleaseScale);
+        arcObj.transform.localScale = new Vector3(scale, scale, 1f);
+        arcObj.transform.localRotation = Quaternion.identity;
+
+        const float frameDuration = 0.032f; // Snappy ~31fps crisp pixel-art katana sweep
+        for (int i = 0; i < frames.Length && arcObj != null; i++)
+        {
+            arcSr.sprite = frames[i];
+            float stepElapsed = 0f;
+            while (stepElapsed < frameDuration && arcObj != null)
+            {
+                if (spriteRenderer != null)
+                {
+                    arcObj.transform.position = spriteRenderer.transform.position + new Vector3(facingSign * 0.22f, 0.04f, 0f);
+                }
+                stepElapsed += Time.unscaledDeltaTime;
+                yield return null;
+            }
+        }
+
+        if (arcObj != null)
+        {
+            Destroy(arcObj);
+        }
+    }
+
+    private void SpawnSlashDragPixelSparks(Vector3 worldPos, Vector2 dragDir, int count, bool isBurst)
+    {
+        Sprite pixelSprite = GetOrCreateWhitePixelSparkSprite();
+        int sortLayer = spriteRenderer != null ? spriteRenderer.sortingLayerID : 0;
+        int sortOrder = 16;
+
+        Vector2 baseDir = dragDir.sqrMagnitude > 0.001f ? -dragDir.normalized : Vector2.left;
+        Vector2 perp = new Vector2(-baseDir.y, baseDir.x);
+
+        for (int i = 0; i < count; i++)
+        {
+            GameObject spark = new GameObject("SlashDragPixelSpark");
+            Vector3 offset = (Vector3)(perp * Random.Range(-0.10f, 0.10f)) + new Vector3(Random.Range(-0.04f, 0.04f), Random.Range(-0.04f, 0.04f), 0f);
+            spark.transform.position = EnemyBase.SnapToPixelGrid(worldPos + offset, 16f);
+
+            SpriteRenderer sr = spark.AddComponent<SpriteRenderer>();
+            sr.sprite = pixelSprite;
+            sr.sortingLayerID = sortLayer;
+            sr.sortingOrder = sortOrder;
+            sr.color = (i % 2 == 0) ? Color.white : new Color(1f, 0.96f, 0.82f, 1f);
+
+            float size = isBurst ? Random.Range(0.75f, 1.35f) : Random.Range(0.55f, 1.00f);
+            Vector3 startScale = new Vector3(size, size, 1f);
+            spark.transform.localScale = startScale;
+
+            Vector2 vel;
+            if (isBurst)
+            {
+                float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
+                vel = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * Random.Range(2.4f, 5.2f);
+            }
+            else
+            {
+                vel = (baseDir * Random.Range(1.2f, 2.8f)) + (perp * Random.Range(-1.6f, 1.6f));
+            }
+
+            float lifetime = isBurst ? Random.Range(0.14f, 0.22f) : Random.Range(0.12f, 0.19f);
+            StartCoroutine(WhitePixelSparkRoutine(spark, sr, vel, startScale, lifetime));
+        }
+    }
+
+    private void SpawnWhitePixelSlashSparks()
+    {
+        if (spriteRenderer == null) return;
+
+        Sprite pixelSprite = GetOrCreateWhitePixelSparkSprite();
+        int sortLayer = spriteRenderer.sortingLayerID;
+        int sortOrder = spriteRenderer.sortingOrder + 5;
+        float facingSign = spriteRenderer.flipX ? -1f : 1f;
+        Vector3 origin = spriteRenderer.transform.position + new Vector3(facingSign * 0.14f, -0.02f, 0f);
+
+        const int sparkCount = 7;
+        for (int i = 0; i < sparkCount; i++)
+        {
+            GameObject spark = new GameObject("WhitePixelSlashSpark");
+            spark.transform.position = origin + new Vector3(Random.Range(-0.12f, 0.12f), Random.Range(-0.16f, 0.16f), 0f);
+
+            SpriteRenderer sr = spark.AddComponent<SpriteRenderer>();
+            sr.sprite = pixelSprite;
+            sr.sortingLayerID = sortLayer;
+            sr.sortingOrder = sortOrder;
+            sr.color = i % 3 == 0 ? new Color(0.92f, 0.95f, 1f, 1f) : Color.white;
+
+            // Mix crisp horizontal pixel wind-streaks (3x1) and tiny 1x1 / 2x2 pixel chips
+            bool isStreak = i < 3;
+            float sx = isStreak ? Random.Range(2.4f, 4.2f) : Random.Range(0.9f, 1.6f);
+            float sy = isStreak ? 0.65f : sx;
+            Vector3 startScale = new Vector3(sx, sy, 1f) * Mathf.Max(0.6f, whitePixelSlashReleaseScale * 0.85f);
+            spark.transform.localScale = startScale;
+
+            float angleDeg = isStreak
+                ? Random.Range(-18f, 18f)
+                : Random.Range(-55f, 55f);
+            float rad = angleDeg * Mathf.Deg2Rad;
+            Vector2 dir = new Vector2(Mathf.Cos(rad) * facingSign, Mathf.Sin(rad));
+            float speed = isStreak ? Random.Range(7.5f, 12.0f) : Random.Range(3.5f, 7.2f);
+            float lifetime = isStreak ? Random.Range(0.11f, 0.17f) : Random.Range(0.14f, 0.24f);
+
+            StartCoroutine(WhitePixelSparkRoutine(spark, sr, dir * speed, startScale, lifetime));
+        }
+    }
+
+    private IEnumerator WhitePixelSparkRoutine(GameObject spark, SpriteRenderer sr, Vector2 velocity, Vector3 startScale, float lifetime)
+    {
+        float elapsed = 0f;
+        while (elapsed < lifetime && spark != null && sr != null)
+        {
+            float dt = Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / Mathf.Max(0.01f, lifetime));
+
+            spark.transform.position += (Vector3)(velocity * dt);
+            velocity *= Mathf.Clamp01(1f - 9.5f * dt);
+
+            // Step-down pixel shrink for authentic crisp pixel disappearance
+            float scaleMult = t < 0.45f ? 1f : (t < 0.78f ? 0.65f : 0.35f);
+            spark.transform.localScale = startScale * scaleMult;
+            sr.color = new Color(sr.color.r, sr.color.g, sr.color.b, t < 0.65f ? 1f : Mathf.Lerp(1f, 0f, (t - 0.65f) / 0.35f));
+
+            elapsed += dt;
+            yield return null;
+        }
+
+        if (spark != null)
+        {
+            Destroy(spark);
+        }
+    }
+
+    private static Sprite GetOrCreateWhitePixelSparkSprite()
+    {
+        if (cachedWhitePixelSparkSprite != null) return cachedWhitePixelSparkSprite;
+
+        Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Point;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.SetPixels(new[] { Color.white, Color.white, Color.white, Color.white });
+        tex.Apply();
+        cachedWhitePixelSparkSprite = Sprite.Create(tex, new Rect(0, 0, 2, 2), new Vector2(0.5f, 0.5f), 20f);
+        return cachedWhitePixelSparkSprite;
+    }
+
+    private static Sprite[] GetOrCreateWhiteSlashArcFrames()
+    {
+        if (cachedWhiteSlashArcFrames != null && cachedWhiteSlashArcFrames.Length == 4 && cachedWhiteSlashArcFrames[0] != null)
+        {
+            return cachedWhiteSlashArcFrames;
+        }
+
+        // 28x28 hand-crafted pure-white pixel-art Iaijutsu katana release crescent frames at PPU=20
+        // Legend: '.' = clear, 'W' = pure white, 'S' = crisp light silver-white
+        string[][] patterns =
+        {
+            // Frame 0: Explosive white steel draw flash (tight bright arc starting)
+            new[]
+            {
+                "............................",
+                "............................",
+                "............................",
+                ".............SSW............",
+                "...............SWW..........",
+                ".................SWW........",
+                "..................SWW.......",
+                "...................SWW......",
+                "....................SWW.....",
+                ".....................WW.....",
+                ".....................WW.....",
+                ".....................WW.....",
+                "....................SWW.....",
+                "...................SWW......",
+                "..................SWW.......",
+                ".................SWW........",
+                "...............SWW..........",
+                ".............SSW............",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................"
+            },
+            // Frame 1: Full bold wide pure-white katana crescent slash!
+            new[]
+            {
+                "............................",
+                "..........SSS...............",
+                "............SSWW............",
+                "..............SSWWW.........",
+                "................SSWWW.......",
+                ".................SSWWWW.....",
+                "..................SSWWWW....",
+                "...................SSWWWW...",
+                "....................SSWWW...",
+                "....................SSWWWW..",
+                ".....................SSWWW..",
+                ".....................SSWWW..",
+                ".....................SSWWW..",
+                ".....................SSWWW..",
+                "....................SSWWWW..",
+                "....................SSWWW...",
+                "...................SSWWWW...",
+                "..................SSWWWW....",
+                ".................SSWWWW.....",
+                "................SSWWW.......",
+                "..............SSWWW.........",
+                "............SSWW............",
+                "..........SSS...............",
+                ".......SS...................",
+                "............................",
+                "............................",
+                "............................",
+                "............................"
+            },
+            // Frame 2: Thinning razor-sharp white pixel after-arc + trailing white chips
+            new[]
+            {
+                "............................",
+                "............S...............",
+                "..............SW............",
+                "................SW..........",
+                ".................SWW........",
+                "...................WW.......",
+                "....................WW......",
+                ".....................WW.....",
+                "................S.....WW....",
+                "......................WW....",
+                ".......................WW...",
+                ".......................WW...",
+                ".......................WW...",
+                ".......................WW...",
+                "......................WW....",
+                ".................S....WW....",
+                ".....................WW.....",
+                "....................WW......",
+                "...................WW.......",
+                ".................SWW........",
+                "................SW..........",
+                "..............SW............",
+                "............S...............",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................"
+            },
+            // Frame 3: Crisp dissolving white pixel fragments
+            new[]
+            {
+                "............................",
+                "............................",
+                "...............S............",
+                "............................",
+                "..................S.........",
+                "............................",
+                ".....................S......",
+                "............................",
+                "......................W.....",
+                "............................",
+                ".......................S....",
+                ".......................W....",
+                ".......................S....",
+                "............................",
+                "......................W.....",
+                "............................",
+                ".....................S......",
+                "............................",
+                "..................S.........",
+                "............................",
+                "...............S............",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................",
+                "............................"
+            }
+        };
+
+        Color colW = Color.white;
+        Color colS = new Color(0.86f, 0.90f, 0.96f, 0.90f);
+
+        const int size = 28;
+        cachedWhiteSlashArcFrames = new Sprite[patterns.Length];
+
+        for (int f = 0; f < patterns.Length; f++)
+        {
+            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Point;
+            tex.wrapMode = TextureWrapMode.Clamp;
+
+            Color[] pixels = new Color[size * size];
+            string[] rows = patterns[f];
+
+            for (int y = 0; y < size; y++)
+            {
+                string row = rows[size - 1 - y];
+                for (int x = 0; x < size; x++)
+                {
+                    char c = x < row.Length ? row[x] : '.';
+                    pixels[y * size + x] = c switch
+                    {
+                        'W' => colW,
+                        'S' => colS,
+                        _ => Color.clear
+                    };
+                }
+            }
+
+            tex.SetPixels(pixels);
+            tex.Apply();
+            cachedWhiteSlashArcFrames[f] = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 20f);
+        }
+
+        return cachedWhiteSlashArcFrames;
     }
 
     private IEnumerator LandingSquashRoutine(float intensity)

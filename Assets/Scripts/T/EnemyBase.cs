@@ -153,9 +153,11 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
 
     // Enemy Juice runtime state
     private Vector3 juiceBaseSpriteScale = Vector3.one;
+    private Vector3 juiceBaseSpriteLocalPos = Vector3.zero;
     private bool juiceScaleCaptured;
     private bool wasGroundedForJuice = true;
     private float lastAirborneVelYForJuice;
+    private float lastJumpJuiceTriggerTime = -10f;
     private float enemyWalkDustTimer;
     private Coroutine enemyJuiceSquashCoroutine;
 
@@ -313,6 +315,7 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         if (spriteRenderer != null)
         {
             juiceBaseSpriteScale = spriteRenderer.transform.localScale;
+            juiceBaseSpriteLocalPos = spriteRenderer.transform.localPosition;
             juiceScaleCaptured = true;
         }
 
@@ -989,9 +992,15 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
     protected virtual void Jump(float multiplier)
     {
         if (rb == null) return;
+        bool isMidAirJump = col != null && !CheckGrounded(col.bounds);
         rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce * multiplier);
         jumpsLeft--;
         lastJumpTime = Time.time;
+
+        if (AllowEnemyJuice && !IsDead)
+        {
+            OnEnemyJumpJuiceTriggered(isMidAirJump);
+        }
     }
 
     #endregion
@@ -1754,45 +1763,76 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
         if (!juiceScaleCaptured)
         {
             juiceBaseSpriteScale = spriteRenderer.transform.localScale;
+            juiceBaseSpriteLocalPos = spriteRenderer.transform.localPosition;
             juiceScaleCaptured = true;
         }
 
         bool grounded = col == null || CheckGrounded(col.bounds);
 
-        // Landing squash + pixel dust puffs
-        if (grounded && !wasGroundedForJuice && lastAirborneVelYForJuice < -3.4f)
+        // Chunky height-scaled landing squash + directional floor dust burst
+        if (grounded && !wasGroundedForJuice && lastAirborneVelYForJuice < -2.6f)
         {
-            float impactIntensity = Mathf.Clamp01(Mathf.Abs(lastAirborneVelYForJuice) / 15f);
-            TriggerEnemyJuiceSquash(Mathf.Lerp(1.09f, 1.20f, impactIntensity), Mathf.Lerp(0.90f, 0.80f, impactIntensity), 0.11f);
-            SpawnEnemyPixelPuffs(GetEnemyFeetPosition(), impactIntensity > 0.55f ? 5 : 3, new Color(0.92f, 0.90f, 0.86f, 0.85f), 2.1f);
+            float impactIntensity = Mathf.Clamp01(Mathf.Abs(lastAirborneVelYForJuice) / 13f);
+            float landScaleX = Mathf.Lerp(1.16f, 1.32f, impactIntensity);
+            float landScaleY = Mathf.Lerp(0.84f, 0.70f, impactIntensity);
+            TriggerEnemyJuiceSquash(landScaleX, landScaleY, Mathf.Lerp(0.11f, 0.15f, impactIntensity));
+            SpawnEnemyJumpGroundKickVFX(GetEnemyFeetPosition(), impactIntensity > 0.5f ? 6 : 4, true);
         }
-        // Jump takeoff stretch + pixel dust puffs
-        else if (!grounded && wasGroundedForJuice && rb.linearVelocityY > 3.2f)
+        // Fallback takeoff stretch if launched upward externally (e.g. jump pad / non-Jump() launch)
+        else if (!grounded && wasGroundedForJuice && rb.linearVelocityY > 3.2f && Time.time - lastJumpJuiceTriggerTime > 0.12f)
         {
-            TriggerEnemyJuiceSquash(0.86f, 1.16f, 0.10f);
-            SpawnEnemyPixelPuffs(GetEnemyFeetPosition(), 3, new Color(0.90f, 0.90f, 0.90f, 0.8f), 1.8f);
+            OnEnemyJumpJuiceTriggered(false);
         }
 
         if (!grounded)
         {
             lastAirborneVelYForJuice = rb.linearVelocityY;
+
+            // Subtle dynamic airborne velocity stretch when no squash coroutine is overriding scale
+            if (enemyJuiceSquashCoroutine == null && currentState == State.Normal && !IsGrappleStunned)
+            {
+                float vy = rb.linearVelocityY;
+                float stretchT = Mathf.Clamp(Mathf.Abs(vy) / 14f, 0f, 1f);
+                // Slightly taller while shooting upward or diving fast, compact/rounded near apex
+                float targetYMult = Mathf.Abs(vy) < 1.6f ? 0.95f : Mathf.Lerp(1f, 1.12f, stretchT);
+                float targetXMult = Mathf.Abs(vy) < 1.6f ? 1.05f : Mathf.Lerp(1f, 0.90f, stretchT);
+
+                Vector3 targetScale = new Vector3(
+                    juiceBaseSpriteScale.x * targetXMult,
+                    juiceBaseSpriteScale.y * targetYMult,
+                    juiceBaseSpriteScale.z
+                );
+                spriteRenderer.transform.localScale = Vector3.Lerp(spriteRenderer.transform.localScale, targetScale, Time.deltaTime * 14f);
+            }
         }
         else
         {
             lastAirborneVelYForJuice = 0f;
+            if (enemyJuiceSquashCoroutine == null)
+            {
+                spriteRenderer.transform.localScale = Vector3.Lerp(spriteRenderer.transform.localScale, juiceBaseSpriteScale, Time.deltaTime * 18f);
+                spriteRenderer.transform.localPosition = Vector3.Lerp(spriteRenderer.transform.localPosition, juiceBaseSpriteLocalPos, Time.deltaTime * 18f);
+            }
         }
         wasGroundedForJuice = grounded;
 
-        // Forward momentum run lean + subtle running footstep dust (only when in Normal state so wall-stick/ceiling-run stay untouched!)
+        // Forward momentum run lean + airborne ninja arc tilt + subtle running footstep dust
         if (currentState == State.Normal && !IsGrappleStunned)
         {
             float targetLean = 0f;
-            if (Mathf.Abs(rb.linearVelocityX) > 0.45f)
+            if (!grounded)
+            {
+                // Agile ninja jump tilt: leans into horizontal travel & pitches slightly up on rise / down on fall
+                float vxRatio = Mathf.Clamp(rb.linearVelocityX / Mathf.Max(1f, CurrentMoveSpeed), -1.3f, 1.3f);
+                float vyFactor = Mathf.Clamp(rb.linearVelocityY / Mathf.Max(1f, jumpForce), -1f, 1f);
+                targetLean = -vxRatio * (enemyRunLeanAngle * 1.35f) + (vxRatio >= 0f ? 1f : -1f) * vyFactor * 4.5f;
+            }
+            else if (Mathf.Abs(rb.linearVelocityX) > 0.45f)
             {
                 float ratio = Mathf.Clamp(rb.linearVelocityX / Mathf.Max(1f, CurrentMoveSpeed), -1.3f, 1.3f);
                 targetLean = -ratio * enemyRunLeanAngle;
 
-                if (grounded && Mathf.Abs(rb.linearVelocityX) > 1.1f)
+                if (Mathf.Abs(rb.linearVelocityX) > 1.1f)
                 {
                     enemyWalkDustTimer -= Time.deltaTime;
                     if (enemyWalkDustTimer <= 0f)
@@ -1809,8 +1849,38 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
                 }
             }
             float curZ = spriteRenderer.transform.localEulerAngles.z;
-            float nextZ = Mathf.LerpAngle(curZ, targetLean, Time.deltaTime * 14f);
+            float nextZ = Mathf.LerpAngle(curZ, targetLean, Time.deltaTime * 15f);
             spriteRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, nextZ);
+        }
+    }
+
+    private void OnEnemyJumpJuiceTriggered(bool isMidAirDoubleJump)
+    {
+        if (spriteRenderer == null || IsDead) return;
+        lastJumpJuiceTriggerTime = Time.time;
+
+        if (!juiceScaleCaptured)
+        {
+            juiceBaseSpriteScale = spriteRenderer.transform.localScale;
+            juiceBaseSpriteLocalPos = spriteRenderer.transform.localPosition;
+            juiceScaleCaptured = true;
+        }
+
+        Vector3 feetPos = GetEnemyFeetPosition();
+
+        if (isMidAirDoubleJump)
+        {
+            // Crisp mid-air ninja double-jump spring stretch + pixel air-ring + ninja afterimage
+            TriggerEnemyJuiceSquash(0.76f, 1.28f, 0.14f);
+            SpawnEnemyAirRingVFX(feetPos);
+            SpawnEnemyJumpGhostTrail(new Color(0.92f, 0.96f, 1f, 0.48f), 0.16f);
+        }
+        else
+        {
+            // Punchy ground takeoff stretch + outward dust kick + subtle upward afterimage
+            TriggerEnemyJuiceSquash(0.78f, 1.26f, 0.13f);
+            SpawnEnemyJumpGroundKickVFX(feetPos, 5, false);
+            SpawnEnemyJumpGhostTrail(new Color(1f, 1f, 1f, 0.36f), 0.13f);
         }
     }
 
@@ -1834,14 +1904,155 @@ public abstract class EnemyBase : MonoBehaviour, IPointerEnterHandler, ISlashabl
             float sx = juiceBaseSpriteScale.x * Mathf.Lerp(1f, scaleXMult, wave);
             float sy = juiceBaseSpriteScale.y * Mathf.Lerp(1f, scaleYMult, wave);
             spriteRenderer.transform.localScale = new Vector3(sx, sy, juiceBaseSpriteScale.z);
+
+            // Anchor feet to the ground during landing squash so the enemy doesn't appear to float
+            if (scaleYMult < 1f && spriteRenderer.sprite != null)
+            {
+                float deltaY = sy - juiceBaseSpriteScale.y;
+                float footOffsetY = -spriteRenderer.sprite.bounds.min.y * deltaY;
+                spriteRenderer.transform.localPosition = new Vector3(
+                    juiceBaseSpriteLocalPos.x,
+                    juiceBaseSpriteLocalPos.y + footOffsetY,
+                    juiceBaseSpriteLocalPos.z
+                );
+            }
             yield return null;
         }
 
         if (spriteRenderer != null)
         {
             spriteRenderer.transform.localScale = juiceBaseSpriteScale;
+            spriteRenderer.transform.localPosition = juiceBaseSpriteLocalPos;
         }
         enemyJuiceSquashCoroutine = null;
+    }
+
+    private void SpawnEnemyJumpGhostTrail(Color ghostColor, float lifetime)
+    {
+        if (spriteRenderer == null || spriteRenderer.sprite == null) return;
+
+        GameObject ghost = new GameObject("EnemyJumpAfterimage");
+        ghost.transform.position = spriteRenderer.transform.position;
+        ghost.transform.rotation = spriteRenderer.transform.rotation;
+        ghost.transform.localScale = spriteRenderer.transform.lossyScale;
+
+        SpriteRenderer sr = ghost.AddComponent<SpriteRenderer>();
+        sr.sprite = spriteRenderer.sprite;
+        sr.flipX = spriteRenderer.flipX;
+        sr.flipY = spriteRenderer.flipY;
+        sr.sortingLayerID = spriteRenderer.sortingLayerID;
+        sr.sortingOrder = spriteRenderer.sortingOrder - 1;
+        sr.color = ghostColor;
+
+        StartCoroutine(EnemyJumpGhostRoutine(ghost, sr, ghostColor, lifetime));
+    }
+
+    private static IEnumerator EnemyJumpGhostRoutine(GameObject ghost, SpriteRenderer sr, Color startColor, float lifetime)
+    {
+        float elapsed = 0f;
+        while (elapsed < lifetime && ghost != null && sr != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / Mathf.Max(0.01f, lifetime));
+            sr.color = new Color(startColor.r, startColor.g, startColor.b, startColor.a * (1f - t));
+            yield return null;
+        }
+        if (ghost != null) Destroy(ghost);
+    }
+
+    private static void SpawnEnemyJumpGroundKickVFX(Vector3 origin, int count, bool isLanding)
+    {
+        Sprite block = GetSharedPixelBlockSprite(2);
+        Color dustColor = isLanding
+            ? new Color(0.92f, 0.90f, 0.86f, 0.88f)
+            : new Color(0.95f, 0.95f, 0.95f, 0.85f);
+
+        for (int i = 0; i < count; i++)
+        {
+            float side = (i % 2 == 0) ? -1f : 1f;
+            GameObject puff = new GameObject("EnemyJumpDust");
+            puff.transform.position = SnapToPixelGrid(origin + new Vector3(side * Random.Range(0.06f, 0.24f), Random.Range(0f, 0.08f), 0f));
+
+            float size = Random.Range(0.22f, 0.42f);
+            puff.transform.localScale = isLanding
+                ? new Vector3(size * 1.35f, size * 0.85f, 1f)
+                : new Vector3(size, size, 1f);
+
+            SpriteRenderer sr = puff.AddComponent<SpriteRenderer>();
+            sr.sprite = block;
+            sr.color = dustColor;
+            sr.sortingOrder = 5;
+
+            Rigidbody2D prb = puff.AddComponent<Rigidbody2D>();
+            prb.gravityScale = isLanding ? 0.12f : -0.05f;
+            prb.linearDamping = 6.0f;
+            float vx = side * Random.Range(isLanding ? 1.8f : 1.2f, isLanding ? 3.8f : 2.8f);
+            float vy = isLanding ? Random.Range(0.45f, 1.35f) : Random.Range(0.9f, 2.2f);
+            prb.linearVelocity = new Vector2(vx, vy);
+            Destroy(puff, Random.Range(0.16f, 0.28f));
+        }
+
+        // Crisp vertical pixel speed-lines on takeoff
+        if (!isLanding)
+        {
+            for (int k = 0; k < 2; k++)
+            {
+                float side = k == 0 ? -0.18f : 0.18f;
+                GameObject streak = new GameObject("EnemyJumpStreak");
+                streak.transform.position = SnapToPixelGrid(origin + new Vector3(side, 0.12f, 0f));
+                streak.transform.localScale = new Vector3(0.12f, 0.55f, 1f);
+
+                SpriteRenderer sr = streak.AddComponent<SpriteRenderer>();
+                sr.sprite = block;
+                sr.color = new Color(1f, 1f, 1f, 0.72f);
+                sr.sortingOrder = 5;
+
+                Rigidbody2D srb = streak.AddComponent<Rigidbody2D>();
+                srb.gravityScale = 0f;
+                srb.linearDamping = 7f;
+                srb.linearVelocity = new Vector2(0f, Random.Range(1.6f, 2.6f));
+                Destroy(streak, 0.13f);
+            }
+        }
+    }
+
+    private static void SpawnEnemyAirRingVFX(Vector3 origin)
+    {
+        Sprite block = GetSharedPixelBlockSprite(2);
+        // Crisp horizontal pixel air-kick ring + outward air puffs
+        GameObject ring = new GameObject("EnemyDoubleJumpAirRing");
+        ring.transform.position = SnapToPixelGrid(origin + new Vector3(0f, -0.04f, 0f));
+        ring.transform.localScale = new Vector3(0.95f, 0.16f, 1f);
+
+        SpriteRenderer ringSr = ring.AddComponent<SpriteRenderer>();
+        ringSr.sprite = block;
+        ringSr.color = new Color(1f, 1f, 1f, 0.85f);
+        ringSr.sortingOrder = 5;
+
+        Rigidbody2D rrb = ring.AddComponent<Rigidbody2D>();
+        rrb.gravityScale = 0f;
+        rrb.linearDamping = 8f;
+        rrb.linearVelocity = new Vector2(0f, -0.9f);
+        Destroy(ring, 0.12f);
+
+        for (int i = 0; i < 4; i++)
+        {
+            float side = (i % 2 == 0) ? -1f : 1f;
+            GameObject puff = new GameObject("EnemyAirKickPuff");
+            puff.transform.position = SnapToPixelGrid(origin + new Vector3(side * Random.Range(0.10f, 0.28f), 0f, 0f));
+            puff.transform.localScale = Vector3.one * Random.Range(0.18f, 0.32f);
+
+            SpriteRenderer sr = puff.AddComponent<SpriteRenderer>();
+            sr.sprite = block;
+            sr.color = new Color(0.95f, 0.98f, 1f, 0.85f);
+            sr.sortingOrder = 5;
+
+            Rigidbody2D prb = puff.AddComponent<Rigidbody2D>();
+            prb.gravityScale = 0f;
+            prb.linearDamping = 6.5f;
+            prb.linearVelocity = new Vector2(side * Random.Range(2.2f, 4.0f), Random.Range(-0.6f, 0.35f));
+            Destroy(puff, 0.16f);
+        }
     }
 
     private Vector3 GetEnemyFeetPosition()

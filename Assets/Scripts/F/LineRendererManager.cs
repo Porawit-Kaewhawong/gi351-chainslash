@@ -21,8 +21,11 @@ public class LineRendererManager : MonoBehaviour
 
     private PlayerController cachedPlayer;
     private readonly List<SpriteRenderer> pixelBlockPool = new List<SpriteRenderer>(256);
+    private SpriteRenderer tipSparkRenderer;
     private Vector3[] pointBuffer = new Vector3[128];
     private float baseWidthMultiplier = -1f;
+    private float targetLockPulseTimer = 0f;
+    private const float TargetLockPulseDuration = 0.11f;
     private const int MaxPixelBlocks = 420;
     private const float DefaultPixelStep = 1f / 16f;
 
@@ -132,6 +135,11 @@ public class LineRendererManager : MonoBehaviour
 
     #region Pixel Slash Line Rasterizer
 
+    public void TriggerTargetLockPulse()
+    {
+        targetLockPulseTimer = TargetLockPulseDuration;
+    }
+
     public void RenderPixelSlashLine()
     {
         if (LineRendererCom == null) return;
@@ -140,10 +148,19 @@ public class LineRendererManager : MonoBehaviour
             LineRendererCom.forceRenderingOff = true;
         }
 
+        if (targetLockPulseTimer > 0f)
+        {
+            targetLockPulseTimer = Mathf.Max(0f, targetLockPulseTimer - Time.unscaledDeltaTime);
+        }
+
         int count = LineRendererCom.positionCount;
         if (!LineRendererCom.enabled || count < 1)
         {
             HidePixelBlocksFrom(0);
+            if (tipSparkRenderer != null && tipSparkRenderer.gameObject.activeSelf)
+            {
+                tipSparkRenderer.gameObject.SetActive(false);
+            }
             return;
         }
 
@@ -159,9 +176,19 @@ public class LineRendererManager : MonoBehaviour
             baseWidthMultiplier = Mathf.Max(0.05f, LineRendererCom.widthMultiplier);
         }
 
+        float lockPulseT = targetLockPulseTimer > 0f ? (targetLockPulseTimer / TargetLockPulseDuration) : 0f;
+        bool isActivelyDrawing = Player != null && Player.IsInMode;
+
         float widthRatio = LineRendererCom.widthMultiplier / baseWidthMultiplier;
-        int pixelBlockSize = widthRatio > 1.45f ? 3 : (widthRatio < 0.55f ? 1 : 2);
-        Sprite blockSprite = EnemyBase.GetSharedPixelBlockSprite(pixelBlockSize);
+        int baseBlockSize = widthRatio > 1.45f ? 3 : (widthRatio < 0.55f ? 1 : 2);
+        if (lockPulseT > 0.35f && baseBlockSize < 3)
+        {
+            baseBlockSize = 3;
+        }
+
+        Sprite thinSprite = EnemyBase.GetSharedPixelBlockSprite(1);
+        Sprite bodySprite = EnemyBase.GetSharedPixelBlockSprite(baseBlockSize);
+        Sprite tipSprite = EnemyBase.GetSharedPixelBlockSprite(Mathf.Min(3, baseBlockSize + (isActivelyDrawing ? 1 : 0)));
 
         Gradient grad = LineRendererCom.colorGradient;
         int sortLayerId = LineRendererCom.sortingLayerID;
@@ -179,14 +206,16 @@ public class LineRendererManager : MonoBehaviour
             Color startCol = grad != null ? grad.Evaluate(0f) : LineRendererCom.startColor;
             SpriteRenderer singleSr = GetOrCreatePixelBlock(0, sortLayerId, sortOrder);
             singleSr.transform.position = snappedPt;
-            singleSr.sprite = blockSprite;
-            singleSr.color = startCol;
+            singleSr.sprite = bodySprite;
+            singleSr.color = isActivelyDrawing ? Color.Lerp(startCol, Color.white, 0.45f) : startCol;
             if (!singleSr.gameObject.activeSelf) singleSr.gameObject.SetActive(true);
             HidePixelBlocksFrom(1);
+            UpdateLiveTipSpark(snappedPt, isActivelyDrawing, lockPulseT, sortLayerId, sortOrder);
             return;
         }
 
         float stepWorld = Mathf.Max(DefaultPixelStep, totalLength / MaxPixelBlocks);
+        float shimmerTime = Time.unscaledTime * 22f;
 
         int activeCount = 0;
         float distSoFar = 0f;
@@ -217,9 +246,37 @@ public class LineRendererManager : MonoBehaviour
                 float u = Mathf.Clamp01((distSoFar + segLen * segT) / totalLength);
                 Color col = grad != null ? grad.Evaluate(u) : LineRendererCom.startColor;
 
+                Sprite chosenSprite = bodySprite;
+                if (isActivelyDrawing)
+                {
+                    // Taper tail to 1px and brighten/thicken the hot blade tip near cursor
+                    if (u < 0.14f)
+                    {
+                        chosenSprite = thinSprite;
+                    }
+                    else if (u > 0.90f)
+                    {
+                        chosenSprite = tipSprite;
+                        col = Color.Lerp(col, Color.white, 0.58f);
+                    }
+
+                    // Traveling energy pulse racing forward toward the cursor tip
+                    float wave = Mathf.Sin(u * 15f - shimmerTime);
+                    if (wave > 0.55f)
+                    {
+                        float glint = (wave - 0.55f) / 0.45f;
+                        col = Color.Lerp(col, Color.white, glint * 0.48f);
+                    }
+                }
+
+                if (lockPulseT > 0.01f)
+                {
+                    col = Color.Lerp(col, Color.white, lockPulseT * 0.72f);
+                }
+
                 SpriteRenderer sr = GetOrCreatePixelBlock(activeCount, sortLayerId, sortOrder);
                 sr.transform.position = snapped;
-                sr.sprite = blockSprite;
+                sr.sprite = chosenSprite;
                 sr.color = col;
                 if (!sr.gameObject.activeSelf) sr.gameObject.SetActive(true);
                 activeCount++;
@@ -230,6 +287,40 @@ public class LineRendererManager : MonoBehaviour
         }
 
         HidePixelBlocksFrom(activeCount);
+        Vector3 tipPos = EnemyBase.SnapToPixelGrid(pointBuffer[count - 1], 16f);
+        UpdateLiveTipSpark(tipPos, isActivelyDrawing, lockPulseT, sortLayerId, sortOrder);
+    }
+
+    private void UpdateLiveTipSpark(Vector3 snappedPos, bool visible, float lockPulseT, int sortLayerId, int sortOrder)
+    {
+        if (!visible)
+        {
+            if (tipSparkRenderer != null && tipSparkRenderer.gameObject.activeSelf)
+            {
+                tipSparkRenderer.gameObject.SetActive(false);
+            }
+            return;
+        }
+
+        if (tipSparkRenderer == null)
+        {
+            GameObject tipObj = new GameObject("SlashTipSpark");
+            tipObj.transform.SetParent(transform, false);
+            tipSparkRenderer = tipObj.AddComponent<SpriteRenderer>();
+            tipSparkRenderer.sprite = EnemyBase.GetSharedPixelBlockSprite(3);
+        }
+
+        tipSparkRenderer.sortingLayerID = sortLayerId;
+        tipSparkRenderer.sortingOrder = sortOrder + 2;
+        tipSparkRenderer.transform.position = snappedPos;
+        tipSparkRenderer.transform.localRotation = Quaternion.Euler(0f, 0f, 45f);
+        float pulse = 1.0f + 0.25f * Mathf.Sin(Time.unscaledTime * 28f) + lockPulseT * 0.55f;
+        tipSparkRenderer.transform.localScale = new Vector3(pulse, pulse, 1f);
+        tipSparkRenderer.color = new Color(1f, 1f, 1f, 0.96f);
+        if (!tipSparkRenderer.gameObject.activeSelf)
+        {
+            tipSparkRenderer.gameObject.SetActive(true);
+        }
     }
 
     private SpriteRenderer GetOrCreatePixelBlock(int index, int sortingLayerId, int sortingOrder)
