@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using Unity.Cinemachine;
 using UnityEngine;
 using UnityEngine.Audio;
@@ -34,6 +35,13 @@ public class PortalNextLevel : MonoBehaviour, IPointerEnterHandler, ISlashable
 
     [Header("Next Level Settings")]
     [SerializeField] private float teleportDelay = 0.03f;
+    [Tooltip("If true, player must press the interact key (E) near the portal to teleport instead of auto-teleporting on touch.")]
+    [SerializeField] private bool requireKeyToInteract = true;
+    [SerializeField] private Key interactKey = Key.E;
+    [SerializeField] private float interactRadius = 2.65f;
+    [SerializeField] private float promptHeightOffset = 1.95f;
+    [Tooltip("Optional PixelifySans font asset (auto-loaded if empty).")]
+    [SerializeField] private TMP_FontAsset promptFontAsset;
 
     [Header("Portal Audio Settings")]
     [Tooltip("SwordSlashSFX played at Phase A when the dimensional katana cut strikes.")]
@@ -100,6 +108,14 @@ public class PortalNextLevel : MonoBehaviour, IPointerEnterHandler, ISlashable
     private Camera cachedCamera;
     private Coroutine fallbackResetTargetCoroutine;
 
+    // Press [E] World-Space UI Prompt
+    private GameObject promptCanvasObj;
+    private RectTransform promptCanvasRect;
+    private CanvasGroup promptCanvasGroup;
+    private TMP_Text promptTextComp;
+    private bool isPlayerInInteractRange;
+    private float promptBobTime;
+
     public bool CanInteractWithPortal => !isTeleporting && enabled && gameObject.activeInHierarchy;
     public bool IsTeleporting => isTeleporting;
 
@@ -141,6 +157,11 @@ public class PortalNextLevel : MonoBehaviour, IPointerEnterHandler, ISlashable
         {
             SetupSpaceTearVisuals();
         }
+
+        if (requireKeyToInteract)
+        {
+            BuildInteractPromptUI();
+        }
     }
 
     private void OnEnable()
@@ -166,7 +187,11 @@ public class PortalNextLevel : MonoBehaviour, IPointerEnterHandler, ISlashable
             UpdateSpaceTearAnimation();
         }
 
-        if (isTeleporting) return;
+        if (isTeleporting)
+        {
+            if (promptCanvasObj != null && promptCanvasObj.activeSelf) promptCanvasObj.SetActive(false);
+            return;
+        }
 
         if (spawnAnimFinished && animateIdlePulse)
         {
@@ -176,6 +201,10 @@ public class PortalNextLevel : MonoBehaviour, IPointerEnterHandler, ISlashable
         }
 
         PlayerController player = PlayerController.Instance;
+        if (requireKeyToInteract)
+        {
+            UpdateInteractPromptAndInput(player);
+        }
         bool inMode = player != null && player.IsInMode;
         bool inGrappleFocus = player != null && player.IsFocusing;
 
@@ -284,6 +313,7 @@ public class PortalNextLevel : MonoBehaviour, IPointerEnterHandler, ISlashable
 
     private void TryTriggerFromContact(GameObject hitObject)
     {
+        if (requireKeyToInteract) return;
         if (!CanInteractWithPortal || hitObject == null) return;
 
         PlayerController player = hitObject.GetComponentInParent<PlayerController>();
@@ -313,6 +343,137 @@ public class PortalNextLevel : MonoBehaviour, IPointerEnterHandler, ISlashable
         }
 
         StartPortalTransition(player, TransitionTriggerType.WalkIn, cutDir);
+    }
+
+    private void BuildInteractPromptUI()
+    {
+        if (promptCanvasObj != null) return;
+
+        promptCanvasObj = new GameObject("PortalPressEPromptCanvas");
+        Canvas canvas = promptCanvasObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.WorldSpace;
+        canvas.sortingOrder = 55;
+
+        promptCanvasGroup = promptCanvasObj.AddComponent<CanvasGroup>();
+        promptCanvasGroup.alpha = 0f;
+        promptCanvasGroup.blocksRaycasts = false;
+        promptCanvasGroup.interactable = false;
+
+        promptCanvasRect = promptCanvasObj.GetComponent<RectTransform>();
+        promptCanvasRect.sizeDelta = new Vector2(440f, 76f);
+        promptCanvasRect.localScale = Vector3.one * 0.011f;
+        promptCanvasRect.position = cachedTransform.position + new Vector3(0f, promptHeightOffset, 0f);
+
+        GameObject textObj = new GameObject("PromptText");
+        textObj.transform.SetParent(promptCanvasObj.transform, false);
+        RectTransform textRect = textObj.AddComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = Vector2.zero;
+        textRect.offsetMax = Vector2.zero;
+
+        TextMeshProUGUI tmp = textObj.AddComponent<TextMeshProUGUI>();
+        TMP_FontAsset loadedFont = ResolvePromptPixelFont();
+        if (loadedFont != null) tmp.font = loadedFont;
+
+        // Loaded PixelifySans font for all text EXCEPT the key letter 'E' (uses normal LiberationSans SDF!)
+        string keyLabel = interactKey.ToString();
+        tmp.text = $"PRESS [<font=\"LiberationSans SDF\">{keyLabel}</font>] TO TELEPORT";
+        tmp.fontSize = 30f;
+        tmp.fontStyle = FontStyles.Bold;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.color = Color.white;
+        tmp.outlineWidth = 0.22f;
+        tmp.outlineColor = new Color32(0, 0, 0, 235);
+        tmp.raycastTarget = false;
+        promptTextComp = tmp;
+
+        promptCanvasObj.SetActive(false);
+    }
+
+    private TMP_FontAsset ResolvePromptPixelFont()
+    {
+        if (promptFontAsset != null) return promptFontAsset;
+
+        TMP_FontAsset[] loaded = Resources.FindObjectsOfTypeAll<TMP_FontAsset>();
+        for (int i = 0; i < loaded.Length; i++)
+        {
+            if (loaded[i] != null && loaded[i].name.IndexOf("Pixelify", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                promptFontAsset = loaded[i];
+                return promptFontAsset;
+            }
+        }
+
+#if UNITY_EDITOR
+        promptFontAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>("Assets/Fonts/PixelifySans-VariableFont_wght SDF.asset");
+#endif
+        return promptFontAsset;
+    }
+
+    private void UpdateInteractPromptAndInput(PlayerController player)
+    {
+        if (promptCanvasObj == null) BuildInteractPromptUI();
+
+        bool canShow = CanInteractWithPortal
+            && player != null
+            && !player.IsDead
+            && !player.IsPortalTransitioning
+            && !HealGuideBookUI.IsBookOpen;
+
+        if (canShow)
+        {
+            Vector2 portalPos = GetGrappleAnchorPosition();
+            float distSq = ((Vector2)player.transform.position - portalPos).sqrMagnitude;
+            isPlayerInInteractRange = distSq <= (interactRadius * interactRadius);
+        }
+        else
+        {
+            isPlayerInInteractRange = false;
+        }
+
+        if (promptCanvasObj != null && promptCanvasGroup != null)
+        {
+            float targetAlpha = isPlayerInInteractRange ? 1f : 0f;
+            if (isPlayerInInteractRange && !promptCanvasObj.activeSelf)
+            {
+                promptCanvasObj.SetActive(true);
+            }
+
+            promptCanvasGroup.alpha = Mathf.MoveTowards(promptCanvasGroup.alpha, targetAlpha, Time.unscaledDeltaTime * 6.5f);
+            if (!isPlayerInInteractRange && promptCanvasGroup.alpha <= 0.01f && promptCanvasObj.activeSelf)
+            {
+                promptCanvasObj.SetActive(false);
+            }
+
+            if (promptCanvasObj.activeSelf && promptCanvasRect != null)
+            {
+                promptBobTime += Time.unscaledDeltaTime;
+                float bobY = Mathf.Sin(promptBobTime * 3.8f) * 0.06f;
+                Vector2 anchor = GetGrappleAnchorPosition();
+                promptCanvasRect.position = new Vector3(anchor.x, anchor.y + promptHeightOffset + bobY, 0f);
+            }
+        }
+
+        if (isPlayerInInteractRange && Keyboard.current != null && interactKey != Key.None && Keyboard.current[interactKey].wasPressedThisFrame)
+        {
+            if (promptCanvasObj != null) promptCanvasObj.SetActive(false);
+
+            Vector2 cutDir = new Vector2(1f, 0.36f).normalized;
+            if (player.MainSpriteRenderer != null && player.MainSpriteRenderer.flipX)
+            {
+                cutDir = new Vector2(-1f, 0.36f).normalized;
+            }
+            StartPortalTransition(player, TransitionTriggerType.WalkIn, cutDir);
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (promptCanvasObj != null)
+        {
+            Destroy(promptCanvasObj);
+        }
     }
 
     #endregion

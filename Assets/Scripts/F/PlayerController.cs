@@ -325,6 +325,20 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Spawns pixel dust puffs on jump takeoff, landing, wall-sliding, and air-rings on double-jump.")]
     [SerializeField] private bool enableMovementDustVFX = true;
 
+    [Header("Protagonist Juice & Game Feel")]
+    [Tooltip("Master toggle for momentum lean, jump/dash squash-stretch, turn skid dust, and dash-ready glint.")]
+    [SerializeField] private bool enableProtagonistJuice = true;
+    [Tooltip("Forward lean angle (degrees) when running at full speed.")]
+    [SerializeField] private float runLeanAngle = 5.5f;
+    [Tooltip("Forward lean angle (degrees) when dashing.")]
+    [SerializeField] private float dashLeanAngle = 9.5f;
+    [Tooltip("Vertical stretch on jump, double-jump, and wall-jump takeoff.")]
+    [SerializeField] private bool enableJumpStretch = true;
+    [Tooltip("Spawns pixel skid dust puffs when sharply reversing direction while running.")]
+    [SerializeField] private bool enableTurnSkidDust = true;
+    [Tooltip("Subtle crisp white glint on the sprite when Dash comes off cooldown.")]
+    [SerializeField] private bool enableDashReadyGlint = true;
+
     [Tooltip("Spawns rotating lock-on crosshair reticles and ascending 1x/2x/3x! combo popups on targeted enemies.")]
     [SerializeField] private bool enableTargetReticlesAndComboPopups = true;
 
@@ -691,6 +705,7 @@ public class PlayerController : MonoBehaviour
 
         if (isDashing)
         {
+            UpdatePlayerMomentumLean(false);
             UpdatePlayerSpriteAnimation(false);
             UpdateAfterimageGhosts();
             return;
@@ -735,6 +750,7 @@ public class PlayerController : MonoBehaviour
         HandleGrappleInput();
         Flip();
         HandleIdleSquashBob(grounded);
+        UpdatePlayerMomentumLean(grounded);
         UpdatePlayerSpriteAnimation(grounded);
         UpdateAfterimageGhosts();
     }
@@ -1798,6 +1814,7 @@ public class PlayerController : MonoBehaviour
                 PlayPitchedSFX(jumpSFX, Random.Range(0.96f, 1.04f), 1f);
                 SetPlayerAnimState(PlayerAnimState.Jump, true);
                 SpawnTakeoffDust();
+                if (enableProtagonistJuice && enableJumpStretch) TriggerSpriteSquashStretch(0.86f, 1.18f, 0.11f);
                 return;
             }
 
@@ -1818,6 +1835,7 @@ public class PlayerController : MonoBehaviour
                 }
                 SetPlayerAnimState(PlayerAnimState.Jump, true);
                 SpawnWallJumpDust(kickDir);
+                if (enableProtagonistJuice && enableJumpStretch) TriggerSpriteSquashStretch(0.84f, 1.20f, 0.11f);
                 return;
             }
 
@@ -1832,6 +1850,7 @@ public class PlayerController : MonoBehaviour
                 PlayPitchedSFX(clipToPlay, pitchToPlay, 1f);
                 SetPlayerAnimState(PlayerAnimState.DoubleJump, true);
                 SpawnDoubleJumpAirRing();
+                if (enableProtagonistJuice && enableJumpStretch) TriggerSpriteSquashStretch(0.85f, 1.18f, 0.10f);
                 return;
             }
         }
@@ -1894,6 +1913,17 @@ public class PlayerController : MonoBehaviour
 
         rb.linearVelocity = new Vector2(dashDirection * finalDashSpeed, 0f);
 
+        if (enableProtagonistJuice)
+        {
+            TriggerSpriteSquashStretch(1.22f, 0.84f, dashingTime);
+            TriggerCameraShake(0.055f);
+            TriggerCameraZoomPunch(-0.14f, 0.14f);
+            if (enableMovementDustVFX)
+            {
+                PixelMovementDustVFX.SpawnLandingPuffs(GetFeetPosition(), 5, Color.white);
+            }
+        }
+
         if (enableLeafWindAtmosphere)
         {
             LeafWindAtmosphere.ApplyWindBurst(transform.position, new Vector2(dashDirection, 0.25f), 7.5f, 3.6f);
@@ -1909,6 +1939,11 @@ public class PlayerController : MonoBehaviour
 
         yield return new WaitForSeconds(dashingCooldown);
         canDash = true;
+
+        if (enableProtagonistJuice && enableDashReadyGlint && !isDead)
+        {
+            StartCoroutine(DashReadyGlintRoutine());
+        }
     }
 
     private void Flip()
@@ -1921,8 +1956,20 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
+        bool prevFlip = spriteRenderer.flipX;
         if (inputValue.x < 0f) spriteRenderer.flipX = true;
         else if (inputValue.x > 0f) spriteRenderer.flipX = false;
+
+        // Sharp turn / skid dust & micro-squish when reversing direction while running on ground
+        if (enableProtagonistJuice && enableTurnSkidDust && prevFlip != spriteRenderer.flipX &&
+            IsGrounded() && !isDashing && rb != null && Mathf.Abs(rb.linearVelocityX) > 2.4f)
+        {
+            if (enableMovementDustVFX)
+            {
+                PixelMovementDustVFX.SpawnLandingPuffs(GetFeetPosition(), 3, Color.white);
+            }
+            TriggerSpriteSquashStretch(1.08f, 0.94f, 0.07f);
+        }
     }
 
     private void HandleIdleSquashBob(bool grounded)
@@ -5213,10 +5260,95 @@ public class PlayerController : MonoBehaviour
             PixelMovementDustVFX.SpawnLandingPuffs(GetFeetPosition(), count, Color.white);
         }
 
+        if (enableProtagonistJuice && impactSpeed > 11.5f)
+        {
+            TriggerCameraShake(0.065f);
+            AudioClip landClip = GetRandomWalkSFX();
+            if (landClip != null) PlayPitchedSFX(landClip, 0.72f, 0.65f);
+        }
+
         if (spriteRenderer != null)
         {
             if (activeLandingSquashCoroutine != null) StopCoroutine(activeLandingSquashCoroutine);
             activeLandingSquashCoroutine = StartCoroutine(LandingSquashRoutine(Mathf.Clamp01(impactSpeed / 18f)));
+        }
+    }
+
+    private void UpdatePlayerMomentumLean(bool grounded)
+    {
+        if (spriteRenderer == null) return;
+
+        float targetAngle = 0f;
+        if (enableProtagonistJuice && !isDead && !isPortalTransitioning && !isCutsceneSlashingStance && !isCutsceneDashStance && !isWallSliding && rb != null)
+        {
+            if (isDashing)
+            {
+                float dir = Mathf.Abs(rb.linearVelocityX) > 0.1f ? Mathf.Sign(rb.linearVelocityX) : (spriteRenderer.flipX ? -1f : 1f);
+                targetAngle = -dir * dashLeanAngle;
+            }
+            else if (Mathf.Abs(rb.linearVelocityX) > 0.6f)
+            {
+                float speedRatio = Mathf.Clamp(rb.linearVelocityX / Mathf.Max(1f, moveSpeed), -1.35f, 1.35f);
+                targetAngle = -speedRatio * runLeanAngle;
+            }
+        }
+
+        Transform st = spriteRenderer.transform;
+        float currentZ = st.localEulerAngles.z;
+        float smoothedZ = Mathf.LerpAngle(currentZ, targetAngle, Time.deltaTime * 16f);
+        st.localRotation = Quaternion.Euler(0f, 0f, smoothedZ);
+    }
+
+    private void TriggerSpriteSquashStretch(float targetScaleXMult, float targetScaleYMult, float duration)
+    {
+        if (spriteRenderer == null || isDead) return;
+        if (activeLandingSquashCoroutine != null) StopCoroutine(activeLandingSquashCoroutine);
+        activeLandingSquashCoroutine = StartCoroutine(SpriteSquashStretchRoutine(targetScaleXMult, targetScaleYMult, duration));
+    }
+
+    private IEnumerator SpriteSquashStretchRoutine(float targetScaleXMult, float targetScaleYMult, float duration)
+    {
+        float dur = Mathf.Max(0.04f, duration);
+        float elapsed = 0f;
+
+        while (elapsed < dur && spriteRenderer != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / dur);
+            float wave = Mathf.Sin(t * Mathf.PI);
+
+            float sx = originalSpriteScale.x * Mathf.Lerp(1f, targetScaleXMult, wave);
+            float sy = originalSpriteScale.y * Mathf.Lerp(1f, targetScaleYMult, wave);
+            float deltaY = sy - originalSpriteScale.y;
+            float offsetY = spriteRenderer.sprite != null ? (-spriteRenderer.sprite.bounds.min.y * deltaY) : 0f;
+
+            spriteRenderer.transform.localScale = new Vector3(sx, sy, originalSpriteScale.z);
+            spriteRenderer.transform.localPosition = new Vector3(
+                originalSpriteLocalPos.x,
+                originalSpriteLocalPos.y + offsetY,
+                originalSpriteLocalPos.z
+            );
+            yield return null;
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.transform.localScale = originalSpriteScale;
+            spriteRenderer.transform.localPosition = originalSpriteLocalPos;
+        }
+        activeLandingSquashCoroutine = null;
+    }
+
+    private IEnumerator DashReadyGlintRoutine()
+    {
+        if (spriteRenderer == null) yield break;
+        Color glintColor = new Color(0.85f, 0.98f, 1f, 1f);
+        Color prevColor = spriteRenderer.color;
+        spriteRenderer.color = glintColor;
+        yield return new WaitForSeconds(0.06f);
+        if (spriteRenderer != null && !isDead)
+        {
+            spriteRenderer.color = prevColor.a > 0.1f ? prevColor : Color.white;
         }
     }
 
